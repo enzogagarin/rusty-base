@@ -547,6 +547,48 @@ fn applies_request_isset_modifier_in_create_rules() {
 }
 
 #[test]
+fn applies_request_lower_and_length_modifiers_in_create_rules() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let collection_response = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "title", "kind": "text"},
+                    {"name": "tags", "kind": "array"}
+                ],
+                "createRule": "@request.body.title:lower = 'rusty base' && @request.body.tags:length = 2"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(collection_response.status, 200);
+
+    let allowed = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Rusty Base", "tags": ["rust", "sqlite"]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(allowed.status, 200);
+
+    let denied = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Rusty Base", "tags": ["rust"]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(denied.status, 403);
+}
+
+#[test]
 fn updates_and_deletes_records() {
     let store = Store::open_in_memory().unwrap();
     store.create_collection(posts_collection()).unwrap();

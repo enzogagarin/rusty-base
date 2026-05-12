@@ -220,6 +220,30 @@ fn compiles_request_isset_modifier() {
 }
 
 #[test]
+fn compiles_request_lower_and_length_modifiers() {
+    let context = fixed_context()
+        .with_body_value("title", Value::String("Rusty Base".to_string()))
+        .with_body_length("tags", 2);
+
+    let out = compile_filter_with_context(
+        "@request.body.title:lower = 'rusty base' && @request.body.tags:length >= 2",
+        context,
+    )
+    .unwrap();
+
+    assert_eq!(out.sql, "? = ? AND ? >= ?");
+    assert_eq!(
+        out.params,
+        vec![
+            Value::String("rusty base".to_string()),
+            Value::String("rusty base".to_string()),
+            Value::Number("2".to_string()),
+            Value::Number("2".to_string())
+        ]
+    );
+}
+
+#[test]
 fn reuses_named_params_for_repeated_request_values() {
     let context = fixed_context().with_auth_value("id", Value::String("user_123".to_string()));
     let out = compile_filter_with_named_params_and_context(

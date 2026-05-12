@@ -23,7 +23,7 @@ Status legend:
 | Operand-vs-operand expressions | partial | Field, literal, boolean, number, null, and supported function operands can appear in comparisons. |
 | Function operands | partial | `strftime(...)` and `geoDistance(...)` are implemented for the current SQL renderer. |
 | Identifier macros | supported | Time macros such as `@now`, `@todayStart`, `@monthEnd`, and numeric macros such as `@year` are resolved from `FilterContext`. |
-| Request context identifiers | partial | `@request.auth.*`, `@request.query.*`, `@request.headers.*`, `@request.body.*`, `@request.context`, and `@request.method` resolve from `FilterContext::request`. `@request.*:isset` is supported for request field presence checks. Other request field modifiers are still planned. |
+| Request context identifiers | partial | `@request.auth.*`, `@request.query.*`, `@request.headers.*`, `@request.body.*`, `@request.context`, and `@request.method` resolve from `FilterContext::request`. `@request.*:isset`, `@request.*:lower`, and `@request.body.*:length` are supported. Other request field modifiers are still planned. |
 | Cross-collection identifiers | planned | `@collection.*` joins are not implemented yet. |
 
 ## Operators
@@ -42,6 +42,7 @@ Status legend:
 | Schema-aware field validation | supported | Unknown fields are rejected. |
 | Resolver abstraction | supported | `FieldResolver` can map filter identifiers to SQL fragments and field kinds. |
 | Quoted schema identifiers | supported | `FilterSchema` resolves fields as quoted SQL identifier paths. |
+| Field modifiers | partial | `:lower` renders through SQLite `LOWER(...)`; `:length` renders array-like fields through `json_array_length(...)`. Relation-field modifiers and `:each` are still planned. |
 | Relation expansion planning | partial | `FilterPlan` can carry relation traversal metadata and render single-value and multi-value relation chains as correlated SQL. Multi-value `?` operators use any-match semantics; non-`?` multi-value relation comparisons use a match-all `NOT EXISTS` shape. See `docs/RELATION_QUERY_PLAN.md`. |
 | JSON path extraction | partial | Schema fields with kind `json` can resolve nested paths such as `profile.name` to SQLite `json_extract(...)`; object keys and numeric array indexes are covered. |
 
@@ -65,10 +66,10 @@ Status legend:
 | --- | --- | --- |
 | `@request.context` | supported | Defaults to `default` unless the caller sets another context. |
 | `@request.method` | supported | Resolved as a string from `FilterContext::request.method`. |
-| `@request.auth.*` | partial | Scalar values can be supplied through `FilterContext`; missing values resolve to an empty string for PocketBase-style unauthenticated checks such as `@request.auth.id != ""`. `:isset` reports whether the value exists in the auth context. |
-| `@request.query.*` | partial | Scalar query values can be supplied through `FilterContext`; missing values resolve to an empty string. `:isset` reports whether the query parameter exists. |
-| `@request.headers.*` | partial | Header keys are normalized to lowercase and `-` is replaced with `_`. `:isset` reports whether the normalized header exists. |
-| `@request.body.*` | partial | Scalar body values are supported; `:isset` reports whether the submitted body contains the field. Uploaded files and the remaining request modifiers are not implemented yet. |
+| `@request.auth.*` | partial | Scalar values can be supplied through `FilterContext`; missing values resolve to an empty string for PocketBase-style unauthenticated checks such as `@request.auth.id != ""`. `:isset` reports whether the value exists and `:lower` lowercases string-like values. |
+| `@request.query.*` | partial | Scalar query values can be supplied through `FilterContext`; missing values resolve to an empty string. `:isset` reports whether the query parameter exists and `:lower` lowercases string-like values. |
+| `@request.headers.*` | partial | Header keys are normalized to lowercase and `-` is replaced with `_`. `:isset` reports whether the normalized header exists and `:lower` lowercases string-like values. |
+| `@request.body.*` | partial | Scalar body values are supported; `:isset` reports whether the submitted body contains the field, `:lower` lowercases string-like values, and `:length` reports submitted array length. Uploaded files and the remaining request modifiers are not implemented yet. |
 
 ## Safety
 

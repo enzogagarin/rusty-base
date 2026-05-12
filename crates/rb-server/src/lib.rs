@@ -1366,6 +1366,9 @@ fn context_with_body_values(mut context: FilterContext, body: &JsonValue) -> Fil
 
     for (name, value) in object {
         context = context.with_body_value(name.clone(), json_to_filter_value(value));
+        if let Some(array) = value.as_array() {
+            context = context.with_body_length(name.clone(), array.len());
+        }
     }
 
     context

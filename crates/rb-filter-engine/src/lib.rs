@@ -100,6 +100,11 @@ impl FilterContext {
         self.request.body.insert(field.into(), value);
         self
     }
+
+    pub fn with_body_length(mut self, field: impl Into<String>, length: usize) -> Self {
+        self.request.body_lengths.insert(field.into(), length);
+        self
+    }
 }
 
 impl Default for FilterContext {
@@ -119,6 +124,7 @@ pub struct RequestContext {
     pub query: HashMap<String, Value>,
     pub headers: HashMap<String, Value>,
     pub body: HashMap<String, Value>,
+    pub body_lengths: HashMap<String, usize>,
 }
 
 impl RequestContext {
@@ -155,6 +161,11 @@ impl RequestContext {
         self.body.insert(field.into(), value);
         self
     }
+
+    pub fn with_body_length(mut self, field: impl Into<String>, length: usize) -> Self {
+        self.body_lengths.insert(field.into(), length);
+        self
+    }
 }
 
 impl Default for RequestContext {
@@ -166,6 +177,7 @@ impl Default for RequestContext {
             query: HashMap::new(),
             headers: HashMap::new(),
             body: HashMap::new(),
+            body_lengths: HashMap::new(),
         }
     }
 }
@@ -1225,7 +1237,7 @@ impl<'a> Lexer<'a> {
                 '\'' | '"' => Token::String(self.lex_string(ch)?),
                 '@' => Token::Macro(self.lex_macro()?),
                 c if c.is_ascii_digit() || c == '-' => Token::Number(self.lex_number()?),
-                c if is_ident_start(c) => self.lex_ident_or_keyword(),
+                c if is_ident_start(c) => self.lex_ident_or_keyword()?,
                 other => {
                     return Err(FilterError::at(
                         FilterErrorKind::UnexpectedCharacter,
@@ -1389,7 +1401,7 @@ impl<'a> Lexer<'a> {
                 }
 
                 while let Some(c) = self.peek() {
-                    if is_ident_continue(c) {
+                    if is_ident_part_continue(c) {
                         name.push(c);
                         self.bump();
                     } else {
@@ -1462,22 +1474,47 @@ impl<'a> Lexer<'a> {
         Ok(out)
     }
 
-    fn lex_ident_or_keyword(&mut self) -> Token {
+    fn lex_ident_or_keyword(&mut self) -> Result<Token, FilterError> {
         let mut out = String::new();
         while let Some(c) = self.peek() {
             if is_ident_continue(c) {
                 out.push(c);
                 self.bump();
+            } else if c == ':' {
+                out.push(c);
+                self.bump();
+
+                match self.peek() {
+                    Some(c) if is_ident_start(c) => {}
+                    _ => {
+                        return Err(FilterError::at(
+                            FilterErrorKind::UnexpectedCharacter,
+                            self.pos,
+                            "expected modifier after ':'",
+                        ))
+                    }
+                }
+
+                while let Some(c) = self.peek() {
+                    if is_ident_part_continue(c) {
+                        out.push(c);
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+
+                break;
             } else {
                 break;
             }
         }
-        match out.as_str() {
+        Ok(match out.as_str() {
             "true" => Token::Bool(true),
             "false" => Token::Bool(false),
             "null" => Token::Null,
             _ => Token::Ident(out),
-        }
+        })
     }
 
     fn peek(&self) -> Option<char> {
@@ -1497,6 +1534,10 @@ fn is_ident_start(c: char) -> bool {
 
 fn is_ident_continue(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '.'
+}
+
+fn is_ident_part_continue(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1526,6 +1567,19 @@ enum Operand {
 enum LogicOp {
     And,
     Or,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FieldModifier {
+    Lower,
+    Length,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequestModifier {
+    Isset,
+    Lower,
+    Length,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1820,14 +1874,15 @@ impl<'a> FilterPlanner<'a> {
     }
 
     fn plan_field_operand(&mut self, field: &str) -> Result<PlannedOperand, FilterError> {
-        if !is_safe_identifier_path(field) {
+        let (field_name, modifier) = split_field_modifier(field)?;
+        if !is_safe_identifier_path(field_name) {
             return Err(FilterError::with_kind(
                 FilterErrorKind::UnsafeIdentifier,
                 format!("unsafe identifier '{field}'"),
             ));
         }
 
-        let resolved = self.resolve_field(field)?;
+        let resolved = apply_field_modifier(field, self.resolve_field(field_name)?, modifier)?;
         self.collect_relation(&resolved);
 
         Ok(PlannedOperand::Field(PlannedField {
@@ -2064,7 +2119,8 @@ impl<'a> SqlCompiler<'a> {
     fn resolve_operand(&self, operand: &Operand) -> Result<ResolvedOperand, FilterError> {
         match operand {
             Operand::Field(field) => {
-                if !is_safe_identifier_path(field) {
+                let (field_name, modifier) = split_field_modifier(field)?;
+                if !is_safe_identifier_path(field_name) {
                     return Err(FilterError::with_kind(
                         FilterErrorKind::UnsafeIdentifier,
                         format!("unsafe identifier '{field}'"),
@@ -2073,7 +2129,11 @@ impl<'a> SqlCompiler<'a> {
 
                 Ok(ResolvedOperand::Field {
                     name: field.clone(),
-                    resolved: self.resolve_field(field)?,
+                    resolved: apply_field_modifier(
+                        field,
+                        self.resolve_field(field_name)?,
+                        modifier,
+                    )?,
                 })
             }
             Operand::Function { name, args } => self.resolve_function(name, args),
@@ -2951,7 +3011,7 @@ fn resolve_request_identifier(name: &str, context: &FilterContext) -> Result<Val
     }
 
     if let Some(field) = base_name.strip_prefix("@request.body.") {
-        return request_map_value(name, field, &request.body, modifier);
+        return request_body_value(name, field, &request.body, &request.body_lengths, modifier);
     }
 
     Err(FilterError::with_kind(
@@ -2960,26 +3020,37 @@ fn resolve_request_identifier(name: &str, context: &FilterContext) -> Result<Val
     ))
 }
 
-fn split_request_modifier(name: &str) -> Result<(&str, Option<&str>), FilterError> {
+fn split_request_modifier(name: &str) -> Result<(&str, Option<RequestModifier>), FilterError> {
     let Some((base, modifier)) = name.rsplit_once(':') else {
         return Ok((name, None));
     };
 
-    if modifier != "isset" {
-        return Err(FilterError::with_kind(
-            FilterErrorKind::InvalidLiteral,
-            format!("unsupported request modifier ':{modifier}'"),
-        ));
-    }
+    let modifier = match modifier {
+        "isset" => RequestModifier::Isset,
+        "lower" => RequestModifier::Lower,
+        "length" => RequestModifier::Length,
+        _ => {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::InvalidLiteral,
+                format!("unsupported request modifier ':{modifier}'"),
+            ))
+        }
+    };
 
     Ok((base, Some(modifier)))
 }
 
-fn reject_request_modifier(name: &str, modifier: Option<&str>) -> Result<(), FilterError> {
+fn reject_request_modifier(
+    name: &str,
+    modifier: Option<RequestModifier>,
+) -> Result<(), FilterError> {
     if let Some(modifier) = modifier {
         return Err(FilterError::with_kind(
             FilterErrorKind::InvalidLiteral,
-            format!("unsupported request modifier ':{modifier}' for '{name}'"),
+            format!(
+                "unsupported request modifier ':{}' for '{name}'",
+                request_modifier_name(modifier)
+            ),
         ));
     }
 
@@ -2990,7 +3061,7 @@ fn request_map_value(
     name: &str,
     field: &str,
     values: &HashMap<String, Value>,
-    modifier: Option<&str>,
+    modifier: Option<RequestModifier>,
 ) -> Result<Value, FilterError> {
     if !is_safe_identifier_path(field) {
         return Err(FilterError::with_kind(
@@ -2999,9 +3070,17 @@ fn request_map_value(
         ));
     }
 
-    if modifier == Some("isset") {
-        return Ok(Value::Bool(values.contains_key(field)));
-    }
+    match modifier {
+        Some(RequestModifier::Isset) => return Ok(Value::Bool(values.contains_key(field))),
+        Some(RequestModifier::Lower) => return Ok(lower_request_value(values.get(field))),
+        Some(RequestModifier::Length) => {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::InvalidLiteral,
+                format!("request modifier ':length' is only supported for @request.body.*"),
+            ))
+        }
+        None => {}
+    };
 
     Ok(values
         .get(field)
@@ -3009,8 +3088,134 @@ fn request_map_value(
         .unwrap_or_else(|| Value::String(String::new())))
 }
 
+fn request_body_value(
+    name: &str,
+    field: &str,
+    values: &HashMap<String, Value>,
+    lengths: &HashMap<String, usize>,
+    modifier: Option<RequestModifier>,
+) -> Result<Value, FilterError> {
+    if !is_safe_identifier_path(field) {
+        return Err(FilterError::with_kind(
+            FilterErrorKind::UnsafeIdentifier,
+            format!("unsafe request identifier '{name}'"),
+        ));
+    }
+
+    match modifier {
+        Some(RequestModifier::Isset) => Ok(Value::Bool(values.contains_key(field))),
+        Some(RequestModifier::Lower) => Ok(lower_request_value(values.get(field))),
+        Some(RequestModifier::Length) => Ok(Value::Number(
+            lengths.get(field).copied().unwrap_or_default().to_string(),
+        )),
+        None => Ok(values
+            .get(field)
+            .cloned()
+            .unwrap_or_else(|| Value::String(String::new()))),
+    }
+}
+
+fn lower_request_value(value: Option<&Value>) -> Value {
+    Value::String(request_value_to_string(value).to_ascii_lowercase())
+}
+
+fn request_value_to_string(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(value)) => value.clone(),
+        Some(Value::Number(value)) => value.clone(),
+        Some(Value::Bool(value)) => value.to_string(),
+        Some(Value::Null) | None => String::new(),
+    }
+}
+
+fn request_modifier_name(modifier: RequestModifier) -> &'static str {
+    match modifier {
+        RequestModifier::Isset => "isset",
+        RequestModifier::Lower => "lower",
+        RequestModifier::Length => "length",
+    }
+}
+
 fn normalize_header_key(field: impl Into<String>) -> String {
     field.into().to_ascii_lowercase().replace('-', "_")
+}
+
+fn split_field_modifier(field: &str) -> Result<(&str, Option<FieldModifier>), FilterError> {
+    let Some((base, modifier)) = field.rsplit_once(':') else {
+        return Ok((field, None));
+    };
+
+    let modifier = match modifier {
+        "lower" => FieldModifier::Lower,
+        "length" => FieldModifier::Length,
+        _ => {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::InvalidLiteral,
+                format!("unsupported field modifier ':{modifier}'"),
+            ))
+        }
+    };
+
+    Ok((base, Some(modifier)))
+}
+
+fn apply_field_modifier(
+    field: &str,
+    mut resolved: ResolvedField,
+    modifier: Option<FieldModifier>,
+) -> Result<ResolvedField, FilterError> {
+    let Some(modifier) = modifier else {
+        return Ok(resolved);
+    };
+
+    if resolved.relation.is_some() {
+        return Err(FilterError::with_kind(
+            FilterErrorKind::InvalidOperator,
+            format!(
+                "field modifier ':{}' is not supported on relation field '{field}' yet",
+                field_modifier_name(modifier),
+            ),
+        ));
+    }
+
+    match modifier {
+        FieldModifier::Lower => {
+            if let Some(kind) = resolved.kind {
+                if kind != FieldKind::Text {
+                    return Err(FilterError::with_kind(
+                        FilterErrorKind::InvalidOperator,
+                        "field modifier ':lower' is only allowed on text fields",
+                    ));
+                }
+            }
+            resolved.sql = format!("LOWER({})", resolved.sql);
+            resolved.kind = Some(FieldKind::Text);
+        }
+        FieldModifier::Length => {
+            if let Some(kind) = resolved.kind {
+                if !matches!(
+                    kind,
+                    FieldKind::Array | FieldKind::Relation | FieldKind::Json
+                ) {
+                    return Err(FilterError::with_kind(
+                        FilterErrorKind::InvalidOperator,
+                        "field modifier ':length' is only allowed on array-like fields",
+                    ));
+                }
+            }
+            resolved.sql = format!("COALESCE(json_array_length({}), 0)", resolved.sql);
+            resolved.kind = Some(FieldKind::Number);
+        }
+    }
+
+    Ok(resolved)
+}
+
+fn field_modifier_name(modifier: FieldModifier) -> &'static str {
+    match modifier {
+        FieldModifier::Lower => "lower",
+        FieldModifier::Length => "length",
+    }
 }
 
 fn validate_field_operation(

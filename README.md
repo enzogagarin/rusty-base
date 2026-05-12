@@ -251,6 +251,8 @@ The first filter engine prototype supports:
   `@request.context`, and `@request.method`;
 - `@request.*:isset` checks for rule filters, for example
   `@request.body.role:isset = false`;
+- `:lower` and `:length` modifiers for bounded rule/filter expressions, including
+  `@request.body.title:lower` and `tags:length`;
 - comparison operators: `=`, `!=`, `>`, `>=`, `<`, `<=`;
 - contains-like operators: `~`, `!~`;
 - PocketBase-style any-match operators for SQLite JSON arrays: `?=`, `?!=`, `?>`, `?>=`, `?<`, `?<=`, `?~`, `?!~`;
@@ -308,8 +310,7 @@ id IS NULL OR (status = TRUE AND score >= ?)
 Not implemented yet:
 
 - full PocketBase `fexpr` grammar compatibility;
-- remaining request/field modifiers such as `:changed`, `:length`, `:each`,
-  and `:lower`;
+- remaining request/field modifiers such as `:changed` and `:each`;
 - cross-collection identifiers such as `@collection.*`;
 - full PocketBase auth provider/settings parity and public logout/revoke routes;
 - exact PocketBase admin API/import-export compatibility;

@@ -32,6 +32,23 @@ fn compiles_known_fields_with_type_compatible_operators() {
 }
 
 #[test]
+fn compiles_lower_and_length_field_modifiers() {
+    let out =
+        compile_filter_with_schema("name:lower = 'burak' && tags:length >= 2", &schema()).unwrap();
+    assert_eq!(
+        out.sql,
+        "LOWER(\"name\") = ? AND COALESCE(json_array_length(\"tags\"), 0) >= ?"
+    );
+    assert_eq!(
+        out.params,
+        vec![
+            Value::String("burak".to_string()),
+            Value::Number("2".to_string())
+        ]
+    );
+}
+
+#[test]
 fn rejects_unknown_fields() {
     let err = compile_filter_with_schema("password = 'secret'", &schema()).unwrap_err();
     assert!(err.to_string().contains("unknown field"));
