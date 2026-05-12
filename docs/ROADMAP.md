@@ -173,6 +173,8 @@ Exit criteria:
   `@request.auth.*` population from authenticated records.
 - Added token expiration metadata, bearer-token expiry checks, and
   `auth-refresh` rotation scoped to the requested auth collection.
+- Added the first request field modifier: `@request.*:isset` compiles to
+  boolean presence checks and is enforced by server create rules.
 
 ## Next Sprint
 
@@ -182,5 +184,5 @@ Exit criteria:
    examples.
 4. Add public logout/token revocation and align auth response/error shape more
    closely with PocketBase.
-5. Add request field modifiers such as `:isset`, `:changed`, `:length`, and
-   `:each`.
+5. Add the remaining request/field modifiers such as `:changed`, `:length`,
+   `:each`, and `:lower`.

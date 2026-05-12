@@ -23,7 +23,7 @@ Status legend:
 | Operand-vs-operand expressions | partial | Field, literal, boolean, number, null, and supported function operands can appear in comparisons. |
 | Function operands | partial | `strftime(...)` and `geoDistance(...)` are implemented for the current SQL renderer. |
 | Identifier macros | supported | Time macros such as `@now`, `@todayStart`, `@monthEnd`, and numeric macros such as `@year` are resolved from `FilterContext`. |
-| Request context identifiers | partial | `@request.auth.*`, `@request.query.*`, `@request.headers.*`, `@request.body.*`, `@request.context`, and `@request.method` resolve from `FilterContext::request`. Request field modifiers are still planned. |
+| Request context identifiers | partial | `@request.auth.*`, `@request.query.*`, `@request.headers.*`, `@request.body.*`, `@request.context`, and `@request.method` resolve from `FilterContext::request`. `@request.*:isset` is supported for request field presence checks. Other request field modifiers are still planned. |
 | Cross-collection identifiers | planned | `@collection.*` joins are not implemented yet. |
 
 ## Operators
@@ -65,10 +65,10 @@ Status legend:
 | --- | --- | --- |
 | `@request.context` | supported | Defaults to `default` unless the caller sets another context. |
 | `@request.method` | supported | Resolved as a string from `FilterContext::request.method`. |
-| `@request.auth.*` | partial | Scalar values can be supplied through `FilterContext`; missing values resolve to an empty string for PocketBase-style unauthenticated checks such as `@request.auth.id != ""`. |
-| `@request.query.*` | partial | Scalar query values can be supplied through `FilterContext`; missing values resolve to an empty string. |
-| `@request.headers.*` | partial | Header keys are normalized to lowercase and `-` is replaced with `_`. |
-| `@request.body.*` | partial | Scalar body values are supported; uploaded files and request modifiers are not implemented yet. |
+| `@request.auth.*` | partial | Scalar values can be supplied through `FilterContext`; missing values resolve to an empty string for PocketBase-style unauthenticated checks such as `@request.auth.id != ""`. `:isset` reports whether the value exists in the auth context. |
+| `@request.query.*` | partial | Scalar query values can be supplied through `FilterContext`; missing values resolve to an empty string. `:isset` reports whether the query parameter exists. |
+| `@request.headers.*` | partial | Header keys are normalized to lowercase and `-` is replaced with `_`. `:isset` reports whether the normalized header exists. |
+| `@request.body.*` | partial | Scalar body values are supported; `:isset` reports whether the submitted body contains the field. Uploaded files and the remaining request modifiers are not implemented yet. |
 
 ## Safety
 

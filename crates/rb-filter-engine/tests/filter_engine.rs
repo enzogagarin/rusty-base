@@ -204,6 +204,22 @@ fn treats_missing_request_values_as_empty_strings() {
 }
 
 #[test]
+fn compiles_request_isset_modifier() {
+    let context = fixed_context()
+        .with_body_value("title", Value::String("Rusty Base".to_string()))
+        .with_header_value("X-Token", Value::String("secret".to_string()));
+
+    let out = compile_filter_with_context(
+        "@request.body.title:isset = true && @request.body.role:isset = false && @request.headers.x_token:isset = true",
+        context,
+    )
+    .unwrap();
+
+    assert_eq!(out.sql, "TRUE = TRUE AND FALSE = FALSE AND TRUE = TRUE");
+    assert_eq!(out.params, Vec::<Value>::new());
+}
+
+#[test]
 fn reuses_named_params_for_repeated_request_values() {
     let context = fixed_context().with_auth_value("id", Value::String("user_123".to_string()));
     let out = compile_filter_with_named_params_and_context(

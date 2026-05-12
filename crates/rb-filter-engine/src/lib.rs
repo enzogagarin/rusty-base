@@ -1366,6 +1366,38 @@ impl<'a> Lexer<'a> {
                 name.push(c);
                 self.bump();
                 previous_was_dot = true;
+            } else if c == ':' {
+                if previous_was_dot {
+                    return Err(FilterError::at(
+                        FilterErrorKind::UnexpectedCharacter,
+                        self.pos.saturating_sub(1),
+                        "trailing '.' in '@' identifier",
+                    ));
+                }
+                name.push(c);
+                self.bump();
+
+                match self.peek() {
+                    Some(c) if is_ident_start(c) => {}
+                    _ => {
+                        return Err(FilterError::at(
+                            FilterErrorKind::UnexpectedCharacter,
+                            self.pos,
+                            "expected modifier after ':'",
+                        ))
+                    }
+                }
+
+                while let Some(c) = self.peek() {
+                    if is_ident_continue(c) {
+                        name.push(c);
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+
+                break;
             } else {
                 break;
             }
@@ -2889,29 +2921,37 @@ fn resolve_macro(name: &str, context: &FilterContext) -> Result<Value, FilterErr
 
 fn resolve_request_identifier(name: &str, context: &FilterContext) -> Result<Value, FilterError> {
     let request = &context.request;
+    let (base_name, modifier) = split_request_modifier(name)?;
 
-    if name == "@request.context" {
+    if base_name == "@request.context" {
+        reject_request_modifier(name, modifier)?;
         return Ok(Value::String(request.context.clone()));
     }
 
-    if name == "@request.method" {
+    if base_name == "@request.method" {
+        reject_request_modifier(name, modifier)?;
         return Ok(Value::String(request.method.clone()));
     }
 
-    if let Some(field) = name.strip_prefix("@request.auth.") {
-        return request_map_value(name, field, &request.auth);
+    if let Some(field) = base_name.strip_prefix("@request.auth.") {
+        return request_map_value(name, field, &request.auth, modifier);
     }
 
-    if let Some(field) = name.strip_prefix("@request.query.") {
-        return request_map_value(name, field, &request.query);
+    if let Some(field) = base_name.strip_prefix("@request.query.") {
+        return request_map_value(name, field, &request.query, modifier);
     }
 
-    if let Some(field) = name.strip_prefix("@request.headers.") {
-        return request_map_value(name, &normalize_header_key(field), &request.headers);
+    if let Some(field) = base_name.strip_prefix("@request.headers.") {
+        return request_map_value(
+            name,
+            &normalize_header_key(field),
+            &request.headers,
+            modifier,
+        );
     }
 
-    if let Some(field) = name.strip_prefix("@request.body.") {
-        return request_map_value(name, field, &request.body);
+    if let Some(field) = base_name.strip_prefix("@request.body.") {
+        return request_map_value(name, field, &request.body, modifier);
     }
 
     Err(FilterError::with_kind(
@@ -2920,16 +2960,47 @@ fn resolve_request_identifier(name: &str, context: &FilterContext) -> Result<Val
     ))
 }
 
+fn split_request_modifier(name: &str) -> Result<(&str, Option<&str>), FilterError> {
+    let Some((base, modifier)) = name.rsplit_once(':') else {
+        return Ok((name, None));
+    };
+
+    if modifier != "isset" {
+        return Err(FilterError::with_kind(
+            FilterErrorKind::InvalidLiteral,
+            format!("unsupported request modifier ':{modifier}'"),
+        ));
+    }
+
+    Ok((base, Some(modifier)))
+}
+
+fn reject_request_modifier(name: &str, modifier: Option<&str>) -> Result<(), FilterError> {
+    if let Some(modifier) = modifier {
+        return Err(FilterError::with_kind(
+            FilterErrorKind::InvalidLiteral,
+            format!("unsupported request modifier ':{modifier}' for '{name}'"),
+        ));
+    }
+
+    Ok(())
+}
+
 fn request_map_value(
     name: &str,
     field: &str,
     values: &HashMap<String, Value>,
+    modifier: Option<&str>,
 ) -> Result<Value, FilterError> {
     if !is_safe_identifier_path(field) {
         return Err(FilterError::with_kind(
             FilterErrorKind::UnsafeIdentifier,
             format!("unsafe request identifier '{name}'"),
         ));
+    }
+
+    if modifier == Some("isset") {
+        return Ok(Value::Bool(values.contains_key(field)));
     }
 
     Ok(values

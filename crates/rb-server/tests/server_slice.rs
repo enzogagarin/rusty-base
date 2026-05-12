@@ -505,6 +505,48 @@ fn returns_forbidden_when_http_create_rule_denies_request() {
 }
 
 #[test]
+fn applies_request_isset_modifier_in_create_rules() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let collection_response = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "title", "kind": "text"},
+                    {"name": "role", "kind": "text"}
+                ],
+                "createRule": "@request.body.role:isset = false"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(collection_response.status, 200);
+
+    let allowed = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Plain"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(allowed.status, 200);
+
+    let denied = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Sneaky", "role": "admin"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(denied.status, 403);
+}
+
+#[test]
 fn updates_and_deletes_records() {
     let store = Store::open_in_memory().unwrap();
     store.create_collection(posts_collection()).unwrap();

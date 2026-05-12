@@ -176,7 +176,8 @@ fn pocketbase_request_fixtures_compile_with_fixed_context() {
     let context = fixed_context()
         .with_auth_value("id", Value::String("user_123".to_string()))
         .with_auth_value("role", Value::String("staff".to_string()))
-        .with_query_value("name", Value::String("Burak".to_string()));
+        .with_query_value("name", Value::String("Burak".to_string()))
+        .with_body_value("title", Value::String("Rusty Base".to_string()));
     let fixtures = vec![
         CompatibilityFixture {
             name: "request auth ownership",
@@ -204,6 +205,12 @@ fn pocketbase_request_fixtures_compile_with_fixed_context() {
                 Value::String("user_123".to_string()),
                 Value::String(String::new()),
             ],
+        },
+        CompatibilityFixture {
+            name: "request body isset modifier",
+            filter: "@request.body.title:isset = true",
+            expected_sql: "TRUE = TRUE",
+            expected_params: vec![],
         },
     ];
 
