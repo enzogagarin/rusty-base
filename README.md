@@ -145,6 +145,7 @@ The first filter engine prototype supports:
 - logical operators: `&&`, `||`;
 - parentheses;
 - expression count limits;
+- configurable input length and parentheses depth limits;
 - parameterized SQL output.
 
 Example:

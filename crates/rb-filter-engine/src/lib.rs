@@ -8,6 +8,25 @@
 use std::fmt;
 
 const DEFAULT_EXPR_LIMIT: usize = 64;
+const DEFAULT_INPUT_BYTES: usize = 16 * 1024;
+const DEFAULT_DEPTH_LIMIT: usize = 16;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FilterSettings {
+    pub max_expressions: usize,
+    pub max_input_bytes: usize,
+    pub max_depth: usize,
+}
+
+impl Default for FilterSettings {
+    fn default() -> Self {
+        Self {
+            max_expressions: DEFAULT_EXPR_LIMIT,
+            max_input_bytes: DEFAULT_INPUT_BYTES,
+            max_depth: DEFAULT_DEPTH_LIMIT,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompileOutput {
@@ -51,15 +70,31 @@ pub fn compile_filter(input: &str) -> Result<String, String> {
 }
 
 pub fn compile_filter_with_params(input: &str) -> Result<CompileOutput, FilterError> {
-    compile_filter_with_limit(input, DEFAULT_EXPR_LIMIT)
+    compile_filter_with_settings(input, FilterSettings::default())
 }
 
 pub fn compile_filter_with_limit(
     input: &str,
     max_expressions: usize,
 ) -> Result<CompileOutput, FilterError> {
+    compile_filter_with_settings(
+        input,
+        FilterSettings {
+            max_expressions,
+            ..FilterSettings::default()
+        },
+    )
+}
+
+pub fn compile_filter_with_settings(
+    input: &str,
+    settings: FilterSettings,
+) -> Result<CompileOutput, FilterError> {
+    if input.len() > settings.max_input_bytes {
+        return Err(FilterError::new("input length limit exceeded"));
+    }
     let tokens = Lexer::new(input).tokenize()?;
-    let mut parser = Parser::new(tokens, max_expressions);
+    let mut parser = Parser::new(tokens, settings);
     let ast = parser.parse()?;
     let mut compiler = SqlCompiler::default();
     let sql = compiler.compile(&ast)?;
@@ -386,17 +421,19 @@ enum CompareOp {
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
-    max_expressions: usize,
+    settings: FilterSettings,
     expression_count: usize,
+    depth: usize,
 }
 
 impl Parser {
-    fn new(tokens: Vec<Token>, max_expressions: usize) -> Self {
+    fn new(tokens: Vec<Token>, settings: FilterSettings) -> Self {
         Self {
             tokens,
             pos: 0,
-            max_expressions,
+            settings,
             expression_count: 0,
+            depth: 0,
         }
     }
 
@@ -441,9 +478,14 @@ impl Parser {
 
     fn parse_primary(&mut self) -> Result<Expr, FilterError> {
         if matches!(self.peek(), Token::LParen) {
+            self.depth += 1;
+            if self.depth > self.settings.max_depth {
+                return Err(FilterError::new("depth limit exceeded"));
+            }
             self.bump();
             let expr = self.parse_or()?;
             self.expect_rparen()?;
+            self.depth -= 1;
             return Ok(Expr::Group(Box::new(expr)));
         }
         self.parse_compare()
@@ -451,7 +493,7 @@ impl Parser {
 
     fn parse_compare(&mut self) -> Result<Expr, FilterError> {
         self.expression_count += 1;
-        if self.expression_count > self.max_expressions {
+        if self.expression_count > self.settings.max_expressions {
             return Err(FilterError::new("expression limit exceeded"));
         }
 

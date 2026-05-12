@@ -107,7 +107,7 @@ The first milestone is a hardened filter compiler that supports a useful subset:
 - LIKE/NOT LIKE with escaping;
 - PocketBase-style any-match operators over SQLite JSON arrays;
 - `&&`, `||`, and parentheses;
-- expression limits;
+- expression, input length, and parentheses depth limits;
 - bound parameters.
 
 That is implemented in `crates/rb-filter-engine`.

@@ -1,4 +1,6 @@
-use rb_filter_engine::{compile_filter, compile_filter_with_params, Value};
+use rb_filter_engine::{
+    compile_filter, compile_filter_with_params, compile_filter_with_settings, FilterSettings, Value,
+};
 
 #[test]
 fn compiles_equality_with_bound_parameter() {
@@ -68,4 +70,30 @@ fn rejects_unclosed_string() {
 fn rejects_invalid_identifier() {
     let err = compile_filter("../secret = true").unwrap_err();
     assert!(err.contains("unexpected character"));
+}
+
+#[test]
+fn rejects_input_that_exceeds_configured_length() {
+    let err = compile_filter_with_settings(
+        "name = 'Burak'",
+        FilterSettings {
+            max_input_bytes: 5,
+            ..FilterSettings::default()
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("input length limit"));
+}
+
+#[test]
+fn rejects_parentheses_that_exceed_configured_depth() {
+    let err = compile_filter_with_settings(
+        "(((name = 'Burak')))",
+        FilterSettings {
+            max_depth: 2,
+            ..FilterSettings::default()
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("depth limit"));
 }
