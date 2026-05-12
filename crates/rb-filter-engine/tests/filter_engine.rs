@@ -1,5 +1,6 @@
 use rb_filter_engine::{
-    compile_filter, compile_filter_with_params, compile_filter_with_settings, FilterErrorKind,
+    compile_ast, compile_filter, compile_filter_with_context, compile_filter_with_params,
+    compile_filter_with_settings, parse_filter, FilterContext, FilterDateTime, FilterErrorKind,
     FilterSettings, Value,
 };
 
@@ -8,6 +9,128 @@ fn compiles_equality_with_bound_parameter() {
     let out = compile_filter_with_params("name = 'Burak'").unwrap();
     assert_eq!(out.sql, "name = ?");
     assert_eq!(out.params, vec![Value::String("Burak".to_string())]);
+}
+
+#[test]
+fn parses_and_compiles_as_separate_steps() {
+    let ast = parse_filter("name = 'Burak' && score >= 10").unwrap();
+    let out = compile_ast(&ast).unwrap();
+    assert_eq!(out.sql, "name = ? AND score >= ?");
+    assert_eq!(
+        out.params,
+        vec![
+            Value::String("Burak".to_string()),
+            Value::Number("10".to_string())
+        ]
+    );
+}
+
+#[test]
+fn compiles_field_to_field_comparisons() {
+    let out = compile_filter_with_params("name = nickname").unwrap();
+    assert_eq!(out.sql, "name = nickname");
+    assert_eq!(out.params, vec![]);
+}
+
+#[test]
+fn compiles_literal_to_field_comparisons() {
+    let out = compile_filter_with_params("'Burak' = name").unwrap();
+    assert_eq!(out.sql, "? = name");
+    assert_eq!(out.params, vec![Value::String("Burak".to_string())]);
+}
+
+#[test]
+fn compiles_like_with_field_pattern_operand() {
+    let out = compile_filter_with_params("title ~ summary").unwrap();
+    assert_eq!(out.sql, "title LIKE ('%' || summary || '%') ESCAPE '\\'");
+    assert_eq!(out.params, vec![]);
+}
+
+#[test]
+fn compiles_like_with_literal_left_operand() {
+    let out = compile_filter_with_params("'rusty base' ~ title").unwrap();
+    assert_eq!(out.sql, "? LIKE ('%' || title || '%') ESCAPE '\\'");
+    assert_eq!(out.params, vec![Value::String("rusty base".to_string())]);
+}
+
+#[test]
+fn compiles_strftime_function_operand() {
+    let out = compile_filter_with_params("strftime('%Y', created) = '2026'").unwrap();
+    assert_eq!(out.sql, "strftime(?,created) = ?");
+    assert_eq!(
+        out.params,
+        vec![
+            Value::String("%Y".to_string()),
+            Value::String("2026".to_string())
+        ]
+    );
+}
+
+#[test]
+fn compiles_geo_distance_function_operand() {
+    let out =
+        compile_filter_with_params("geoDistance(office.lon, office.lat, 1, 2) < 200").unwrap();
+    assert_eq!(
+        out.sql,
+        "(6371 * acos(cos(radians(office.lat)) * cos(radians(?)) * cos(radians(?) - radians(office.lon)) + sin(radians(office.lat)) * sin(radians(?)))) < ?"
+    );
+    assert_eq!(
+        out.params,
+        vec![
+            Value::Number("2".to_string()),
+            Value::Number("1".to_string()),
+            Value::Number("2".to_string()),
+            Value::Number("200".to_string())
+        ]
+    );
+}
+
+#[test]
+fn compiles_datetime_macros_with_fixed_context() {
+    let context = fixed_context();
+    let out =
+        compile_filter_with_context("created >= @todayStart && created <= @todayEnd", context)
+            .unwrap();
+    assert_eq!(out.sql, "created >= ? AND created <= ?");
+    assert_eq!(
+        out.params,
+        vec![
+            Value::String("2026-05-12 00:00:00.000Z".to_string()),
+            Value::String("2026-05-12 23:59:59.999Z".to_string())
+        ]
+    );
+}
+
+#[test]
+fn compiles_numeric_macros_with_fixed_context() {
+    let out =
+        compile_filter_with_context("year = @year && weekday = @weekday", fixed_context()).unwrap();
+    assert_eq!(out.sql, "year = ? AND weekday = ?");
+    assert_eq!(
+        out.params,
+        vec![
+            Value::Number("2026".to_string()),
+            Value::Number("2".to_string())
+        ]
+    );
+}
+
+fn fixed_context() -> FilterContext {
+    FilterContext::new(FilterDateTime::utc(2026, 5, 12, 16, 30, 45, 123).unwrap())
+}
+
+#[test]
+fn compiles_double_quoted_string_literals() {
+    let out = compile_filter_with_params(r#"name = "Burak""#).unwrap();
+    assert_eq!(out.sql, "name = ?");
+    assert_eq!(out.params, vec![Value::String("Burak".to_string())]);
+}
+
+#[test]
+fn compiles_escaped_double_quoted_string_literals() {
+    let out = compile_filter_with_params(r#"title = "say \"hello\"""#).unwrap();
+    assert_eq!(out.sql, "title = ?");
+    assert_eq!(out.params, vec![Value::String("say \"hello\"".to_string())]);
 }
 
 #[test]
@@ -21,7 +144,24 @@ fn compiles_boolean_precedence_with_parentheses() {
 fn compiles_like_with_escape_clause() {
     let out = compile_filter_with_params("title ~ 'rust_%'").unwrap();
     assert_eq!(out.sql, "title LIKE ? ESCAPE '\\'");
-    assert_eq!(out.params, vec![Value::String("%rust\\_\\%%".to_string())]);
+    assert_eq!(out.params, vec![Value::String("rust_%".to_string())]);
+}
+
+#[test]
+fn compiles_like_without_explicit_percent_as_contains_match() {
+    let out = compile_filter_with_params("title ~ 'rust_draft'").unwrap();
+    assert_eq!(out.sql, "title LIKE ? ESCAPE '\\'");
+    assert_eq!(
+        out.params,
+        vec![Value::String("%rust\\_draft%".to_string())]
+    );
+}
+
+#[test]
+fn compiles_like_with_escaped_percent_as_literal_contains_match() {
+    let out = compile_filter_with_params(r"title ~ 'rust\%'").unwrap();
+    assert_eq!(out.sql, "title LIKE ? ESCAPE '\\'");
+    assert_eq!(out.params, vec![Value::String("%rust\\%%".to_string())]);
 }
 
 #[test]
@@ -43,12 +183,12 @@ fn compiles_any_match_equality_for_sqlite_json_arrays() {
 
 #[test]
 fn compiles_any_match_like_for_sqlite_json_arrays() {
-    let out = compile_filter_with_params("tags ?~ 'rust'").unwrap();
+    let out = compile_filter_with_params("tags ?~ 'rust_%'").unwrap();
     assert_eq!(
         out.sql,
         "EXISTS (SELECT 1 FROM json_each(tags) WHERE json_each.value LIKE ? ESCAPE '\\')"
     );
-    assert_eq!(out.params, vec![Value::String("%rust%".to_string())]);
+    assert_eq!(out.params, vec![Value::String("rust_%".to_string())]);
 }
 
 #[test]
@@ -84,6 +224,13 @@ fn exposes_structured_error_kind_and_byte_position() {
 #[test]
 fn exposes_unterminated_string_position() {
     let err = compile_filter_with_params("name = 'oops").unwrap_err();
+    assert_eq!(err.kind(), FilterErrorKind::UnterminatedString);
+    assert_eq!(err.position(), Some(7));
+}
+
+#[test]
+fn exposes_unterminated_double_quoted_string_position() {
+    let err = compile_filter_with_params(r#"name = "oops"#).unwrap_err();
     assert_eq!(err.kind(), FilterErrorKind::UnterminatedString);
     assert_eq!(err.position(), Some(7));
 }

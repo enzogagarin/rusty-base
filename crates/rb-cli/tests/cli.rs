@@ -19,7 +19,7 @@ fn compiles_filter_with_schema_file() {
         .unwrap();
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert_eq!(stdout(&output), "sql: age >= ?\nparams: [number:30]\n");
+    assert_eq!(stdout(&output), "sql: \"age\" >= ?\nparams: [number:30]\n");
 }
 
 #[test]

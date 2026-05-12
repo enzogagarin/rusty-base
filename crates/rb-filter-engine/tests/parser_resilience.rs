@@ -29,7 +29,7 @@ fn next_u64(seed: &mut u64) -> u64 {
 
 fn generated_ascii(seed: &mut u64, len: usize) -> String {
     const ALPHABET: &[u8] =
-        b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.'-=!~?&|() <>\\\n\t";
+        b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.'-=!~?&|() <>,@\\\n\t";
 
     (0..len)
         .map(|_| {

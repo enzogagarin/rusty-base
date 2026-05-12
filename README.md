@@ -113,7 +113,10 @@ Target capabilities:
 │       ├── src/lib.rs
 │       └── tests/filter_engine.rs
 ├── docs
-│   └── ARCHITECTURE.md
+│   ├── ARCHITECTURE.md
+│   ├── FILTER_COMPATIBILITY.md
+│   ├── RELATION_QUERY_PLAN.md
+│   └── ROADMAP.md
 └── README.md
 ```
 
@@ -162,6 +165,13 @@ JSON
 cargo run -p rb-cli -- compile-filter --schema schema.json "age >= 30 && tags ?= 'rust'"
 ```
 
+Schema-aware compilation resolves fields as quoted SQL identifiers:
+
+```text
+sql: "age" >= ? AND EXISTS (SELECT 1 FROM json_each("tags") WHERE json_each.value = ?)
+params: [number:30, string:rust]
+```
+
 Supported schema field kinds: `text`, `number`, `bool`, `datetime`, `array`, `relation`.
 
 Example:
@@ -180,7 +190,10 @@ assert_eq!(out.params.len(), 2);
 The first filter engine prototype supports:
 
 - identifiers: `name`, `author.id`, `_verified`;
-- string, number, boolean, and null literals;
+- single-quoted and double-quoted string, number, boolean, and null literals;
+- field-literal, field-field, and literal-field comparisons;
+- function operands for `strftime(...)` and `geoDistance(...)`;
+- PocketBase-style time macros such as `@now`, `@todayStart`, and `@year`;
 - comparison operators: `=`, `!=`, `>`, `>=`, `<`, `<=`;
 - contains-like operators: `~`, `!~`;
 - PocketBase-style any-match operators for SQLite JSON arrays: `?=`, `?!=`, `?>`, `?>=`, `?<`, `?<=`, `?~`, `?!~`;
@@ -189,7 +202,12 @@ The first filter engine prototype supports:
 - expression count limits;
 - configurable input length and parentheses depth limits;
 - optional schema-aware field/type/operator validation;
+- a first relation-aware `FilterPlan` layer for resolver-provided traversal
+  metadata;
 - parameterized SQL output.
+
+See `docs/FILTER_COMPATIBILITY.md` for the current PocketBase filter
+compatibility matrix.
 
 Example:
 

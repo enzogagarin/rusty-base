@@ -1,20 +1,26 @@
-use rb_filter_engine::{compile_filter_with_schema, FieldKind, FieldSchema, FilterSchema, Value};
+use rb_filter_engine::{
+    compile_filter_with_resolver, compile_filter_with_schema, FieldKind, FieldResolver,
+    FieldSchema, FilterError, FilterErrorKind, FilterSchema, ResolvedField, Value,
+};
 
 fn schema() -> FilterSchema {
     FilterSchema::new([
         FieldSchema::new("name", FieldKind::Text),
+        FieldSchema::new("nickname", FieldKind::Text),
         FieldSchema::new("age", FieldKind::Number),
         FieldSchema::new("verified", FieldKind::Bool),
         FieldSchema::new("deleted_at", FieldKind::DateTime),
         FieldSchema::new("tags", FieldKind::Array),
         FieldSchema::new("author.id", FieldKind::Relation),
+        FieldSchema::new("office.lon", FieldKind::Number),
+        FieldSchema::new("office.lat", FieldKind::Number),
     ])
 }
 
 #[test]
 fn compiles_known_fields_with_type_compatible_operators() {
     let out = compile_filter_with_schema("name ~ 'burak' && age >= 30", &schema()).unwrap();
-    assert_eq!(out.sql, "name LIKE ? ESCAPE '\\' AND age >= ?");
+    assert_eq!(out.sql, "\"name\" LIKE ? ESCAPE '\\' AND \"age\" >= ?");
     assert_eq!(
         out.params,
         vec![
@@ -59,12 +65,90 @@ fn accepts_any_match_on_array_fields() {
     let out = compile_filter_with_schema("tags ?= 'rust'", &schema()).unwrap();
     assert_eq!(
         out.sql,
-        "EXISTS (SELECT 1 FROM json_each(tags) WHERE json_each.value = ?)"
+        "EXISTS (SELECT 1 FROM json_each(\"tags\") WHERE json_each.value = ?)"
     );
 }
 
 #[test]
 fn accepts_relation_identifier_fields() {
     let out = compile_filter_with_schema("author.id = 'abc123'", &schema()).unwrap();
-    assert_eq!(out.sql, "author.id = ?");
+    assert_eq!(out.sql, "\"author\".\"id\" = ?");
+}
+
+#[test]
+fn compiles_schema_resolved_field_to_field_comparisons() {
+    let out = compile_filter_with_schema("name = nickname", &schema()).unwrap();
+    assert_eq!(out.sql, "\"name\" = \"nickname\"");
+    assert_eq!(out.params, vec![]);
+}
+
+#[test]
+fn compiles_schema_resolved_literal_to_field_comparisons() {
+    let out = compile_filter_with_schema("'Burak' = name", &schema()).unwrap();
+    assert_eq!(out.sql, "? = \"name\"");
+    assert_eq!(out.params, vec![Value::String("Burak".to_string())]);
+}
+
+#[test]
+fn compiles_schema_resolved_like_with_field_pattern_operand() {
+    let out = compile_filter_with_schema("name ~ nickname", &schema()).unwrap();
+    assert_eq!(
+        out.sql,
+        "\"name\" LIKE ('%' || \"nickname\" || '%') ESCAPE '\\'"
+    );
+    assert_eq!(out.params, vec![]);
+}
+
+#[test]
+fn compiles_schema_resolved_strftime_function_operand() {
+    let out = compile_filter_with_schema("strftime('%Y', deleted_at) = '2026'", &schema()).unwrap();
+    assert_eq!(out.sql, "strftime(?,\"deleted_at\") = ?");
+    assert_eq!(
+        out.params,
+        vec![
+            Value::String("%Y".to_string()),
+            Value::String("2026".to_string())
+        ]
+    );
+}
+
+#[test]
+fn compiles_schema_resolved_geo_distance_function_operand() {
+    let out =
+        compile_filter_with_schema("geoDistance(office.lon, office.lat, 1, 2) < 200", &schema())
+            .unwrap();
+    assert_eq!(
+        out.sql,
+        "(6371 * acos(cos(radians(\"office\".\"lat\")) * cos(radians(?)) * cos(radians(?) - radians(\"office\".\"lon\")) + sin(radians(\"office\".\"lat\")) * sin(radians(?)))) < ?"
+    );
+    assert_eq!(
+        out.params,
+        vec![
+            Value::Number("2".to_string()),
+            Value::Number("1".to_string()),
+            Value::Number("2".to_string()),
+            Value::Number("200".to_string())
+        ]
+    );
+}
+
+#[test]
+fn custom_resolver_controls_sql_identifier_rendering() {
+    struct Resolver;
+
+    impl FieldResolver for Resolver {
+        fn resolve_field(&self, field: &str) -> Result<ResolvedField, FilterError> {
+            match field {
+                "name" => Ok(ResolvedField::with_kind("[[name]]", FieldKind::Text)),
+                _ => Err(FilterError::with_kind(
+                    FilterErrorKind::UnknownField,
+                    format!("unknown field '{field}'"),
+                )),
+            }
+        }
+    }
+
+    let out = compile_filter_with_resolver("name = 'Burak'", &Resolver).unwrap();
+    assert_eq!(out.sql, "[[name]] = ?");
+    assert_eq!(out.params, vec![Value::String("Burak".to_string())]);
 }
