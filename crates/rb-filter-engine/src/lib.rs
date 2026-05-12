@@ -5,7 +5,7 @@
 //! It intentionally starts small: parse a safe subset, count expressions, and
 //! emit parameterized SQL fragments.
 
-use std::fmt;
+use std::{collections::HashMap, fmt};
 
 const DEFAULT_EXPR_LIMIT: usize = 64;
 const DEFAULT_INPUT_BYTES: usize = 16 * 1024;
@@ -40,6 +40,51 @@ pub enum Value {
     Number(String),
     Bool(bool),
     Null,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldKind {
+    Text,
+    Number,
+    Bool,
+    DateTime,
+    Array,
+    Relation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldSchema {
+    pub name: String,
+    pub kind: FieldKind,
+}
+
+impl FieldSchema {
+    pub fn new(name: impl Into<String>, kind: FieldKind) -> Self {
+        Self {
+            name: name.into(),
+            kind,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FilterSchema {
+    fields: HashMap<String, FieldKind>,
+}
+
+impl FilterSchema {
+    pub fn new(fields: impl IntoIterator<Item = FieldSchema>) -> Self {
+        Self {
+            fields: fields
+                .into_iter()
+                .map(|field| (field.name, field.kind))
+                .collect(),
+        }
+    }
+
+    pub fn field_kind(&self, field: &str) -> Option<FieldKind> {
+        self.fields.get(field).copied()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +142,32 @@ pub fn compile_filter_with_settings(
     let mut parser = Parser::new(tokens, settings);
     let ast = parser.parse()?;
     let mut compiler = SqlCompiler::default();
+    let sql = compiler.compile(&ast)?;
+    Ok(CompileOutput {
+        sql,
+        params: compiler.params,
+    })
+}
+
+pub fn compile_filter_with_schema(
+    input: &str,
+    schema: &FilterSchema,
+) -> Result<CompileOutput, FilterError> {
+    compile_filter_with_schema_and_settings(input, schema, FilterSettings::default())
+}
+
+pub fn compile_filter_with_schema_and_settings(
+    input: &str,
+    schema: &FilterSchema,
+    settings: FilterSettings,
+) -> Result<CompileOutput, FilterError> {
+    if input.len() > settings.max_input_bytes {
+        return Err(FilterError::new("input length limit exceeded"));
+    }
+    let tokens = Lexer::new(input).tokenize()?;
+    let mut parser = Parser::new(tokens, settings);
+    let ast = parser.parse()?;
+    let mut compiler = SqlCompiler::with_schema(schema);
     let sql = compiler.compile(&ast)?;
     Ok(CompileOutput {
         sql,
@@ -557,11 +628,19 @@ impl Parser {
 }
 
 #[derive(Default)]
-struct SqlCompiler {
+struct SqlCompiler<'a> {
     params: Vec<Value>,
+    schema: Option<&'a FilterSchema>,
 }
 
-impl SqlCompiler {
+impl<'a> SqlCompiler<'a> {
+    fn with_schema(schema: &'a FilterSchema) -> Self {
+        Self {
+            params: Vec::new(),
+            schema: Some(schema),
+        }
+    }
+
     fn compile(&mut self, expr: &Expr) -> Result<String, FilterError> {
         match expr {
             Expr::Binary { left, op, right } => {
@@ -586,6 +665,12 @@ impl SqlCompiler {
     ) -> Result<String, FilterError> {
         if !is_safe_identifier_path(field) {
             return Err(FilterError::new(format!("unsafe identifier '{field}'")));
+        }
+        if let Some(schema) = self.schema {
+            let kind = schema
+                .field_kind(field)
+                .ok_or_else(|| FilterError::new(format!("unknown field '{field}'")))?;
+            validate_field_operation(field, kind, op, value)?;
         }
 
         if is_any_match_op(op) {
@@ -639,6 +724,140 @@ impl SqlCompiler {
         Ok(format!(
             "EXISTS (SELECT 1 FROM json_each({field}) WHERE json_each.value {inner_op} ?{escape_clause})"
         ))
+    }
+}
+
+fn validate_field_operation(
+    field: &str,
+    kind: FieldKind,
+    op: CompareOp,
+    value: &Value,
+) -> Result<(), FilterError> {
+    if is_any_match_op(op) {
+        return if kind == FieldKind::Array {
+            validate_array_literal(field, value)
+        } else {
+            Err(FilterError::new(format!(
+                "any-match operator {} is only allowed on array fields",
+                op_symbol(op)
+            )))
+        };
+    }
+
+    match kind {
+        FieldKind::Text => {
+            validate_operator_allowed(
+                kind,
+                op,
+                &[
+                    CompareOp::Eq,
+                    CompareOp::Ne,
+                    CompareOp::Like,
+                    CompareOp::NotLike,
+                ],
+            )?;
+            match value {
+                Value::String(_) | Value::Null => Ok(()),
+                _ => Err(FilterError::new(format!("field '{field}' expected string"))),
+            }
+        }
+        FieldKind::Relation => {
+            validate_operator_allowed(kind, op, &[CompareOp::Eq, CompareOp::Ne])?;
+            match value {
+                Value::String(_) | Value::Null => Ok(()),
+                _ => Err(FilterError::new(format!("field '{field}' expected string"))),
+            }
+        }
+        FieldKind::DateTime => {
+            validate_operator_allowed(
+                kind,
+                op,
+                &[
+                    CompareOp::Eq,
+                    CompareOp::Ne,
+                    CompareOp::Gt,
+                    CompareOp::Gte,
+                    CompareOp::Lt,
+                    CompareOp::Lte,
+                ],
+            )?;
+            match value {
+                Value::String(_) | Value::Null => Ok(()),
+                _ => Err(FilterError::new(format!(
+                    "field '{field}' expected datetime string"
+                ))),
+            }
+        }
+        FieldKind::Number => {
+            validate_operator_allowed(
+                kind,
+                op,
+                &[
+                    CompareOp::Eq,
+                    CompareOp::Ne,
+                    CompareOp::Gt,
+                    CompareOp::Gte,
+                    CompareOp::Lt,
+                    CompareOp::Lte,
+                ],
+            )?;
+            match value {
+                Value::Number(_) | Value::Null => Ok(()),
+                _ => Err(FilterError::new(format!("field '{field}' expected number"))),
+            }
+        }
+        FieldKind::Bool => {
+            validate_operator_allowed(kind, op, &[CompareOp::Eq, CompareOp::Ne])?;
+            match value {
+                Value::Bool(_) | Value::Null => Ok(()),
+                _ => Err(FilterError::new(format!("field '{field}' expected bool"))),
+            }
+        }
+        FieldKind::Array => Err(FilterError::new(format!(
+            "operator {} is not allowed on array field '{field}'; use any-match operators",
+            op_symbol(op)
+        ))),
+    }
+}
+
+fn validate_array_literal(_field: &str, _value: &Value) -> Result<(), FilterError> {
+    Ok(())
+}
+
+fn validate_operator_allowed(
+    kind: FieldKind,
+    op: CompareOp,
+    allowed: &[CompareOp],
+) -> Result<(), FilterError> {
+    if allowed.contains(&op) {
+        Ok(())
+    } else {
+        Err(FilterError::new(format!(
+            "operator {} is not allowed on {:?} fields",
+            op_symbol(op),
+            kind
+        )))
+    }
+}
+
+fn op_symbol(op: CompareOp) -> &'static str {
+    match op {
+        CompareOp::Eq => "=",
+        CompareOp::Ne => "!=",
+        CompareOp::Gt => ">",
+        CompareOp::Gte => ">=",
+        CompareOp::Lt => "<",
+        CompareOp::Lte => "<=",
+        CompareOp::Like => "~",
+        CompareOp::NotLike => "!~",
+        CompareOp::AnyEq => "?=",
+        CompareOp::AnyNe => "?!=",
+        CompareOp::AnyGt => "?>",
+        CompareOp::AnyGte => "?>=",
+        CompareOp::AnyLt => "?<",
+        CompareOp::AnyLte => "?<=",
+        CompareOp::AnyLike => "?~",
+        CompareOp::AnyNotLike => "?!~",
     }
 }
 

@@ -146,6 +146,7 @@ The first filter engine prototype supports:
 - parentheses;
 - expression count limits;
 - configurable input length and parentheses depth limits;
+- optional schema-aware field/type/operator validation;
 - parameterized SQL output.
 
 Example:
