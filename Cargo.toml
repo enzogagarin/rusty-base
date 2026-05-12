@@ -1,0 +1,9 @@
+[workspace]
+members = ["crates/rb-filter-engine"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/enzogagarin/rusty-base"
+rust-version = "1.84"
