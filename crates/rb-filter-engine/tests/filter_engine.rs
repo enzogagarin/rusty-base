@@ -1,7 +1,8 @@
 use rb_filter_engine::{
     compile_ast, compile_filter, compile_filter_with_context, compile_filter_with_named_params,
-    compile_filter_with_params, compile_filter_with_settings, parse_filter, FilterContext,
-    FilterDateTime, FilterErrorKind, FilterSettings, NamedParam, Value,
+    compile_filter_with_named_params_and_context, compile_filter_with_params,
+    compile_filter_with_settings, parse_filter, FilterContext, FilterDateTime, FilterErrorKind,
+    FilterSettings, NamedParam, Value,
 };
 
 #[test]
@@ -142,6 +143,85 @@ fn compiles_numeric_macros_with_fixed_context() {
     );
 }
 
+#[test]
+fn compiles_request_auth_context_identifiers() {
+    let context = fixed_context()
+        .with_auth_value("id", Value::String("user_123".to_string()))
+        .with_auth_value("role", Value::String("staff".to_string()));
+
+    let out = compile_filter_with_context(
+        "owner = @request.auth.id && role = @request.auth.role",
+        context,
+    )
+    .unwrap();
+
+    assert_eq!(out.sql, "owner = ? AND role = ?");
+    assert_eq!(
+        out.params,
+        vec![
+            Value::String("user_123".to_string()),
+            Value::String("staff".to_string())
+        ]
+    );
+}
+
+#[test]
+fn compiles_request_query_method_header_and_body_identifiers() {
+    let context = fixed_context()
+        .with_request_context("realtime")
+        .with_request_method("GET")
+        .with_query_value("page", Value::String("1".to_string()))
+        .with_header_value("X-Token", Value::String("secret".to_string()))
+        .with_body_value("title", Value::String("Rusty Base".to_string()));
+
+    let out = compile_filter_with_context(
+        "ctx = @request.context && method = @request.method && page = @request.query.page && token = @request.headers.x_token && title = @request.body.title",
+        context,
+    )
+    .unwrap();
+
+    assert_eq!(
+        out.sql,
+        "ctx = ? AND method = ? AND page = ? AND token = ? AND title = ?"
+    );
+    assert_eq!(
+        out.params,
+        vec![
+            Value::String("realtime".to_string()),
+            Value::String("GET".to_string()),
+            Value::String("1".to_string()),
+            Value::String("secret".to_string()),
+            Value::String("Rusty Base".to_string())
+        ]
+    );
+}
+
+#[test]
+fn treats_missing_request_values_as_empty_strings() {
+    let out = compile_filter_with_context("owner = @request.auth.id", fixed_context()).unwrap();
+    assert_eq!(out.sql, "owner = ?");
+    assert_eq!(out.params, vec![Value::String(String::new())]);
+}
+
+#[test]
+fn reuses_named_params_for_repeated_request_values() {
+    let context = fixed_context().with_auth_value("id", Value::String("user_123".to_string()));
+    let out = compile_filter_with_named_params_and_context(
+        "owner = @request.auth.id || editor = @request.auth.id",
+        context,
+    )
+    .unwrap();
+
+    assert_eq!(out.sql, "owner = :p0 OR editor = :p0");
+    assert_eq!(
+        out.params,
+        vec![NamedParam {
+            name: "p0".to_string(),
+            value: Value::String("user_123".to_string()),
+        }]
+    );
+}
+
 fn fixed_context() -> FilterContext {
     FilterContext::new(FilterDateTime::utc(2026, 5, 12, 16, 30, 45, 123).unwrap())
 }
@@ -238,6 +318,13 @@ fn rejects_unclosed_string() {
 fn rejects_invalid_identifier() {
     let err = compile_filter("../secret = true").unwrap_err();
     assert!(err.contains("unexpected character"));
+}
+
+#[test]
+fn rejects_unknown_request_identifier_scope() {
+    let err = compile_filter_with_params("@request.cookies.token = 'abc'").unwrap_err();
+    assert_eq!(err.kind(), FilterErrorKind::InvalidLiteral);
+    assert!(err.to_string().contains("unknown request identifier"));
 }
 
 #[test]

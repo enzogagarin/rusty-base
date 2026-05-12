@@ -23,6 +23,8 @@ Status legend:
 | Operand-vs-operand expressions | partial | Field, literal, boolean, number, null, and supported function operands can appear in comparisons. |
 | Function operands | partial | `strftime(...)` and `geoDistance(...)` are implemented for the current SQL renderer. |
 | Identifier macros | supported | Time macros such as `@now`, `@todayStart`, `@monthEnd`, and numeric macros such as `@year` are resolved from `FilterContext`. |
+| Request context identifiers | partial | `@request.auth.*`, `@request.query.*`, `@request.headers.*`, `@request.body.*`, `@request.context`, and `@request.method` resolve from `FilterContext::request`. Request field modifiers are still planned. |
+| Cross-collection identifiers | planned | `@collection.*` joins are not implemented yet. |
 
 ## Operators
 
@@ -31,7 +33,7 @@ Status legend:
 | `=`, `!=` | supported | Parameterized output; special handling for `null` and booleans. |
 | `>`, `>=`, `<`, `<=` | supported | Schema-aware validation limits usage to compatible field kinds. |
 | `~`, `!~` | partial | Uses `LIKE`/`NOT LIKE` with escaping. Field pattern operands and explicit `%` wildcard preservation are supported; full placeholder parity is still being expanded. |
-| `?=`, `?!=`, `?>`, `?>=`, `?<`, `?<=`, `?~`, `?!~` | partial | Implemented for SQLite JSON arrays via `json_each`; relation multi-match SQL rendering is not implemented. |
+| `?=`, `?!=`, `?>`, `?>=`, `?<`, `?<=`, `?~`, `?!~` | partial | Implemented for SQLite JSON arrays via `json_each`; relation multi-match SQL rendering supports resolver-provided traversal metadata. |
 
 ## Field Resolution
 
@@ -48,7 +50,7 @@ Status legend:
 | Function | Status | Notes |
 | --- | --- | --- |
 | `strftime(format, value, ...)` | partial | Supports a string format, an optional time value, and string modifiers. |
-| `geoDistance(lonA, latA, lonB, latB)` | partial | Supports number literals and numeric fields. Named-parameter rendering for repeated arguments is still planned. |
+| `geoDistance(lonA, latA, lonB, latB)` | partial | Supports number literals and numeric fields. Named-parameter rendering reuses repeated argument placeholders. |
 
 ## Macros
 
@@ -56,6 +58,17 @@ Status legend:
 | --- | --- | --- |
 | Date/time values | supported | `@now`, `@yesterday`, `@tomorrow`, `@todayStart`, `@todayEnd`, `@monthStart`, `@monthEnd`, `@yearStart`, `@yearEnd`. |
 | Date/time parts | supported | `@second`, `@minute`, `@hour`, `@day`, `@month`, `@weekday`, `@year`. |
+
+## Request Context
+
+| Identifier group | Status | Notes |
+| --- | --- | --- |
+| `@request.context` | supported | Defaults to `default` unless the caller sets another context. |
+| `@request.method` | supported | Resolved as a string from `FilterContext::request.method`. |
+| `@request.auth.*` | partial | Scalar values can be supplied through `FilterContext`; missing values resolve to an empty string for PocketBase-style unauthenticated checks such as `@request.auth.id != ""`. |
+| `@request.query.*` | partial | Scalar query values can be supplied through `FilterContext`; missing values resolve to an empty string. |
+| `@request.headers.*` | partial | Header keys are normalized to lowercase and `-` is replaced with `_`. |
+| `@request.body.*` | partial | Scalar body values are supported; uploaded files and request modifiers are not implemented yet. |
 
 ## Safety
 

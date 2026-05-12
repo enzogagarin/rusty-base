@@ -20,11 +20,16 @@ Rusty Base explores those exact pressure points in Rust.
 
 ## Current status
 
-This repository currently contains the first safe step:
+This repository currently contains the first safe steps:
 
 - `crates/rb-filter-engine`: a typed, bounded filter/access-rule parser and SQL compiler prototype.
+- `crates/rb-server`: a minimal PocketBase-style HTTP/SQLite slice with
+  collection metadata, record CRUD, and list/view filtering through
+  `rb-filter-engine`.
 
-It is intentionally small and tested. It does **not** pretend to be PocketBase-compatible yet. Compatibility will be earned with golden tests, not marketing copy.
+It is intentionally small and tested. It does **not** pretend to be fully
+PocketBase-compatible yet. Compatibility will be earned with golden tests, not
+marketing copy.
 
 ## Design principles
 
@@ -108,10 +113,15 @@ Target capabilities:
 │   ├── rb-cli
 │   │   ├── Cargo.toml
 │   │   └── src/main.rs
-│   └── rb-filter-engine
+│   ├── rb-filter-engine
+│   │   ├── Cargo.toml
+│   │   ├── src/lib.rs
+│   │   └── tests/filter_engine.rs
+│   └── rb-server
 │       ├── Cargo.toml
 │       ├── src/lib.rs
-│       └── tests/filter_engine.rs
+│       ├── src/main.rs
+│       └── tests/server_slice.rs
 ├── docs
 │   ├── ARCHITECTURE.md
 │   ├── FILTER_COMPATIBILITY.md
@@ -176,6 +186,29 @@ params: [number:30, string:rust]
 Supported schema field kinds: `text`, `number`, `bool`, `datetime`, `array`,
 `json`, `relation`.
 
+Run the current HTTP/SQLite slice:
+
+```bash
+cargo run -p rb-server -- serve ./rusty-base.db 127.0.0.1:8090
+```
+
+Create a collection and records with PocketBase-style paths:
+
+```bash
+curl -s http://127.0.0.1:8090/api/health
+
+curl -s http://127.0.0.1:8090/api/collections \
+  -H 'content-type: application/json' \
+  -d '{"name":"posts","fields":[{"name":"title","kind":"text"},{"name":"published","kind":"bool"},{"name":"owner","kind":"text"}],"listRule":"owner = @request.auth.id"}'
+
+curl -s http://127.0.0.1:8090/api/collections/posts/records \
+  -H 'content-type: application/json' \
+  -d '{"title":"Rusty Base","published":true,"owner":"user_1"}'
+
+curl -s 'http://127.0.0.1:8090/api/collections/posts/records?filter=published%20%3D%20true' \
+  -H 'x-rb-auth-id: user_1'
+```
+
 Example:
 
 ```rust
@@ -196,6 +229,9 @@ The first filter engine prototype supports:
 - field-literal, field-field, and literal-field comparisons;
 - function operands for `strftime(...)` and `geoDistance(...)`;
 - PocketBase-style time macros such as `@now`, `@todayStart`, and `@year`;
+- request-context identifiers for rule filters, including `@request.auth.*`,
+  `@request.query.*`, `@request.headers.*`, `@request.body.*`,
+  `@request.context`, and `@request.method`;
 - comparison operators: `=`, `!=`, `>`, `>=`, `<`, `<=`;
 - contains-like operators: `~`, `!~`;
 - PocketBase-style any-match operators for SQLite JSON arrays: `?=`, `?!=`, `?>`, `?>=`, `?<`, `?<=`, `?~`, `?!~`;
@@ -216,6 +252,20 @@ The first filter engine prototype supports:
 See `docs/FILTER_COMPATIBILITY.md` for the current PocketBase filter
 compatibility matrix.
 
+The first server slice supports:
+
+- SQLite-backed collection metadata;
+- per-collection record tables with JSON record data;
+- `GET/POST /api/collections`;
+- `GET/POST /api/collections/:collection/records`;
+- `GET/PATCH/DELETE /api/collections/:collection/records/:id`;
+- PocketBase-like list response shape with `page`, `perPage`, `totalItems`,
+  `totalPages`, and `items`;
+- list/view rule predicates and client filter predicates compiled through
+  `rb-filter-engine`;
+- a temporary `x-rb-auth-id` header to populate `@request.auth.id` until the
+  auth MVP exists.
+
 Example:
 
 ```text
@@ -233,7 +283,13 @@ id IS NULL OR (status = TRUE AND score >= ?)
 Not implemented yet:
 
 - full PocketBase `fexpr` grammar compatibility;
-- request-context identifiers such as `@request.auth.*`;
+- request-context field modifiers such as `:isset`, `:changed`, `:length`, and
+  `:each`;
+- cross-collection identifiers such as `@collection.*`;
+- real auth collections, password hashing, and token verification;
+- exact PocketBase admin API/import-export compatibility;
+- create/update/delete rule enforcement in the server slice;
+- files, realtime, and admin UI;
 - Go FFI bindings;
 - `cargo-fuzz` corpus and CI fuzz target;
 - benchmark suite.

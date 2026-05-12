@@ -50,14 +50,55 @@ pub struct NamedParam {
     pub value: Value,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilterContext {
     pub now: FilterDateTime,
+    pub request: RequestContext,
 }
 
 impl FilterContext {
     pub fn new(now: FilterDateTime) -> Self {
-        Self { now }
+        Self {
+            now,
+            request: RequestContext::default(),
+        }
+    }
+
+    pub fn with_request(mut self, request: RequestContext) -> Self {
+        self.request = request;
+        self
+    }
+
+    pub fn with_request_context(mut self, context: impl Into<String>) -> Self {
+        self.request.context = context.into();
+        self
+    }
+
+    pub fn with_request_method(mut self, method: impl Into<String>) -> Self {
+        self.request.method = method.into();
+        self
+    }
+
+    pub fn with_auth_value(mut self, field: impl Into<String>, value: Value) -> Self {
+        self.request.auth.insert(field.into(), value);
+        self
+    }
+
+    pub fn with_query_value(mut self, field: impl Into<String>, value: Value) -> Self {
+        self.request.query.insert(field.into(), value);
+        self
+    }
+
+    pub fn with_header_value(mut self, field: impl Into<String>, value: Value) -> Self {
+        self.request
+            .headers
+            .insert(normalize_header_key(field), value);
+        self
+    }
+
+    pub fn with_body_value(mut self, field: impl Into<String>, value: Value) -> Self {
+        self.request.body.insert(field.into(), value);
+        self
     }
 }
 
@@ -65,6 +106,66 @@ impl Default for FilterContext {
     fn default() -> Self {
         Self {
             now: FilterDateTime::now_utc(),
+            request: RequestContext::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestContext {
+    pub context: String,
+    pub method: String,
+    pub auth: HashMap<String, Value>,
+    pub query: HashMap<String, Value>,
+    pub headers: HashMap<String, Value>,
+    pub body: HashMap<String, Value>,
+}
+
+impl RequestContext {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_context(mut self, context: impl Into<String>) -> Self {
+        self.context = context.into();
+        self
+    }
+
+    pub fn with_method(mut self, method: impl Into<String>) -> Self {
+        self.method = method.into();
+        self
+    }
+
+    pub fn with_auth_value(mut self, field: impl Into<String>, value: Value) -> Self {
+        self.auth.insert(field.into(), value);
+        self
+    }
+
+    pub fn with_query_value(mut self, field: impl Into<String>, value: Value) -> Self {
+        self.query.insert(field.into(), value);
+        self
+    }
+
+    pub fn with_header_value(mut self, field: impl Into<String>, value: Value) -> Self {
+        self.headers.insert(normalize_header_key(field), value);
+        self
+    }
+
+    pub fn with_body_value(mut self, field: impl Into<String>, value: Value) -> Self {
+        self.body.insert(field.into(), value);
+        self
+    }
+}
+
+impl Default for RequestContext {
+    fn default() -> Self {
+        Self {
+            context: "default".to_string(),
+            method: String::new(),
+            auth: HashMap::new(),
+            query: HashMap::new(),
+            headers: HashMap::new(),
+            body: HashMap::new(),
         }
     }
 }
@@ -1247,13 +1348,35 @@ impl<'a> Lexer<'a> {
             }
         }
 
+        let mut previous_was_dot = false;
         while let Some(c) = self.peek() {
             if c.is_ascii_alphanumeric() || c == '_' {
                 name.push(c);
                 self.bump();
+                previous_was_dot = false;
+            } else if c == '.' {
+                if previous_was_dot {
+                    return Err(FilterError::at(
+                        FilterErrorKind::UnexpectedCharacter,
+                        self.pos,
+                        "empty segment in '@' identifier",
+                    ));
+                }
+
+                name.push(c);
+                self.bump();
+                previous_was_dot = true;
             } else {
                 break;
             }
+        }
+
+        if previous_was_dot {
+            return Err(FilterError::at(
+                FilterErrorKind::UnexpectedCharacter,
+                self.pos.saturating_sub(1),
+                "trailing '.' in '@' identifier",
+            ));
         }
 
         Ok(name)
@@ -1659,7 +1782,7 @@ impl<'a> FilterPlanner<'a> {
         match operand {
             Operand::Field(field) => self.plan_field_operand(field),
             Operand::Function { name, args } => self.plan_function_operand(name, args),
-            Operand::Macro(name) => Ok(PlannedOperand::Value(resolve_macro(name, self.context)?)),
+            Operand::Macro(name) => Ok(PlannedOperand::Value(resolve_macro(name, &self.context)?)),
             Operand::Value(value) => Ok(PlannedOperand::Value(value.clone())),
         }
     }
@@ -1922,7 +2045,7 @@ impl<'a> SqlCompiler<'a> {
                 })
             }
             Operand::Function { name, args } => self.resolve_function(name, args),
-            Operand::Macro(name) => Ok(ResolvedOperand::Value(resolve_macro(name, self.context)?)),
+            Operand::Macro(name) => Ok(ResolvedOperand::Value(resolve_macro(name, &self.context)?)),
             Operand::Value(value) => Ok(ResolvedOperand::Value(value.clone())),
         }
     }
@@ -2733,7 +2856,7 @@ fn validate_geo_distance_args(args: &[ResolvedOperand]) -> Result<FieldKind, Fil
     Ok(FieldKind::Number)
 }
 
-fn resolve_macro(name: &str, context: FilterContext) -> Result<Value, FilterError> {
+fn resolve_macro(name: &str, context: &FilterContext) -> Result<Value, FilterError> {
     let now = context.now;
     let value = match name {
         "@now" => Value::String(now.to_pocketbase_string()),
@@ -2752,6 +2875,7 @@ fn resolve_macro(name: &str, context: FilterContext) -> Result<Value, FilterErro
         "@monthEnd" => Value::String(now.month_end().to_pocketbase_string()),
         "@yearStart" => Value::String(now.year_start().to_pocketbase_string()),
         "@yearEnd" => Value::String(now.year_end().to_pocketbase_string()),
+        _ if name.starts_with("@request") => return resolve_request_identifier(name, context),
         _ => {
             return Err(FilterError::with_kind(
                 FilterErrorKind::InvalidLiteral,
@@ -2761,6 +2885,61 @@ fn resolve_macro(name: &str, context: FilterContext) -> Result<Value, FilterErro
     };
 
     Ok(value)
+}
+
+fn resolve_request_identifier(name: &str, context: &FilterContext) -> Result<Value, FilterError> {
+    let request = &context.request;
+
+    if name == "@request.context" {
+        return Ok(Value::String(request.context.clone()));
+    }
+
+    if name == "@request.method" {
+        return Ok(Value::String(request.method.clone()));
+    }
+
+    if let Some(field) = name.strip_prefix("@request.auth.") {
+        return request_map_value(name, field, &request.auth);
+    }
+
+    if let Some(field) = name.strip_prefix("@request.query.") {
+        return request_map_value(name, field, &request.query);
+    }
+
+    if let Some(field) = name.strip_prefix("@request.headers.") {
+        return request_map_value(name, &normalize_header_key(field), &request.headers);
+    }
+
+    if let Some(field) = name.strip_prefix("@request.body.") {
+        return request_map_value(name, field, &request.body);
+    }
+
+    Err(FilterError::with_kind(
+        FilterErrorKind::InvalidLiteral,
+        format!("unknown request identifier '{name}'"),
+    ))
+}
+
+fn request_map_value(
+    name: &str,
+    field: &str,
+    values: &HashMap<String, Value>,
+) -> Result<Value, FilterError> {
+    if !is_safe_identifier_path(field) {
+        return Err(FilterError::with_kind(
+            FilterErrorKind::UnsafeIdentifier,
+            format!("unsafe request identifier '{name}'"),
+        ));
+    }
+
+    Ok(values
+        .get(field)
+        .cloned()
+        .unwrap_or_else(|| Value::String(String::new())))
+}
+
+fn normalize_header_key(field: impl Into<String>) -> String {
+    field.into().to_ascii_lowercase().replace('-', "_")
 }
 
 fn validate_field_operation(

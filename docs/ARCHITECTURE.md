@@ -47,6 +47,34 @@ typed query plan + parameterized SQL
 storage/query layer
 ```
 
+### rb-server
+
+Responsibility:
+
+- provide the first PocketBase-style HTTP shell;
+- store collection metadata in SQLite;
+- store record data in per-collection SQLite tables;
+- translate collection schemas into `rb-filter-engine` field resolvers;
+- apply list/view filters with request context.
+
+Non-responsibility:
+
+- it is not a complete PocketBase API surface yet;
+- it does not implement auth collections or token verification yet;
+- it does not own files, realtime, admin UI, or migration compatibility yet.
+
+Current integration shape:
+
+```text
+HTTP request + SQLite store + collection schema
+        ↓
+rb-server
+        ↓
+rb-filter-engine for filter/rule predicates
+        ↓
+parameterized SQLite query
+```
+
 ### rb-media-engine, planned
 
 Responsibility:
@@ -118,8 +146,14 @@ The first milestone is a hardened filter compiler that supports a useful subset:
 
 That is implemented in `crates/rb-filter-engine`.
 
-The workspace also includes `crates/rb-cli`, a small executable smoke runner that exposes the current engine from the command line:
+The workspace also includes:
+
+- `crates/rb-cli`, a small executable smoke runner that exposes the current
+  filter engine from the command line.
+- `crates/rb-server`, a first HTTP/SQLite slice with collection metadata,
+  record CRUD, and list/view filtering.
 
 ```bash
 cargo run -p rb-cli -- compile-filter "name = 'Burak' && age >= 30"
+cargo run -p rb-server -- serve ./rusty-base.db 127.0.0.1:8090
 ```

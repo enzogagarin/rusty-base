@@ -15,6 +15,7 @@ fn schema() -> FilterSchema {
         FieldSchema::new("id", FieldKind::Text),
         FieldSchema::new("name", FieldKind::Text),
         FieldSchema::new("nickname", FieldKind::Text),
+        FieldSchema::new("owner", FieldKind::Text),
         FieldSchema::new("status", FieldKind::Bool),
         FieldSchema::new("score", FieldKind::Number),
         FieldSchema::new("created", FieldKind::DateTime),
@@ -163,6 +164,52 @@ fn pocketbase_macro_fixtures_compile_with_fixed_context() {
     for fixture in fixtures {
         let out =
             compile_filter_with_schema_and_context(fixture.filter, &schema(), fixed_context())
+                .unwrap_or_else(|err| panic!("{} failed: {err}", fixture.name));
+
+        assert_eq!(out.sql, fixture.expected_sql, "{}", fixture.name);
+        assert_eq!(out.params, fixture.expected_params, "{}", fixture.name);
+    }
+}
+
+#[test]
+fn pocketbase_request_fixtures_compile_with_fixed_context() {
+    let context = fixed_context()
+        .with_auth_value("id", Value::String("user_123".to_string()))
+        .with_auth_value("role", Value::String("staff".to_string()))
+        .with_query_value("name", Value::String("Burak".to_string()));
+    let fixtures = vec![
+        CompatibilityFixture {
+            name: "request auth ownership",
+            filter: "owner = @request.auth.id",
+            expected_sql: "\"owner\" = ?",
+            expected_params: vec![Value::String("user_123".to_string())],
+        },
+        CompatibilityFixture {
+            name: "request auth field",
+            filter: "nickname = @request.auth.role",
+            expected_sql: "\"nickname\" = ?",
+            expected_params: vec![Value::String("staff".to_string())],
+        },
+        CompatibilityFixture {
+            name: "request query field",
+            filter: "name = @request.query.name",
+            expected_sql: "\"name\" = ?",
+            expected_params: vec![Value::String("Burak".to_string())],
+        },
+        CompatibilityFixture {
+            name: "request auth presence",
+            filter: r#"@request.auth.id != """#,
+            expected_sql: "? != ?",
+            expected_params: vec![
+                Value::String("user_123".to_string()),
+                Value::String(String::new()),
+            ],
+        },
+    ];
+
+    for fixture in fixtures {
+        let out =
+            compile_filter_with_schema_and_context(fixture.filter, &schema(), context.clone())
                 .unwrap_or_else(|err| panic!("{} failed: {err}", fixture.name));
 
         assert_eq!(out.sql, fixture.expected_sql, "{}", fixture.name);

@@ -160,6 +160,12 @@ Exit criteria:
   and default match-all predicates.
 - Added named-parameter SQL output APIs so repeated values can share the same
   placeholder while existing positional output remains unchanged.
+- Added the first request-context identifier support for rule filters:
+  `@request.auth.*`, `@request.query.*`, `@request.headers.*`,
+  `@request.body.*`, `@request.context`, and `@request.method`.
+- Added `rb-server`, the first minimal HTTP/SQLite slice with collection
+  metadata, record CRUD, PocketBase-style record routes, and list/view filters
+  powered by `rb-filter-engine`.
 
 ## Next Sprint
 
@@ -167,7 +173,8 @@ Exit criteria:
 2. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 3. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.
-4. Start the minimal `rb-server` HTTP/SQLite slice once relation rendering has
-   enough coverage.
-5. Add request-context identifiers such as `@request.auth.*` and
-   `@request.query.*`.
+4. Enforce create/update/delete rules in `rb-server`.
+5. Add basic auth collections, password hashing, token issuing, and real
+   `@request.auth.*` population.
+6. Add request field modifiers such as `:isset`, `:changed`, `:length`, and
+   `:each`.
