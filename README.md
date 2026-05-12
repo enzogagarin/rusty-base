@@ -261,7 +261,8 @@ The first server slice supports:
 - `GET/PATCH/DELETE /api/collections/:collection/records/:id`;
 - PocketBase-like list response shape with `page`, `perPage`, `totalItems`,
   `totalPages`, and `items`;
-- list/view rule predicates and client filter predicates compiled through
+- list/view/create/update/delete rule predicates and client filter predicates
+  compiled through
   `rb-filter-engine`;
 - a temporary `x-rb-auth-id` header to populate `@request.auth.id` until the
   auth MVP exists.
@@ -288,7 +289,6 @@ Not implemented yet:
 - cross-collection identifiers such as `@collection.*`;
 - real auth collections, password hashing, and token verification;
 - exact PocketBase admin API/import-export compatibility;
-- create/update/delete rule enforcement in the server slice;
 - files, realtime, and admin UI;
 - Go FFI bindings;
 - `cargo-fuzz` corpus and CI fuzz target;

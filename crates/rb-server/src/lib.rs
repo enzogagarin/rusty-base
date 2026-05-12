@@ -23,6 +23,7 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug)]
 pub enum ServerError {
     BadRequest(String),
+    Forbidden(String),
     NotFound(String),
     Storage(rusqlite::Error),
     Json(serde_json::Error),
@@ -34,6 +35,7 @@ impl fmt::Display for ServerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::BadRequest(message) => write!(f, "{message}"),
+            Self::Forbidden(message) => write!(f, "{message}"),
             Self::NotFound(message) => write!(f, "{message}"),
             Self::Storage(err) => write!(f, "{err}"),
             Self::Json(err) => write!(f, "{err}"),
@@ -107,6 +109,21 @@ impl CollectionConfig {
 
     pub fn with_view_rule(mut self, rule: impl Into<String>) -> Self {
         self.view_rule = Some(rule.into());
+        self
+    }
+
+    pub fn with_create_rule(mut self, rule: impl Into<String>) -> Self {
+        self.create_rule = Some(rule.into());
+        self
+    }
+
+    pub fn with_update_rule(mut self, rule: impl Into<String>) -> Self {
+        self.update_rule = Some(rule.into());
+        self
+    }
+
+    pub fn with_delete_rule(mut self, rule: impl Into<String>) -> Self {
+        self.delete_rule = Some(rule.into());
         self
     }
 }
@@ -282,7 +299,16 @@ impl Store {
     pub fn create_record(
         &self,
         collection_name: &str,
+        data: JsonValue,
+    ) -> Result<JsonValue, ServerError> {
+        self.create_record_with_context(collection_name, data, FilterContext::default())
+    }
+
+    pub fn create_record_with_context(
+        &self,
+        collection_name: &str,
         mut data: JsonValue,
+        context: FilterContext,
     ) -> Result<JsonValue, ServerError> {
         let collection = self.get_collection(collection_name)?;
         let object = data_object_mut(&mut data)?;
@@ -298,6 +324,19 @@ impl Store {
         object.remove("updated");
         object.remove("collectionName");
 
+        let mut rule_data = data.clone();
+        if let Some(object) = rule_data.as_object_mut() {
+            object.insert("id".to_string(), JsonValue::String(id.clone()));
+        }
+        let context = context_with_body_values(context, &data);
+        self.enforce_incoming_record_rule(
+            &collection,
+            collection.create_rule.as_deref(),
+            &rule_data,
+            context,
+            "create",
+        )?;
+
         let now = now_timestamp();
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
         let data_json = serde_json::to_string(&data)?;
@@ -310,7 +349,7 @@ impl Store {
         )?;
         drop(conn);
 
-        self.get_record(collection_name, &id, FilterContext::default())
+        self.read_record(collection_name, &id)
     }
 
     pub fn get_record(
@@ -405,12 +444,32 @@ impl Store {
         id: &str,
         patch: JsonValue,
     ) -> Result<JsonValue, ServerError> {
+        self.update_record_with_context(collection_name, id, patch, FilterContext::default())
+    }
+
+    pub fn update_record_with_context(
+        &self,
+        collection_name: &str,
+        id: &str,
+        patch: JsonValue,
+        context: FilterContext,
+    ) -> Result<JsonValue, ServerError> {
         validate_record_id(id)?;
         let collection = self.get_collection(collection_name)?;
         let patch_object = data_object(&patch)?;
         validate_record_fields(&collection, patch_object)?;
 
-        let mut existing = self.get_record(collection_name, id, FilterContext::default())?;
+        let mut existing = self.read_record(collection_name, id)?;
+        let context = context_with_body_values(context, &patch);
+        self.enforce_existing_record_rule(
+            collection_name,
+            &collection,
+            collection.update_rule.as_deref(),
+            id,
+            context,
+            "update",
+        )?;
+
         let existing_object = existing.as_object_mut().ok_or_else(|| {
             ServerError::BadRequest("record response must be a JSON object".to_string())
         })?;
@@ -439,12 +498,30 @@ impl Store {
         }
         drop(conn);
 
-        self.get_record(collection_name, id, FilterContext::default())
+        self.read_record(collection_name, id)
     }
 
     pub fn delete_record(&self, collection_name: &str, id: &str) -> Result<(), ServerError> {
+        self.delete_record_with_context(collection_name, id, FilterContext::default())
+    }
+
+    pub fn delete_record_with_context(
+        &self,
+        collection_name: &str,
+        id: &str,
+        context: FilterContext,
+    ) -> Result<(), ServerError> {
         validate_record_id(id)?;
-        self.get_collection(collection_name)?;
+        let collection = self.get_collection(collection_name)?;
+        self.read_record(collection_name, id)?;
+        self.enforce_existing_record_rule(
+            collection_name,
+            &collection,
+            collection.delete_rule.as_deref(),
+            id,
+            context,
+            "delete",
+        )?;
 
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
         let conn = self.connection()?;
@@ -457,6 +534,94 @@ impl Store {
         }
 
         Ok(())
+    }
+
+    fn read_record(&self, collection_name: &str, id: &str) -> Result<JsonValue, ServerError> {
+        validate_record_id(id)?;
+
+        let table_sql = quote_identifier(&record_table_name(collection_name)?);
+        let conn = self.connection()?;
+        conn.query_row(
+            &format!("SELECT id, data, created, updated FROM {table_sql} WHERE id = ?1 LIMIT 1"),
+            params![id],
+            |row| row_to_record(collection_name, row),
+        )
+        .optional()?
+        .ok_or_else(|| ServerError::NotFound(format!("record '{id}' not found")))
+    }
+
+    fn enforce_incoming_record_rule(
+        &self,
+        collection: &CollectionConfig,
+        rule: Option<&str>,
+        record: &JsonValue,
+        context: FilterContext,
+        action: &str,
+    ) -> Result<(), ServerError> {
+        let Some(rule) = non_empty_rule(rule) else {
+            return Ok(());
+        };
+
+        let resolver = IncomingRecordResolver::new(collection);
+        let compiled = compile_filter_with_resolver_and_context(rule, &resolver, context)?;
+        let sql = format!(
+            r#"WITH "__rb_input"("data") AS (SELECT ?) SELECT 1 FROM "__rb_input" WHERE ({}) LIMIT 1"#,
+            compiled.sql
+        );
+        let mut params = vec![SqlValue::Text(serde_json::to_string(record)?)];
+        params.extend(filter_params_to_sqlite(compiled.params)?);
+
+        let conn = self.connection()?;
+        let allowed = conn
+            .query_row(&sql, params_from_iter(params.iter()), |row| {
+                row.get::<_, i64>(0)
+            })
+            .optional()?
+            .is_some();
+
+        if allowed {
+            Ok(())
+        } else {
+            Err(forbidden(action, &collection.name))
+        }
+    }
+
+    fn enforce_existing_record_rule(
+        &self,
+        collection_name: &str,
+        collection: &CollectionConfig,
+        rule: Option<&str>,
+        id: &str,
+        context: FilterContext,
+        action: &str,
+    ) -> Result<(), ServerError> {
+        let Some(rule) = non_empty_rule(rule) else {
+            return Ok(());
+        };
+
+        let resolver = RecordResolver::new(collection);
+        let compiled = compile_filter_with_resolver_and_context(rule, &resolver, context)?;
+        let table_sql = quote_identifier(&record_table_name(collection_name)?);
+        let sql = format!(
+            "SELECT 1 FROM {table_sql} WHERE id = ? AND ({}) LIMIT 1",
+            compiled.sql
+        );
+        let mut params = vec![SqlValue::Text(id.to_string())];
+        params.extend(filter_params_to_sqlite(compiled.params)?);
+
+        let conn = self.connection()?;
+        let allowed = conn
+            .query_row(&sql, params_from_iter(params.iter()), |row| {
+                row.get::<_, i64>(0)
+            })
+            .optional()?
+            .is_some();
+
+        if allowed {
+            Ok(())
+        } else {
+            Err(forbidden(action, collection_name))
+        }
     }
 
     fn connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, ServerError> {
@@ -515,7 +680,11 @@ impl RustyBaseApp {
             }
             ("POST", ["api", "collections", collection, "records"]) => {
                 let data: JsonValue = serde_json::from_slice(&request.body)?;
-                let record = self.store.create_record(collection, data)?;
+                let record = self.store.create_record_with_context(
+                    collection,
+                    data,
+                    request_context(&request, &query),
+                )?;
                 Ok(HttpResponse::json(200, record))
             }
             ("GET", ["api", "collections", collection, "records", id]) => {
@@ -526,11 +695,20 @@ impl RustyBaseApp {
             }
             ("PATCH", ["api", "collections", collection, "records", id]) => {
                 let patch: JsonValue = serde_json::from_slice(&request.body)?;
-                let record = self.store.update_record(collection, id, patch)?;
+                let record = self.store.update_record_with_context(
+                    collection,
+                    id,
+                    patch,
+                    request_context(&request, &query),
+                )?;
                 Ok(HttpResponse::json(200, record))
             }
             ("DELETE", ["api", "collections", collection, "records", id]) => {
-                self.store.delete_record(collection, id)?;
+                self.store.delete_record_with_context(
+                    collection,
+                    id,
+                    request_context(&request, &query),
+                )?;
                 Ok(HttpResponse::json(204, JsonValue::Null))
             }
             _ => Err(ServerError::NotFound(format!(
@@ -747,6 +925,66 @@ impl FieldResolver for RecordResolver<'_> {
     }
 }
 
+struct IncomingRecordResolver<'a> {
+    collection: &'a CollectionConfig,
+}
+
+impl<'a> IncomingRecordResolver<'a> {
+    fn new(collection: &'a CollectionConfig) -> Self {
+        Self { collection }
+    }
+
+    fn custom_field_kind(&self, field: &str) -> Option<CollectionFieldKind> {
+        self.collection
+            .fields
+            .iter()
+            .find(|candidate| candidate.name == field)
+            .map(|field| field.kind)
+    }
+
+    fn json_root_kind(&self, field: &str) -> Option<CollectionFieldKind> {
+        let (root, _) = field.split_once('.')?;
+        self.custom_field_kind(root)
+            .filter(|kind| *kind == CollectionFieldKind::Json)
+    }
+}
+
+impl FieldResolver for IncomingRecordResolver<'_> {
+    fn resolve_field(&self, field: &str) -> Result<ResolvedField, FilterError> {
+        match field {
+            "id" => {
+                return Ok(ResolvedField::with_kind(
+                    incoming_json_extract("id"),
+                    FieldKind::Text,
+                ))
+            }
+            "created" | "updated" => {
+                return Ok(ResolvedField::with_kind(
+                    incoming_json_extract(field),
+                    FieldKind::DateTime,
+                ))
+            }
+            _ => {}
+        }
+
+        if let Some(kind) = self.custom_field_kind(field) {
+            return Ok(ResolvedField::with_kind(
+                incoming_json_extract(field),
+                FieldKind::from(kind),
+            ));
+        }
+
+        if self.json_root_kind(field).is_some() {
+            return Ok(ResolvedField::new(incoming_json_extract(field)));
+        }
+
+        Err(FilterError::with_kind(
+            rb_filter_engine::FilterErrorKind::UnknownField,
+            format!("unknown field '{field}'"),
+        ))
+    }
+}
+
 struct CompiledPredicate {
     sql: Option<String>,
     params: Vec<SqlValue>,
@@ -871,6 +1109,28 @@ fn request_context(request: &HttpRequest, query: &HashMap<String, String>) -> Fi
     context
 }
 
+fn context_with_body_values(mut context: FilterContext, body: &JsonValue) -> FilterContext {
+    let Some(object) = body.as_object() else {
+        return context;
+    };
+
+    for (name, value) in object {
+        context = context.with_body_value(name.clone(), json_to_filter_value(value));
+    }
+
+    context
+}
+
+fn json_to_filter_value(value: &JsonValue) -> FilterValue {
+    match value {
+        JsonValue::String(value) => FilterValue::String(value.clone()),
+        JsonValue::Number(value) => FilterValue::Number(value.to_string()),
+        JsonValue::Bool(value) => FilterValue::Bool(*value),
+        JsonValue::Null => FilterValue::Null,
+        JsonValue::Array(_) | JsonValue::Object(_) => FilterValue::String(value.to_string()),
+    }
+}
+
 fn row_to_record(collection_name: &str, row: &rusqlite::Row<'_>) -> rusqlite::Result<JsonValue> {
     let id = row.get::<_, String>(0)?;
     let data = row.get::<_, String>(1)?;
@@ -889,6 +1149,16 @@ fn row_to_record(collection_name: &str, row: &rusqlite::Row<'_>) -> rusqlite::Re
     record.insert("created".to_string(), JsonValue::String(created));
     record.insert("updated".to_string(), JsonValue::String(updated));
     Ok(JsonValue::Object(record))
+}
+
+fn non_empty_rule(rule: Option<&str>) -> Option<&str> {
+    rule.filter(|rule| !rule.trim().is_empty())
+}
+
+fn forbidden(action: &str, collection_name: &str) -> ServerError {
+    ServerError::Forbidden(format!(
+        "{action} rule denied access to collection '{collection_name}'"
+    ))
 }
 
 fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError> {
@@ -1010,6 +1280,15 @@ fn json_data_extract(field: &str) -> String {
     )
 }
 
+fn incoming_json_extract(field: &str) -> String {
+    format!(
+        "json_extract({}.{}, '{}')",
+        quote_identifier("__rb_input"),
+        quote_identifier("data"),
+        json_path(field)
+    )
+}
+
 fn json_path(field: &str) -> String {
     let mut path = String::from("$");
     for part in field.split('.') {
@@ -1103,6 +1382,7 @@ fn normalize_http_header_name(name: &str) -> String {
 fn error_response(err: ServerError) -> HttpResponse {
     let status = match err {
         ServerError::BadRequest(_) | ServerError::Json(_) | ServerError::Filter(_) => 400,
+        ServerError::Forbidden(_) => 403,
         ServerError::NotFound(_) => 404,
         ServerError::Storage(_) | ServerError::Io(_) => 500,
     };

@@ -55,7 +55,7 @@ Responsibility:
 - store collection metadata in SQLite;
 - store record data in per-collection SQLite tables;
 - translate collection schemas into `rb-filter-engine` field resolvers;
-- apply list/view filters with request context.
+- apply list/view/create/update/delete filters with request context.
 
 Non-responsibility:
 

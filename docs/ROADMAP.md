@@ -166,6 +166,8 @@ Exit criteria:
 - Added `rb-server`, the first minimal HTTP/SQLite slice with collection
   metadata, record CRUD, PocketBase-style record routes, and list/view filters
   powered by `rb-filter-engine`.
+- Added create/update/delete rule enforcement in `rb-server`, including
+  incoming-record create checks and existing-record update/delete checks.
 
 ## Next Sprint
 
@@ -173,8 +175,7 @@ Exit criteria:
 2. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 3. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.
-4. Enforce create/update/delete rules in `rb-server`.
-5. Add basic auth collections, password hashing, token issuing, and real
+4. Add basic auth collections, password hashing, token issuing, and real
    `@request.auth.*` population.
-6. Add request field modifiers such as `:isset`, `:changed`, `:length`, and
+5. Add request field modifiers such as `:isset`, `:changed`, `:length`, and
    `:each`.
