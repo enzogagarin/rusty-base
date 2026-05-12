@@ -9,6 +9,8 @@ description = "Command-line smoke runner for Rusty Base engines"
 
 [dependencies]
 rb-filter-engine = { path = "../rb-filter-engine" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [[bin]]
 name = "rusty-base"

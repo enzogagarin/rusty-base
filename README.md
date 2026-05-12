@@ -145,6 +145,25 @@ cargo build --release -p rb-cli
 ./target/release/rusty-base compile-filter "tags ?= 'rust'"
 ```
 
+Run schema-aware validation from the CLI:
+
+```bash
+cat > schema.json <<'JSON'
+{
+  "fields": [
+    { "name": "name", "kind": "text" },
+    { "name": "age", "kind": "number" },
+    { "name": "verified", "kind": "bool" },
+    { "name": "tags", "kind": "array" }
+  ]
+}
+JSON
+
+cargo run -p rb-cli -- compile-filter --schema schema.json "age >= 30 && tags ?= 'rust'"
+```
+
+Supported schema field kinds: `text`, `number`, `bool`, `datetime`, `array`, `relation`.
+
 Example:
 
 ```rust
