@@ -189,11 +189,9 @@ id IS NULL OR (status = TRUE AND score >= ?)
 Not implemented yet:
 
 - full PocketBase `fexpr` grammar compatibility;
-- `?=` / `?~` style any-match operators;
 - relation expansion query planning;
-- field resolver integration with collection schema;
 - Go FFI bindings;
-- fuzz harness;
+- `cargo-fuzz` corpus and CI fuzz target;
 - benchmark suite.
 
 Those gaps are deliberate. This repo will grow through verified steps, not hand-wavy rewrites.

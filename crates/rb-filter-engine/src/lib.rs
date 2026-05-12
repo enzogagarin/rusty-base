@@ -87,22 +87,65 @@ impl FilterSchema {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterErrorKind {
+    Syntax,
+    UnexpectedCharacter,
+    UnexpectedToken,
+    UnterminatedString,
+    InvalidNumber,
+    InputLengthLimitExceeded,
+    DepthLimitExceeded,
+    ExpressionLimitExceeded,
+    UnknownField,
+    InvalidOperator,
+    InvalidLiteral,
+    UnsafeIdentifier,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilterError {
+    kind: FilterErrorKind,
     message: String,
+    position: Option<usize>,
 }
 
 impl FilterError {
     fn new(message: impl Into<String>) -> Self {
+        Self::with_kind(FilterErrorKind::Syntax, message)
+    }
+
+    fn with_kind(kind: FilterErrorKind, message: impl Into<String>) -> Self {
         Self {
+            kind,
             message: message.into(),
+            position: None,
         }
+    }
+
+    fn at(kind: FilterErrorKind, position: usize, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            position: Some(position),
+        }
+    }
+
+    pub fn kind(&self) -> FilterErrorKind {
+        self.kind
+    }
+
+    pub fn position(&self) -> Option<usize> {
+        self.position
     }
 }
 
 impl fmt::Display for FilterError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.message)
+        match self.position {
+            Some(position) => write!(f, "{} at byte {}", self.message, position),
+            None => write!(f, "{}", self.message),
+        }
     }
 }
 
@@ -136,7 +179,10 @@ pub fn compile_filter_with_settings(
     settings: FilterSettings,
 ) -> Result<CompileOutput, FilterError> {
     if input.len() > settings.max_input_bytes {
-        return Err(FilterError::new("input length limit exceeded"));
+        return Err(FilterError::with_kind(
+            FilterErrorKind::InputLengthLimitExceeded,
+            "input length limit exceeded",
+        ));
     }
     let tokens = Lexer::new(input).tokenize()?;
     let mut parser = Parser::new(tokens, settings);
@@ -162,7 +208,10 @@ pub fn compile_filter_with_schema_and_settings(
     settings: FilterSettings,
 ) -> Result<CompileOutput, FilterError> {
     if input.len() > settings.max_input_bytes {
-        return Err(FilterError::new("input length limit exceeded"));
+        return Err(FilterError::with_kind(
+            FilterErrorKind::InputLengthLimitExceeded,
+            "input length limit exceeded",
+        ));
     }
     let tokens = Lexer::new(input).tokenize()?;
     let mut parser = Parser::new(tokens, settings);
@@ -242,6 +291,7 @@ impl<'a> Lexer<'a> {
                     Token::Eq
                 }
                 '!' => {
+                    let position = self.pos;
                     self.bump();
                     match self.peek() {
                         Some('=') => {
@@ -252,7 +302,13 @@ impl<'a> Lexer<'a> {
                             self.bump();
                             Token::NotLike
                         }
-                        _ => return Err(FilterError::new("unexpected character '!'")),
+                        _ => {
+                            return Err(FilterError::at(
+                                FilterErrorKind::UnexpectedCharacter,
+                                position,
+                                "unexpected character '!'",
+                            ))
+                        }
                     }
                 }
                 '>' => {
@@ -279,27 +335,43 @@ impl<'a> Lexer<'a> {
                 }
                 '?' => self.lex_any_operator()?,
                 '&' => {
+                    let position = self.pos;
                     self.bump();
                     if self.peek() == Some('&') {
                         self.bump();
                         Token::And
                     } else {
-                        return Err(FilterError::new("unexpected character '&'"));
+                        return Err(FilterError::at(
+                            FilterErrorKind::UnexpectedCharacter,
+                            position,
+                            "unexpected character '&'",
+                        ));
                     }
                 }
                 '|' => {
+                    let position = self.pos;
                     self.bump();
                     if self.peek() == Some('|') {
                         self.bump();
                         Token::Or
                     } else {
-                        return Err(FilterError::new("unexpected character '|'"));
+                        return Err(FilterError::at(
+                            FilterErrorKind::UnexpectedCharacter,
+                            position,
+                            "unexpected character '|'",
+                        ));
                     }
                 }
                 '\'' => Token::String(self.lex_string()?),
                 c if c.is_ascii_digit() || c == '-' => Token::Number(self.lex_number()?),
                 c if is_ident_start(c) => self.lex_ident_or_keyword(),
-                other => return Err(FilterError::new(format!("unexpected character '{other}'"))),
+                other => {
+                    return Err(FilterError::at(
+                        FilterErrorKind::UnexpectedCharacter,
+                        self.pos,
+                        format!("unexpected character '{other}'"),
+                    ))
+                }
             };
             tokens.push(token);
         }
@@ -312,6 +384,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn lex_any_operator(&mut self) -> Result<Token, FilterError> {
+        let position = self.pos;
         self.bump();
         match self.peek() {
             Some('=') => {
@@ -329,7 +402,11 @@ impl<'a> Lexer<'a> {
                         self.bump();
                         Ok(Token::AnyNotLike)
                     }
-                    _ => Err(FilterError::new("unexpected character after '?!'")),
+                    _ => Err(FilterError::at(
+                        FilterErrorKind::UnexpectedCharacter,
+                        position,
+                        "unexpected character after '?!'",
+                    )),
                 }
             }
             Some('>') => {
@@ -354,59 +431,85 @@ impl<'a> Lexer<'a> {
                 self.bump();
                 Ok(Token::AnyLike)
             }
-            _ => Err(FilterError::new("unexpected character '?'")),
+            _ => Err(FilterError::at(
+                FilterErrorKind::UnexpectedCharacter,
+                position,
+                "unexpected character '?'",
+            )),
         }
     }
 
     fn lex_string(&mut self) -> Result<String, FilterError> {
+        let start = self.pos;
         self.bump(); // opening quote
         let mut out = String::new();
         while let Some(ch) = self.bump() {
             match ch {
                 '\'' => return Ok(out),
                 '\\' => {
-                    let escaped = self
-                        .bump()
-                        .ok_or_else(|| FilterError::new("unterminated string literal"))?;
+                    let escaped = self.bump().ok_or_else(|| {
+                        FilterError::at(
+                            FilterErrorKind::UnterminatedString,
+                            start,
+                            "unterminated string literal",
+                        )
+                    })?;
                     out.push(escaped);
                 }
                 other => out.push(other),
             }
         }
-        Err(FilterError::new("unterminated string literal"))
+        Err(FilterError::at(
+            FilterErrorKind::UnterminatedString,
+            start,
+            "unterminated string literal",
+        ))
     }
 
     fn lex_number(&mut self) -> Result<String, FilterError> {
+        let start = self.pos;
         let mut out = String::new();
         if self.peek() == Some('-') {
             out.push('-');
             self.bump();
         }
-        let mut has_digit = false;
+        let mut integer_digits = 0;
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
-                has_digit = true;
+                integer_digits += 1;
                 out.push(c);
                 self.bump();
             } else {
                 break;
             }
         }
+        if integer_digits == 0 {
+            return Err(FilterError::at(
+                FilterErrorKind::InvalidNumber,
+                start,
+                "invalid number literal",
+            ));
+        }
         if self.peek() == Some('.') {
             out.push('.');
             self.bump();
+            let mut fraction_digits = 0;
             while let Some(c) = self.peek() {
                 if c.is_ascii_digit() {
-                    has_digit = true;
+                    fraction_digits += 1;
                     out.push(c);
                     self.bump();
                 } else {
                     break;
                 }
             }
-        }
-        if !has_digit {
-            return Err(FilterError::new("invalid number literal"));
+            if fraction_digits == 0 {
+                return Err(FilterError::at(
+                    FilterErrorKind::InvalidNumber,
+                    start,
+                    "invalid number literal",
+                ));
+            }
         }
         Ok(out)
     }
@@ -551,7 +654,10 @@ impl Parser {
         if matches!(self.peek(), Token::LParen) {
             self.depth += 1;
             if self.depth > self.settings.max_depth {
-                return Err(FilterError::new("depth limit exceeded"));
+                return Err(FilterError::with_kind(
+                    FilterErrorKind::DepthLimitExceeded,
+                    "depth limit exceeded",
+                ));
             }
             self.bump();
             let expr = self.parse_or()?;
@@ -565,7 +671,10 @@ impl Parser {
     fn parse_compare(&mut self) -> Result<Expr, FilterError> {
         self.expression_count += 1;
         if self.expression_count > self.settings.max_expressions {
-            return Err(FilterError::new("expression limit exceeded"));
+            return Err(FilterError::with_kind(
+                FilterErrorKind::ExpressionLimitExceeded,
+                "expression limit exceeded",
+            ));
         }
 
         let field = match self.bump() {
@@ -664,12 +773,18 @@ impl<'a> SqlCompiler<'a> {
         value: &Value,
     ) -> Result<String, FilterError> {
         if !is_safe_identifier_path(field) {
-            return Err(FilterError::new(format!("unsafe identifier '{field}'")));
+            return Err(FilterError::with_kind(
+                FilterErrorKind::UnsafeIdentifier,
+                format!("unsafe identifier '{field}'"),
+            ));
         }
         if let Some(schema) = self.schema {
-            let kind = schema
-                .field_kind(field)
-                .ok_or_else(|| FilterError::new(format!("unknown field '{field}'")))?;
+            let kind = schema.field_kind(field).ok_or_else(|| {
+                FilterError::with_kind(
+                    FilterErrorKind::UnknownField,
+                    format!("unknown field '{field}'"),
+                )
+            })?;
             validate_field_operation(field, kind, op, value)?;
         }
 
@@ -832,11 +947,14 @@ fn validate_operator_allowed(
     if allowed.contains(&op) {
         Ok(())
     } else {
-        Err(FilterError::new(format!(
-            "operator {} is not allowed on {:?} fields",
-            op_symbol(op),
-            kind
-        )))
+        Err(FilterError::with_kind(
+            FilterErrorKind::InvalidOperator,
+            format!(
+                "operator {} is not allowed on {:?} fields",
+                op_symbol(op),
+                kind
+            ),
+        ))
     }
 }
 
