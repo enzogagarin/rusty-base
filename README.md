@@ -105,6 +105,9 @@ Target capabilities:
 .
 ├── Cargo.toml
 ├── crates
+│   ├── rb-cli
+│   │   ├── Cargo.toml
+│   │   └── src/main.rs
 │   └── rb-filter-engine
 │       ├── Cargo.toml
 │       ├── src/lib.rs
@@ -120,6 +123,26 @@ Target capabilities:
 cargo test
 cargo fmt --check
 cargo check --workspace
+```
+
+Run the current CLI smoke path:
+
+```bash
+cargo run -p rb-cli -- compile-filter "name = 'Burak' && age >= 30"
+```
+
+Expected output:
+
+```text
+sql: name = ? AND age >= ?
+params: [string:Burak, number:30]
+```
+
+Build a local executable:
+
+```bash
+cargo build --release -p rb-cli
+./target/release/rusty-base compile-filter "tags ?= 'rust'"
 ```
 
 Example:

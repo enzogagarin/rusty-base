@@ -3,5 +3,12 @@
 version = 4
 
 [[package]]
+name = "rb-cli"
+version = "0.1.0"
+dependencies = [
+ "rb-filter-engine",
+]
+
+[[package]]
 name = "rb-filter-engine"
 version = "0.1.0"

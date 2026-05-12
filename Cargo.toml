@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rb-filter-engine"]
+members = ["crates/rb-filter-engine", "crates/rb-cli"]
 resolver = "2"
 
 [workspace.package]

@@ -1,0 +1,15 @@
+[package]
+name = "rb-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Command-line smoke runner for Rusty Base engines"
+
+[dependencies]
+rb-filter-engine = { path = "../rb-filter-engine" }
+
+[[bin]]
+name = "rusty-base"
+path = "src/main.rs"

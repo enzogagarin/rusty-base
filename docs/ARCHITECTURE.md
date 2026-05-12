@@ -112,3 +112,9 @@ The first milestone is a hardened filter compiler that supports a useful subset:
 - bound parameters.
 
 That is implemented in `crates/rb-filter-engine`.
+
+The workspace also includes `crates/rb-cli`, a small executable smoke runner that exposes the current engine from the command line:
+
+```bash
+cargo run -p rb-cli -- compile-filter "name = 'Burak' && age >= 30"
+```
