@@ -168,6 +168,9 @@ Exit criteria:
   powered by `rb-filter-engine`.
 - Added create/update/delete rule enforcement in `rb-server`, including
   incoming-record create checks and existing-record update/delete checks.
+- Added a first auth MVP in `rb-server`: auth collections, Argon2 password
+  hashing, `auth-with-password`, opaque bearer tokens, and real
+  `@request.auth.*` population from authenticated records.
 
 ## Next Sprint
 
@@ -175,7 +178,7 @@ Exit criteria:
 2. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 3. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.
-4. Add basic auth collections, password hashing, token issuing, and real
-   `@request.auth.*` population.
+4. Add token expiration/refresh and align auth response/error shape more closely
+   with PocketBase.
 5. Add request field modifiers such as `:isset`, `:changed`, `:length`, and
    `:each`.

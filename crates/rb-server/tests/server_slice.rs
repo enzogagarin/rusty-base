@@ -72,6 +72,112 @@ fn applies_list_rule_with_request_auth_context() {
 }
 
 #[test]
+fn hashes_auth_passwords_and_uses_login_tokens_for_rules() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [
+                    {"name": "email", "kind": "text"},
+                    {"name": "name", "kind": "text"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(users.status, 200);
+
+    let user = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({
+                "email": "burak@example.com",
+                "name": "Burak",
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(user.status, 200);
+    assert_eq!(user.body["email"], "burak@example.com");
+    assert!(user.body.get("password").is_none());
+    assert!(user.body.get("passwordHash").is_none());
+    let user_id = user.body["id"].as_str().unwrap().to_string();
+
+    let denied_login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "burak@example.com", "password": "wrong password"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(denied_login.status, 403);
+
+    let login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "burak@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(login.status, 200);
+    let token = login.body["token"].as_str().unwrap();
+    assert!(token.starts_with("rb_"));
+    assert_eq!(login.body["record"]["id"], user_id);
+    assert!(login.body["record"].get("passwordHash").is_none());
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "title", "kind": "text"},
+                    {"name": "published", "kind": "bool"},
+                    {"name": "owner", "kind": "text"},
+                    {"name": "score", "kind": "number"}
+                ],
+                "listRule": "owner = @request.auth.id"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(posts.status, 200);
+
+    let created = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Token visible", "published": true, "owner": user_id, "score": 9}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created.status, 200);
+
+    let anonymous = app.handle(HttpRequest::new("GET", "/api/collections/posts/records"));
+    assert_eq!(anonymous.status, 200);
+    assert_eq!(anonymous.body["totalItems"], 0);
+
+    let authorized = app.handle(
+        HttpRequest::new("GET", "/api/collections/posts/records")
+            .with_header("Authorization", format!("Bearer {token}")),
+    );
+    assert_eq!(authorized.status, 200);
+    assert_eq!(authorized.body["totalItems"], 1);
+    assert_eq!(authorized.body["items"][0]["title"], "Token visible");
+}
+
+#[test]
 fn applies_create_rule_against_request_body_and_auth_context() {
     let store = Store::open_in_memory().unwrap();
     store

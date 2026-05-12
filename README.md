@@ -199,6 +199,19 @@ curl -s http://127.0.0.1:8090/api/health
 
 curl -s http://127.0.0.1:8090/api/collections \
   -H 'content-type: application/json' \
+  -d '{"name":"users","type":"auth","fields":[{"name":"email","kind":"text"},{"name":"name","kind":"text"}]}'
+
+curl -s http://127.0.0.1:8090/api/collections/users/records \
+  -H 'content-type: application/json' \
+  -d '{"email":"burak@example.com","name":"Burak","password":"correct horse","passwordConfirm":"correct horse"}'
+
+TOKEN=$(curl -s http://127.0.0.1:8090/api/collections/users/auth-with-password \
+  -H 'content-type: application/json' \
+  -d '{"identity":"burak@example.com","password":"correct horse"}' \
+  | jq -r '.token')
+
+curl -s http://127.0.0.1:8090/api/collections \
+  -H 'content-type: application/json' \
   -d '{"name":"posts","fields":[{"name":"title","kind":"text"},{"name":"published","kind":"bool"},{"name":"owner","kind":"text"}],"listRule":"owner = @request.auth.id"}'
 
 curl -s http://127.0.0.1:8090/api/collections/posts/records \
@@ -206,7 +219,7 @@ curl -s http://127.0.0.1:8090/api/collections/posts/records \
   -d '{"title":"Rusty Base","published":true,"owner":"user_1"}'
 
 curl -s 'http://127.0.0.1:8090/api/collections/posts/records?filter=published%20%3D%20true' \
-  -H 'x-rb-auth-id: user_1'
+  -H "authorization: Bearer $TOKEN"
 ```
 
 Example:
@@ -264,8 +277,11 @@ The first server slice supports:
 - list/view/create/update/delete rule predicates and client filter predicates
   compiled through
   `rb-filter-engine`;
-- a temporary `x-rb-auth-id` header to populate `@request.auth.id` until the
-  auth MVP exists.
+- auth collections with Argon2 password hashing;
+- `auth-with-password` login with opaque bearer tokens;
+- `Authorization: Bearer ...` request context population for `@request.auth.*`;
+- a temporary `x-rb-auth-id` compatibility header for tests and early manual
+  experiments.
 
 Example:
 
@@ -287,7 +303,7 @@ Not implemented yet:
 - request-context field modifiers such as `:isset`, `:changed`, `:length`, and
   `:each`;
 - cross-collection identifiers such as `@collection.*`;
-- real auth collections, password hashing, and token verification;
+- token expiration/refresh and full PocketBase auth provider parity;
 - exact PocketBase admin API/import-export compatibility;
 - files, realtime, and admin UI;
 - Go FFI bindings;

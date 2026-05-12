@@ -8,7 +8,9 @@ rust-version.workspace = true
 description = "Minimal PocketBase-style HTTP and SQLite slice for Rusty Base"
 
 [dependencies]
+argon2 = "0.5"
 rb-filter-engine = { path = "../rb-filter-engine" }
+rand_core = { version = "0.6", features = ["getrandom"] }
 rusqlite = "0.32"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

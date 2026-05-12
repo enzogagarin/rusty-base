@@ -1,3 +1,8 @@
+use argon2::{
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
+use rand_core::{OsRng, RngCore};
 use rb_filter_engine::{
     compile_filter_with_resolver_and_context, FieldKind, FieldResolver, FilterContext, FilterError,
     ResolvedField, Value as FilterValue,
@@ -75,6 +80,8 @@ impl From<io::Error> for ServerError {
 #[serde(rename_all = "camelCase")]
 pub struct CollectionConfig {
     pub name: String,
+    #[serde(default, rename = "type")]
+    pub collection_type: CollectionType,
     #[serde(default)]
     pub fields: Vec<CollectionField>,
     #[serde(default)]
@@ -93,6 +100,7 @@ impl CollectionConfig {
     pub fn new(name: impl Into<String>, fields: impl IntoIterator<Item = CollectionField>) -> Self {
         Self {
             name: name.into(),
+            collection_type: CollectionType::Base,
             fields: fields.into_iter().collect(),
             list_rule: None,
             view_rule: None,
@@ -100,6 +108,21 @@ impl CollectionConfig {
             update_rule: None,
             delete_rule: None,
         }
+    }
+
+    pub fn auth(
+        name: impl Into<String>,
+        fields: impl IntoIterator<Item = CollectionField>,
+    ) -> Self {
+        Self {
+            collection_type: CollectionType::Auth,
+            ..Self::new(name, fields)
+        }
+    }
+
+    pub fn with_type(mut self, collection_type: CollectionType) -> Self {
+        self.collection_type = collection_type;
+        self
     }
 
     pub fn with_list_rule(mut self, rule: impl Into<String>) -> Self {
@@ -126,6 +149,14 @@ impl CollectionConfig {
         self.delete_rule = Some(rule.into());
         self
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CollectionType {
+    #[default]
+    Base,
+    Auth,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,6 +230,18 @@ pub struct RecordList {
     pub items: Vec<JsonValue>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AuthResponse {
+    pub token: String,
+    pub record: JsonValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct AuthWithPasswordRequest {
+    identity: String,
+    password: String,
+}
+
 pub struct Store {
     conn: Mutex<Connection>,
 }
@@ -231,6 +274,12 @@ impl Store {
                 schema_json TEXT NOT NULL,
                 created TEXT NOT NULL,
                 updated TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS "_rb_auth_tokens" (
+                token TEXT PRIMARY KEY NOT NULL,
+                collection_name TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                created TEXT NOT NULL
             );
             "#,
         )?;
@@ -313,6 +362,7 @@ impl Store {
         let collection = self.get_collection(collection_name)?;
         let object = data_object_mut(&mut data)?;
         validate_record_fields(&collection, object)?;
+        prepare_auth_password(&collection, object, true)?;
 
         let id = object
             .remove("id")
@@ -456,8 +506,12 @@ impl Store {
     ) -> Result<JsonValue, ServerError> {
         validate_record_id(id)?;
         let collection = self.get_collection(collection_name)?;
-        let patch_object = data_object(&patch)?;
-        validate_record_fields(&collection, patch_object)?;
+        let mut patch = patch;
+        {
+            let patch_object = data_object_mut(&mut patch)?;
+            validate_record_fields(&collection, patch_object)?;
+            prepare_auth_password(&collection, patch_object, false)?;
+        }
 
         let mut existing = self.read_record(collection_name, id)?;
         let context = context_with_body_values(context, &patch);
@@ -473,6 +527,7 @@ impl Store {
         let existing_object = existing.as_object_mut().ok_or_else(|| {
             ServerError::BadRequest("record response must be a JSON object".to_string())
         })?;
+        let patch_object = data_object(&patch)?;
 
         existing_object.remove("id");
         existing_object.remove("created");
@@ -534,6 +589,90 @@ impl Store {
         }
 
         Ok(())
+    }
+
+    pub fn auth_with_password(
+        &self,
+        collection_name: &str,
+        identity: &str,
+        password: &str,
+    ) -> Result<AuthResponse, ServerError> {
+        let collection = self.get_collection(collection_name)?;
+        if collection.collection_type != CollectionType::Auth {
+            return Err(ServerError::BadRequest(format!(
+                "collection '{collection_name}' is not an auth collection"
+            )));
+        }
+
+        let table_sql = quote_identifier(&record_table_name(collection_name)?);
+        let conn = self.connection()?;
+        let row = conn
+            .query_row(
+                &format!(
+                    "SELECT id, data, created, updated FROM {table_sql} WHERE id = ?1 OR json_extract(data, '$.email') = ?1 OR json_extract(data, '$.username') = ?1 LIMIT 1"
+                ),
+                params![identity],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(invalid_credentials)?;
+
+        let (id, data, created, updated) = row;
+        let data = serde_json::from_str::<JsonValue>(&data)?;
+        let password_hash = data
+            .as_object()
+            .and_then(|object| object.get("passwordHash"))
+            .and_then(JsonValue::as_str)
+            .ok_or_else(invalid_credentials)?;
+        verify_password(password, password_hash)?;
+
+        let token = generate_token();
+        let now = now_timestamp();
+        conn.execute(
+            r#"
+            INSERT INTO "_rb_auth_tokens" (token, collection_name, record_id, created)
+            VALUES (?1, ?2, ?3, ?4)
+            "#,
+            params![&token, collection_name, &id, now],
+        )?;
+        drop(conn);
+
+        Ok(AuthResponse {
+            token,
+            record: record_from_parts(collection_name, id, data, created, updated),
+        })
+    }
+
+    pub fn context_for_token(
+        &self,
+        token: &str,
+        context: FilterContext,
+    ) -> Result<FilterContext, ServerError> {
+        let conn = self.connection()?;
+        let token_row = conn
+            .query_row(
+                r#"
+                SELECT collection_name, record_id
+                FROM "_rb_auth_tokens"
+                WHERE token = ?1
+                "#,
+                params![token],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| ServerError::Forbidden("invalid auth token".to_string()))?;
+        drop(conn);
+
+        let (collection_name, record_id) = token_row;
+        let record = self.read_record(&collection_name, &record_id)?;
+        Ok(context_with_auth_record_values(context, &record))
     }
 
     fn read_record(&self, collection_name: &str, id: &str) -> Result<JsonValue, ServerError> {
@@ -673,8 +812,16 @@ impl RustyBaseApp {
                 let collection = self.store.create_collection(collection)?;
                 Ok(HttpResponse::json(200, json!(collection)))
             }
+            ("POST", ["api", "collections", collection, "auth-with-password"]) => {
+                let auth: AuthWithPasswordRequest = serde_json::from_slice(&request.body)?;
+                let response =
+                    self.store
+                        .auth_with_password(collection, &auth.identity, &auth.password)?;
+                Ok(HttpResponse::json(200, json!(response)))
+            }
             ("GET", ["api", "collections", collection, "records"]) => {
-                let options = list_options_from_query(&query, request_context(&request, &query))?;
+                let options =
+                    list_options_from_query(&query, self.request_context(&request, &query)?)?;
                 let list = self.store.list_records(collection, options)?;
                 Ok(HttpResponse::json(200, json!(list)))
             }
@@ -683,14 +830,16 @@ impl RustyBaseApp {
                 let record = self.store.create_record_with_context(
                     collection,
                     data,
-                    request_context(&request, &query),
+                    self.request_context(&request, &query)?,
                 )?;
                 Ok(HttpResponse::json(200, record))
             }
             ("GET", ["api", "collections", collection, "records", id]) => {
-                let record =
-                    self.store
-                        .get_record(collection, id, request_context(&request, &query))?;
+                let record = self.store.get_record(
+                    collection,
+                    id,
+                    self.request_context(&request, &query)?,
+                )?;
                 Ok(HttpResponse::json(200, record))
             }
             ("PATCH", ["api", "collections", collection, "records", id]) => {
@@ -699,7 +848,7 @@ impl RustyBaseApp {
                     collection,
                     id,
                     patch,
-                    request_context(&request, &query),
+                    self.request_context(&request, &query)?,
                 )?;
                 Ok(HttpResponse::json(200, record))
             }
@@ -707,7 +856,7 @@ impl RustyBaseApp {
                 self.store.delete_record_with_context(
                     collection,
                     id,
-                    request_context(&request, &query),
+                    self.request_context(&request, &query)?,
                 )?;
                 Ok(HttpResponse::json(204, JsonValue::Null))
             }
@@ -716,6 +865,19 @@ impl RustyBaseApp {
                 request.method, request.path
             ))),
         }
+    }
+
+    fn request_context(
+        &self,
+        request: &HttpRequest,
+        query: &HashMap<String, String>,
+    ) -> Result<FilterContext, ServerError> {
+        let context = request_context(request, query);
+        let Some(token) = bearer_token(request) else {
+            return Ok(context);
+        };
+
+        self.store.context_for_token(token, context)
     }
 }
 
@@ -1109,6 +1271,14 @@ fn request_context(request: &HttpRequest, query: &HashMap<String, String>) -> Fi
     context
 }
 
+fn bearer_token(request: &HttpRequest) -> Option<&str> {
+    let value = request.headers.get("authorization")?;
+    value
+        .strip_prefix("Bearer ")
+        .or_else(|| value.strip_prefix("bearer "))
+        .filter(|token| !token.trim().is_empty())
+}
+
 fn context_with_body_values(mut context: FilterContext, body: &JsonValue) -> FilterContext {
     let Some(object) = body.as_object() else {
         return context;
@@ -1116,6 +1286,21 @@ fn context_with_body_values(mut context: FilterContext, body: &JsonValue) -> Fil
 
     for (name, value) in object {
         context = context.with_body_value(name.clone(), json_to_filter_value(value));
+    }
+
+    context
+}
+
+fn context_with_auth_record_values(
+    mut context: FilterContext,
+    record: &JsonValue,
+) -> FilterContext {
+    let Some(object) = record.as_object() else {
+        return context;
+    };
+
+    for (name, value) in object {
+        context = context.with_auth_value(name.clone(), json_to_filter_value(value));
     }
 
     context
@@ -1136,11 +1321,30 @@ fn row_to_record(collection_name: &str, row: &rusqlite::Row<'_>) -> rusqlite::Re
     let data = row.get::<_, String>(1)?;
     let created = row.get::<_, String>(2)?;
     let updated = row.get::<_, String>(3)?;
-    let mut record = match serde_json::from_str::<JsonValue>(&data) {
-        Ok(JsonValue::Object(map)) => map,
+    let data = serde_json::from_str::<JsonValue>(&data).unwrap_or(JsonValue::Object(Map::new()));
+
+    Ok(record_from_parts(
+        collection_name,
+        id,
+        data,
+        created,
+        updated,
+    ))
+}
+
+fn record_from_parts(
+    collection_name: &str,
+    id: String,
+    data: JsonValue,
+    created: String,
+    updated: String,
+) -> JsonValue {
+    let mut record = match data {
+        JsonValue::Object(map) => map,
         _ => Map::new(),
     };
 
+    record.remove("passwordHash");
     record.insert("id".to_string(), JsonValue::String(id));
     record.insert(
         "collectionName".to_string(),
@@ -1148,7 +1352,7 @@ fn row_to_record(collection_name: &str, row: &rusqlite::Row<'_>) -> rusqlite::Re
     );
     record.insert("created".to_string(), JsonValue::String(created));
     record.insert("updated".to_string(), JsonValue::String(updated));
-    Ok(JsonValue::Object(record))
+    JsonValue::Object(record)
 }
 
 fn non_empty_rule(rule: Option<&str>) -> Option<&str> {
@@ -1161,9 +1365,24 @@ fn forbidden(action: &str, collection_name: &str) -> ServerError {
     ))
 }
 
+fn invalid_credentials() -> ServerError {
+    ServerError::Forbidden("invalid auth credentials".to_string())
+}
+
 fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError> {
     validate_collection_name(&collection.name)?;
     let mut seen = HashMap::new();
+
+    if collection.collection_type == CollectionType::Auth
+        && collection
+            .fields
+            .iter()
+            .all(|field| field.name != "email" && field.name != "username")
+    {
+        return Err(ServerError::BadRequest(
+            "auth collections need an email or username field".to_string(),
+        ));
+    }
 
     for field in &collection.fields {
         validate_field_name(&field.name)?;
@@ -1226,6 +1445,12 @@ fn validate_record_fields(
             continue;
         }
 
+        if collection.collection_type == CollectionType::Auth
+            && matches!(key.as_str(), "password" | "passwordConfirm")
+        {
+            continue;
+        }
+
         if collection.fields.iter().all(|field| field.name != *key) {
             return Err(ServerError::BadRequest(format!(
                 "unknown field '{key}' for collection '{}'",
@@ -1235,6 +1460,64 @@ fn validate_record_fields(
     }
 
     Ok(())
+}
+
+fn prepare_auth_password(
+    collection: &CollectionConfig,
+    object: &mut Map<String, JsonValue>,
+    require_password: bool,
+) -> Result<(), ServerError> {
+    if collection.collection_type != CollectionType::Auth {
+        return Ok(());
+    }
+
+    object.remove("passwordHash");
+    let password = take_string_field(object, "password")?;
+    let password_confirm = take_string_field(object, "passwordConfirm")?;
+
+    let Some(password) = password else {
+        return if require_password {
+            Err(ServerError::BadRequest("password is required".to_string()))
+        } else {
+            Ok(())
+        };
+    };
+
+    if password.len() < 8 {
+        return Err(ServerError::BadRequest(
+            "password must be at least 8 characters".to_string(),
+        ));
+    }
+
+    if password_confirm
+        .as_deref()
+        .is_some_and(|confirm| confirm != password)
+    {
+        return Err(ServerError::BadRequest(
+            "passwordConfirm does not match password".to_string(),
+        ));
+    }
+
+    object.insert(
+        "passwordHash".to_string(),
+        JsonValue::String(hash_password(&password)?),
+    );
+    Ok(())
+}
+
+fn take_string_field(
+    object: &mut Map<String, JsonValue>,
+    field: &str,
+) -> Result<Option<String>, ServerError> {
+    object
+        .remove(field)
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| ServerError::BadRequest(format!("field '{field}' must be a string")))
+        })
+        .transpose()
 }
 
 fn data_object(value: &JsonValue) -> Result<&Map<String, JsonValue>, ServerError> {
@@ -1250,7 +1533,10 @@ fn data_object_mut(value: &mut JsonValue) -> Result<&mut Map<String, JsonValue>,
 }
 
 fn is_system_record_key(key: &str) -> bool {
-    matches!(key, "id" | "created" | "updated" | "collectionName")
+    matches!(
+        key,
+        "id" | "created" | "updated" | "collectionName" | "passwordHash"
+    )
 }
 
 fn record_table_name(collection_name: &str) -> Result<String, ServerError> {
@@ -1308,6 +1594,37 @@ fn generate_id() -> String {
         .chars()
         .take(32)
         .collect()
+}
+
+fn generate_token() -> String {
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    format!("rb_{}", hex_encode(&bytes))
+}
+
+fn hash_password(password: &str) -> Result<String, ServerError> {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+        .map_err(|err| ServerError::BadRequest(format!("failed to hash password: {err}")))
+}
+
+fn verify_password(password: &str, password_hash: &str) -> Result<(), ServerError> {
+    let password_hash = PasswordHash::new(password_hash).map_err(|_| invalid_credentials())?;
+    Argon2::default()
+        .verify_password(password.as_bytes(), &password_hash)
+        .map_err(|_| invalid_credentials())
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 fn now_timestamp() -> String {
