@@ -19,6 +19,7 @@ fn schema() -> FilterSchema {
         FieldSchema::new("score", FieldKind::Number),
         FieldSchema::new("created", FieldKind::DateTime),
         FieldSchema::new("tags", FieldKind::Array),
+        FieldSchema::new("profile", FieldKind::Json),
         FieldSchema::new("office.lon", FieldKind::Number),
         FieldSchema::new("office.lat", FieldKind::Number),
     ])
@@ -85,6 +86,18 @@ fn pocketbase_safe_subset_golden_fixtures_compile() {
             name: "array any-match",
             filter: "tags ?= 'rust'",
             expected_sql: "EXISTS (SELECT 1 FROM json_each(\"tags\") WHERE json_each.value = ?)",
+            expected_params: vec![Value::String("rust".to_string())],
+        },
+        CompatibilityFixture {
+            name: "json nested field equality",
+            filter: "profile.name = 'Burak'",
+            expected_sql: "json_extract(\"profile\", '$.name') = ?",
+            expected_params: vec![Value::String("Burak".to_string())],
+        },
+        CompatibilityFixture {
+            name: "json nested array any-match",
+            filter: "profile.tags ?= 'rust'",
+            expected_sql: "EXISTS (SELECT 1 FROM json_each(json_extract(\"profile\", '$.tags')) WHERE json_each.value = ?)",
             expected_params: vec![Value::String("rust".to_string())],
         },
         CompatibilityFixture {

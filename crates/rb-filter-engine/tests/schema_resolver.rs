@@ -1,6 +1,6 @@
 use rb_filter_engine::{
-    compile_filter_with_resolver, compile_filter_with_schema, FieldKind, FieldResolver,
-    FieldSchema, FilterError, FilterErrorKind, FilterSchema, ResolvedField, Value,
+    compile_filter_with_resolver, compile_filter_with_schema, plan_filter_with_schema, FieldKind,
+    FieldResolver, FieldSchema, FilterError, FilterErrorKind, FilterSchema, ResolvedField, Value,
 };
 
 fn schema() -> FilterSchema {
@@ -11,6 +11,7 @@ fn schema() -> FilterSchema {
         FieldSchema::new("verified", FieldKind::Bool),
         FieldSchema::new("deleted_at", FieldKind::DateTime),
         FieldSchema::new("tags", FieldKind::Array),
+        FieldSchema::new("profile", FieldKind::Json),
         FieldSchema::new("author.id", FieldKind::Relation),
         FieldSchema::new("office.lon", FieldKind::Number),
         FieldSchema::new("office.lat", FieldKind::Number),
@@ -73,6 +74,52 @@ fn accepts_any_match_on_array_fields() {
 fn accepts_relation_identifier_fields() {
     let out = compile_filter_with_schema("author.id = 'abc123'", &schema()).unwrap();
     assert_eq!(out.sql, "\"author\".\"id\" = ?");
+}
+
+#[test]
+fn compiles_json_path_fields_from_schema_root() {
+    let out = compile_filter_with_schema("profile.name = 'Burak'", &schema()).unwrap();
+    assert_eq!(out.sql, "json_extract(\"profile\", '$.name') = ?");
+    assert_eq!(out.params, vec![Value::String("Burak".to_string())]);
+}
+
+#[test]
+fn compiles_nested_json_path_fields() {
+    let out = compile_filter_with_schema("profile.address.city ~ 'Istanbul'", &schema()).unwrap();
+    assert_eq!(
+        out.sql,
+        "json_extract(\"profile\", '$.address.city') LIKE ? ESCAPE '\\'"
+    );
+    assert_eq!(out.params, vec![Value::String("%Istanbul%".to_string())]);
+}
+
+#[test]
+fn compiles_json_array_index_paths() {
+    let out = compile_filter_with_schema("profile.items.0.name = 'rust'", &schema()).unwrap();
+    assert_eq!(out.sql, "json_extract(\"profile\", '$.items[0].name') = ?");
+    assert_eq!(out.params, vec![Value::String("rust".to_string())]);
+}
+
+#[test]
+fn compiles_any_match_on_json_path_arrays() {
+    let out = compile_filter_with_schema("profile.tags ?= 'rust'", &schema()).unwrap();
+    assert_eq!(
+        out.sql,
+        "EXISTS (SELECT 1 FROM json_each(json_extract(\"profile\", '$.tags')) WHERE json_each.value = ?)"
+    );
+    assert_eq!(out.params, vec![Value::String("rust".to_string())]);
+}
+
+#[test]
+fn rejects_nested_paths_on_non_json_schema_roots() {
+    let err = compile_filter_with_schema("name.first = 'Burak'", &schema()).unwrap_err();
+    assert!(err.to_string().contains("unknown field"));
+}
+
+#[test]
+fn plans_json_path_fields_without_relation_metadata() {
+    let plan = plan_filter_with_schema("profile.name = 'Burak'", &schema()).unwrap();
+    assert!(plan.relations.is_empty());
 }
 
 #[test]

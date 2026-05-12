@@ -85,7 +85,7 @@ should provide schema and request context, then execute the final query.
 
 1. Keep plain field resolution stable with `FieldResolver`. Done.
 2. Add explicit plan structs without changing the CLI behavior. Done.
-3. Add JSON-path field support.
+3. Add JSON-path field support. Done for schema-declared `json` roots.
 4. Add single-value relation SQL rendering.
 5. Add multi-value relation traversal and any-match SQL rendering.
 6. Add compatibility fixtures copied from PocketBase relation-rule examples.

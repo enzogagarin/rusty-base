@@ -210,6 +210,7 @@ pub enum FieldKind {
     Bool,
     DateTime,
     Array,
+    Json,
     Relation,
 }
 
@@ -284,17 +285,40 @@ pub trait FieldResolver {
 
 impl FieldResolver for FilterSchema {
     fn resolve_field(&self, field: &str) -> Result<ResolvedField, FilterError> {
-        let kind = self.field_kind(field).ok_or_else(|| {
-            FilterError::with_kind(
-                FilterErrorKind::UnknownField,
-                format!("unknown field '{field}'"),
-            )
-        })?;
+        if let Some(kind) = self.field_kind(field) {
+            return Ok(ResolvedField::with_kind(
+                quote_identifier_path(field)?,
+                kind,
+            ));
+        }
 
-        Ok(ResolvedField::with_kind(
-            quote_identifier_path(field)?,
-            kind,
+        if let Some(resolved) = self.resolve_json_path(field)? {
+            return Ok(resolved);
+        }
+
+        Err(FilterError::with_kind(
+            FilterErrorKind::UnknownField,
+            format!("unknown field '{field}'"),
         ))
+    }
+}
+
+impl FilterSchema {
+    fn resolve_json_path(&self, field: &str) -> Result<Option<ResolvedField>, FilterError> {
+        let Some((root, nested_path)) = field.split_once('.') else {
+            return Ok(None);
+        };
+
+        if self.field_kind(root) != Some(FieldKind::Json) {
+            return Ok(None);
+        }
+
+        let root_sql = quote_identifier_path(root)?;
+        let json_path = sqlite_json_path(nested_path)?;
+
+        Ok(Some(ResolvedField::new(format!(
+            "json_extract({root_sql}, '{json_path}')"
+        ))))
     }
 }
 
@@ -2003,7 +2027,7 @@ fn validate_field_operation(
     value: Option<&Value>,
 ) -> Result<(), FilterError> {
     if is_any_match_op(op) {
-        return if kind == FieldKind::Array {
+        return if matches!(kind, FieldKind::Array | FieldKind::Json) {
             if let Some(value) = value {
                 validate_array_literal(field, value)?;
             }
@@ -2089,6 +2113,7 @@ fn validate_field_operation(
             "operator {} is not allowed on array field '{field}'; use any-match operators",
             op_symbol(op)
         ))),
+        FieldKind::Json => Ok(()),
     }
 }
 
@@ -2270,6 +2295,41 @@ fn quote_identifier_path(value: &str) -> Result<String, FilterError> {
 
 fn quote_identifier_part(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn sqlite_json_path(value: &str) -> Result<String, FilterError> {
+    let mut path = String::from("$");
+
+    for part in value.split('.') {
+        if part.is_empty() {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::UnsafeIdentifier,
+                format!("unsafe JSON path '{value}'"),
+            ));
+        }
+
+        if part.chars().all(|ch| ch.is_ascii_digit()) {
+            path.push('[');
+            path.push_str(part);
+            path.push(']');
+        } else if is_json_key_part(part) {
+            path.push('.');
+            path.push_str(part);
+        } else {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::UnsafeIdentifier,
+                format!("unsafe JSON path '{value}'"),
+            ));
+        }
+    }
+
+    Ok(path)
+}
+
+fn is_json_key_part(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some(ch) if is_ident_start(ch))
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 fn days_in_month(year: i32, month: u8) -> u8 {

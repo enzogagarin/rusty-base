@@ -152,12 +152,14 @@ Exit criteria:
 - Let resolvers attach relation traversal metadata through `ResolvedField`.
 - Added relation-plan tests for predicate shape, deduplication, function
   operands, and fixed-context macros.
+- Added schema-declared JSON field support with nested SQLite `json_extract(...)`
+  rendering and JSON path compatibility fixtures.
 
 ## Next Sprint
 
 1. Expand compatibility fixtures around placeholder-like wildcard cases.
-2. Start JSON-path field support as the next relation-plan stepping stone.
+2. Add single-value relation SQL rendering on top of `FilterPlan`.
 3. Add named-parameter rendering so repeated function arguments do not need
    duplicated positional values.
-4. Add single-value relation SQL rendering on top of `FilterPlan`.
+4. Add multi-value relation traversal and any-match SQL rendering.
 5. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.

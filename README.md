@@ -157,7 +157,8 @@ cat > schema.json <<'JSON'
     { "name": "name", "kind": "text" },
     { "name": "age", "kind": "number" },
     { "name": "verified", "kind": "bool" },
-    { "name": "tags", "kind": "array" }
+    { "name": "tags", "kind": "array" },
+    { "name": "profile", "kind": "json" }
   ]
 }
 JSON
@@ -172,7 +173,8 @@ sql: "age" >= ? AND EXISTS (SELECT 1 FROM json_each("tags") WHERE json_each.valu
 params: [number:30, string:rust]
 ```
 
-Supported schema field kinds: `text`, `number`, `bool`, `datetime`, `array`, `relation`.
+Supported schema field kinds: `text`, `number`, `bool`, `datetime`, `array`,
+`json`, `relation`.
 
 Example:
 
@@ -197,6 +199,8 @@ The first filter engine prototype supports:
 - comparison operators: `=`, `!=`, `>`, `>=`, `<`, `<=`;
 - contains-like operators: `~`, `!~`;
 - PocketBase-style any-match operators for SQLite JSON arrays: `?=`, `?!=`, `?>`, `?>=`, `?<`, `?<=`, `?~`, `?!~`;
+- schema-aware JSON paths, for example `profile.name = "Burak"` compiles to
+  SQLite `json_extract(...)`;
 - logical operators: `&&`, `||`;
 - parentheses;
 - expression count limits;

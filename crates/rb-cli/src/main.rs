@@ -76,9 +76,10 @@ fn parse_field_kind(kind: &str) -> Result<FieldKind, String> {
         "bool" => Ok(FieldKind::Bool),
         "datetime" => Ok(FieldKind::DateTime),
         "array" => Ok(FieldKind::Array),
+        "json" => Ok(FieldKind::Json),
         "relation" => Ok(FieldKind::Relation),
         other => Err(format!(
-            "unknown field kind '{other}' (expected text, number, bool, datetime, array, or relation)"
+            "unknown field kind '{other}' (expected text, number, bool, datetime, array, json, or relation)"
         )),
     }
 }
