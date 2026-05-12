@@ -24,7 +24,8 @@ Responsibility:
 - build a typed AST;
 - enforce expression limits;
 - compile to parameterized SQL fragments;
-- eventually produce query plans for relation-aware access checks.
+- produce query plans for relation-aware access checks;
+- render a narrow relation-aware SQL predicate for single-value relation chains.
 
 Non-responsibility:
 

@@ -382,6 +382,23 @@ pub struct FilterPlan {
     pub relations: Vec<RelationTraversal>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RelationSqlOptions {
+    pub root_alias: Option<String>,
+}
+
+impl RelationSqlOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_root_alias(root_alias: impl Into<String>) -> Self {
+        Self {
+            root_alias: Some(root_alias.into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlannedExpr {
     Binary {
@@ -814,6 +831,22 @@ pub fn plan_filter_with_resolver_and_context(
 ) -> Result<FilterPlan, FilterError> {
     let ast = parse_filter(input)?;
     plan_ast_with_resolver_and_context(&ast, resolver, context)
+}
+
+pub fn render_plan_sql(plan: &FilterPlan) -> Result<CompileOutput, FilterError> {
+    render_plan_sql_with_options(plan, RelationSqlOptions::default())
+}
+
+pub fn render_plan_sql_with_options(
+    plan: &FilterPlan,
+    options: RelationSqlOptions,
+) -> Result<CompileOutput, FilterError> {
+    let mut renderer = PlanSqlRenderer::new(&plan.relations, options);
+    let sql = renderer.render_expr(&plan.predicate)?;
+    Ok(CompileOutput {
+        sql,
+        params: renderer.params,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1850,6 +1883,406 @@ impl<'a> SqlCompiler<'a> {
     }
 }
 
+struct PlanSqlRenderer<'a> {
+    params: Vec<Value>,
+    relations: &'a [RelationTraversal],
+    options: RelationSqlOptions,
+}
+
+struct RelationRenderContext<'a> {
+    relation: &'a RelationTraversal,
+    relation_index: usize,
+}
+
+impl<'a> PlanSqlRenderer<'a> {
+    fn new(relations: &'a [RelationTraversal], options: RelationSqlOptions) -> Self {
+        Self {
+            params: Vec::new(),
+            relations,
+            options,
+        }
+    }
+
+    fn render_expr(&mut self, expr: &PlannedExpr) -> Result<String, FilterError> {
+        match expr {
+            PlannedExpr::Binary { left, op, right } => {
+                let left = self.render_expr(left)?;
+                let right = self.render_expr(right)?;
+                let op = match op {
+                    PlanLogicOp::And => "AND",
+                    PlanLogicOp::Or => "OR",
+                };
+                Ok(format!("{left} {op} {right}"))
+            }
+            PlannedExpr::Group(inner) => Ok(format!("({})", self.render_expr(inner)?)),
+            PlannedExpr::Compare { left, op, right } => self.render_compare(left, *op, right),
+        }
+    }
+
+    fn render_compare(
+        &mut self,
+        left: &PlannedOperand,
+        op: PlanCompareOp,
+        right: &PlannedOperand,
+    ) -> Result<String, FilterError> {
+        let Some(relation) = self.comparison_relation(left, right)? else {
+            return self.render_plain_compare(left, op, right, None);
+        };
+
+        let relation_index = self.relation_index_for_chain(relation)?;
+        let context = RelationRenderContext {
+            relation,
+            relation_index,
+        };
+        let inner_sql = self.render_plain_compare(left, op, right, Some(&context))?;
+        self.render_relation_exists(&context, inner_sql)
+    }
+
+    fn comparison_relation<'b>(
+        &self,
+        left: &'b PlannedOperand,
+        right: &'b PlannedOperand,
+    ) -> Result<Option<&'b RelationTraversal>, FilterError> {
+        let mut relations = Vec::new();
+        collect_planned_operand_relations(left, &mut relations);
+        collect_planned_operand_relations(right, &mut relations);
+
+        let Some(relation) = relations.first().copied() else {
+            return Ok(None);
+        };
+
+        if relations
+            .iter()
+            .any(|candidate| !same_relation_steps(relation, candidate))
+        {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::InvalidOperator,
+                "relation SQL rendering currently supports one relation chain per comparison",
+            ));
+        }
+
+        validate_single_relation_chain(relation)?;
+        Ok(Some(relation))
+    }
+
+    fn render_plain_compare(
+        &mut self,
+        left: &PlannedOperand,
+        op: PlanCompareOp,
+        right: &PlannedOperand,
+        relation_context: Option<&RelationRenderContext<'_>>,
+    ) -> Result<String, FilterError> {
+        if is_plan_any_match_op(op) {
+            return self.render_any_match(left, op, right, relation_context);
+        }
+
+        if matches!(op, PlanCompareOp::Eq | PlanCompareOp::Ne)
+            && (planned_operand_is_null_value(left) || planned_operand_is_null_value(right))
+        {
+            return self.render_null_equality(left, op, right, relation_context);
+        }
+
+        match op {
+            PlanCompareOp::Like | PlanCompareOp::NotLike => {
+                self.render_like(left, op, right, relation_context)
+            }
+            _ if planned_operand_is_null_value(left) || planned_operand_is_null_value(right) => {
+                Err(FilterError::new("null can only be used with = or !="))
+            }
+            _ => {
+                let left_sql = self.render_operand(left, relation_context)?;
+                let right_sql = self.render_operand(right, relation_context)?;
+                Ok(format!(
+                    "{left_sql} {} {right_sql}",
+                    plan_compare_op_sql(op)
+                ))
+            }
+        }
+    }
+
+    fn render_null_equality(
+        &mut self,
+        left: &PlannedOperand,
+        op: PlanCompareOp,
+        right: &PlannedOperand,
+        relation_context: Option<&RelationRenderContext<'_>>,
+    ) -> Result<String, FilterError> {
+        let operator = if matches!(op, PlanCompareOp::Ne) {
+            "IS NOT"
+        } else {
+            "IS"
+        };
+
+        match (
+            planned_operand_is_null_value(left),
+            planned_operand_is_null_value(right),
+        ) {
+            (true, true) => Ok(format!("NULL {operator} NULL")),
+            (false, true) => {
+                let left_sql = self.render_operand(left, relation_context)?;
+                Ok(format!("{left_sql} {operator} NULL"))
+            }
+            (true, false) => {
+                let right_sql = self.render_operand(right, relation_context)?;
+                Ok(format!("{right_sql} {operator} NULL"))
+            }
+            (false, false) => unreachable!("null equality requires at least one null operand"),
+        }
+    }
+
+    fn render_like(
+        &mut self,
+        left: &PlannedOperand,
+        op: PlanCompareOp,
+        right: &PlannedOperand,
+        relation_context: Option<&RelationRenderContext<'_>>,
+    ) -> Result<String, FilterError> {
+        let left_sql = self.render_operand(left, relation_context)?;
+        let right_sql = self.render_like_pattern_operand(right, relation_context)?;
+        let sql_op = match op {
+            PlanCompareOp::Like => "LIKE",
+            PlanCompareOp::NotLike => "NOT LIKE",
+            _ => return Err(FilterError::new("not a like operator")),
+        };
+        Ok(format!("{left_sql} {sql_op} {right_sql} ESCAPE '\\'"))
+    }
+
+    fn render_any_match(
+        &mut self,
+        left: &PlannedOperand,
+        op: PlanCompareOp,
+        right: &PlannedOperand,
+        relation_context: Option<&RelationRenderContext<'_>>,
+    ) -> Result<String, FilterError> {
+        let PlannedOperand::Field(_) = left else {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::InvalidOperator,
+                "any-match operators require a field on the left side",
+            ));
+        };
+
+        let field_sql = self.render_operand(left, relation_context)?;
+        let inner_op = plan_any_match_sql_op(op)?;
+        let (right_sql, escape_clause) = match op {
+            PlanCompareOp::AnyLike | PlanCompareOp::AnyNotLike => (
+                self.render_like_pattern_operand(right, relation_context)?,
+                " ESCAPE '\\'",
+            ),
+            _ => (self.render_operand(right, relation_context)?, ""),
+        };
+
+        Ok(format!(
+            "EXISTS (SELECT 1 FROM json_each({field_sql}) WHERE json_each.value {inner_op} {right_sql}{escape_clause})"
+        ))
+    }
+
+    fn render_operand(
+        &mut self,
+        operand: &PlannedOperand,
+        relation_context: Option<&RelationRenderContext<'_>>,
+    ) -> Result<String, FilterError> {
+        match operand {
+            PlannedOperand::Field(field) => self.render_field(field, relation_context),
+            PlannedOperand::Function { name, args, .. } => {
+                self.render_function(name, args, relation_context)
+            }
+            PlannedOperand::Value(Value::String(value)) => {
+                self.params.push(Value::String(value.clone()));
+                Ok("?".to_string())
+            }
+            PlannedOperand::Value(Value::Number(value)) => {
+                self.params.push(Value::Number(value.clone()));
+                Ok("?".to_string())
+            }
+            PlannedOperand::Value(Value::Bool(true)) => Ok("TRUE".to_string()),
+            PlannedOperand::Value(Value::Bool(false)) => Ok("FALSE".to_string()),
+            PlannedOperand::Value(Value::Null) => Ok("NULL".to_string()),
+        }
+    }
+
+    fn render_field(
+        &self,
+        field: &PlannedField,
+        relation_context: Option<&RelationRenderContext<'_>>,
+    ) -> Result<String, FilterError> {
+        let Some(field_relation) = field.relation() else {
+            return Ok(field.resolved.sql.clone());
+        };
+
+        let Some(context) = relation_context else {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::InvalidOperator,
+                format!(
+                    "relation field '{}' cannot be rendered outside its relation subquery",
+                    field.name
+                ),
+            ));
+        };
+
+        if !same_relation_steps(context.relation, field_relation) {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::InvalidOperator,
+                "relation SQL rendering currently supports one relation chain per comparison",
+            ));
+        }
+
+        self.relation_leaf_sql(context, field_relation)
+    }
+
+    fn render_like_pattern_operand(
+        &mut self,
+        operand: &PlannedOperand,
+        relation_context: Option<&RelationRenderContext<'_>>,
+    ) -> Result<String, FilterError> {
+        match operand {
+            PlannedOperand::Field(_) | PlannedOperand::Function { .. } => {
+                let rendered = self.render_operand(operand, relation_context)?;
+                Ok(format!("('%' || {rendered} || '%')"))
+            }
+            PlannedOperand::Value(value) => {
+                self.params.push(wrap_like(value));
+                Ok("?".to_string())
+            }
+        }
+    }
+
+    fn render_function(
+        &mut self,
+        name: &str,
+        args: &[PlannedOperand],
+        relation_context: Option<&RelationRenderContext<'_>>,
+    ) -> Result<String, FilterError> {
+        match name {
+            "strftime" => {
+                let rendered_args = args
+                    .iter()
+                    .map(|arg| self.render_operand(arg, relation_context))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(format!("strftime({})", rendered_args.join(",")))
+            }
+            "geoDistance" => {
+                if args.len() != 4 {
+                    return Err(FilterError::new(format!(
+                        "[geoDistance] expected 4 arguments, got {}",
+                        args.len()
+                    )));
+                }
+
+                let lat_a = self.render_operand(&args[1], relation_context)?;
+                let lat_b = self.render_operand(&args[3], relation_context)?;
+                let lon_b = self.render_operand(&args[2], relation_context)?;
+                let lon_a = self.render_operand(&args[0], relation_context)?;
+                let lat_a_repeat = self.render_operand(&args[1], relation_context)?;
+                let lat_b_repeat = self.render_operand(&args[3], relation_context)?;
+
+                Ok(format!(
+                    "(6371 * acos(cos(radians({lat_a})) * cos(radians({lat_b})) * cos(radians({lon_b}) - radians({lon_a})) + sin(radians({lat_a_repeat})) * sin(radians({lat_b_repeat}))))"
+                ))
+            }
+            _ => Err(FilterError::with_kind(
+                FilterErrorKind::InvalidOperator,
+                format!("unknown function '{name}'"),
+            )),
+        }
+    }
+
+    fn render_relation_exists(
+        &self,
+        context: &RelationRenderContext<'_>,
+        inner_sql: String,
+    ) -> Result<String, FilterError> {
+        validate_single_relation_chain(context.relation)?;
+
+        let from_clause = context
+            .relation
+            .steps
+            .iter()
+            .enumerate()
+            .map(|(index, step)| {
+                let target_table = quote_safe_identifier_part(&step.target_collection)?;
+                let alias = self.relation_alias_sql(context.relation_index, index);
+                Ok(format!("{target_table} AS {alias}"))
+            })
+            .collect::<Result<Vec<_>, FilterError>>()?
+            .join(", ");
+
+        let mut conditions = self.relation_link_conditions(context)?;
+        conditions.push(inner_sql);
+
+        Ok(format!(
+            "EXISTS (SELECT 1 FROM {from_clause} WHERE {})",
+            conditions.join(" AND ")
+        ))
+    }
+
+    fn relation_link_conditions(
+        &self,
+        context: &RelationRenderContext<'_>,
+    ) -> Result<Vec<String>, FilterError> {
+        context
+            .relation
+            .steps
+            .iter()
+            .enumerate()
+            .map(|(index, step)| {
+                let source_alias = if index == 0 {
+                    self.root_alias_sql(step)?
+                } else {
+                    self.relation_alias_sql(context.relation_index, index - 1)
+                };
+                let target_alias = self.relation_alias_sql(context.relation_index, index);
+                let source_field = quote_safe_identifier_part(&step.source_field)?;
+                let target_field = quote_safe_identifier_part(&step.target_field)?;
+
+                Ok(format!(
+                    "{target_alias}.{target_field} = {source_alias}.{source_field}"
+                ))
+            })
+            .collect()
+    }
+
+    fn relation_leaf_sql(
+        &self,
+        context: &RelationRenderContext<'_>,
+        relation: &RelationTraversal,
+    ) -> Result<String, FilterError> {
+        validate_single_relation_chain(context.relation)?;
+
+        let last_step_index = relation.steps.len() - 1;
+        let alias = self.relation_alias_sql(context.relation_index, last_step_index);
+        let leaf_field = quote_safe_identifier_part(&relation.leaf_field)?;
+        Ok(format!("{alias}.{leaf_field}"))
+    }
+
+    fn root_alias_sql(&self, step: &RelationStep) -> Result<String, FilterError> {
+        let alias = self
+            .options
+            .root_alias
+            .as_deref()
+            .unwrap_or(&step.source_collection);
+        quote_safe_identifier_part(alias)
+    }
+
+    fn relation_alias_sql(&self, relation_index: usize, step_index: usize) -> String {
+        quote_identifier_part(&format!("__rb_rel_{relation_index}_{step_index}"))
+    }
+
+    fn relation_index_for_chain(&self, relation: &RelationTraversal) -> Result<usize, FilterError> {
+        self.relations
+            .iter()
+            .position(|candidate| same_relation_steps(candidate, relation))
+            .ok_or_else(|| {
+                FilterError::with_kind(
+                    FilterErrorKind::InvalidOperator,
+                    format!(
+                        "relation '{}' is missing from the filter plan",
+                        relation.field_path
+                    ),
+                )
+            })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ResolvedOperand {
     Field {
@@ -2210,6 +2643,109 @@ fn any_match_sql_op(op: CompareOp) -> Result<&'static str, FilterError> {
     }
 }
 
+fn planned_operand_is_null_value(operand: &PlannedOperand) -> bool {
+    matches!(operand, PlannedOperand::Value(Value::Null))
+}
+
+fn is_plan_any_match_op(op: PlanCompareOp) -> bool {
+    matches!(
+        op,
+        PlanCompareOp::AnyEq
+            | PlanCompareOp::AnyNe
+            | PlanCompareOp::AnyGt
+            | PlanCompareOp::AnyGte
+            | PlanCompareOp::AnyLt
+            | PlanCompareOp::AnyLte
+            | PlanCompareOp::AnyLike
+            | PlanCompareOp::AnyNotLike
+    )
+}
+
+fn plan_any_match_sql_op(op: PlanCompareOp) -> Result<&'static str, FilterError> {
+    match op {
+        PlanCompareOp::AnyEq => Ok("="),
+        PlanCompareOp::AnyNe => Ok("!="),
+        PlanCompareOp::AnyGt => Ok(">"),
+        PlanCompareOp::AnyGte => Ok(">="),
+        PlanCompareOp::AnyLt => Ok("<"),
+        PlanCompareOp::AnyLte => Ok("<="),
+        PlanCompareOp::AnyLike => Ok("LIKE"),
+        PlanCompareOp::AnyNotLike => Ok("NOT LIKE"),
+        _ => Err(FilterError::new("not an any-match operator")),
+    }
+}
+
+fn plan_compare_op_sql(op: PlanCompareOp) -> &'static str {
+    match op {
+        PlanCompareOp::Eq => "=",
+        PlanCompareOp::Ne => "!=",
+        PlanCompareOp::Gt => ">",
+        PlanCompareOp::Gte => ">=",
+        PlanCompareOp::Lt => "<",
+        PlanCompareOp::Lte => "<=",
+        PlanCompareOp::Like => "LIKE",
+        PlanCompareOp::NotLike => "NOT LIKE",
+        PlanCompareOp::AnyEq => "=",
+        PlanCompareOp::AnyNe => "!=",
+        PlanCompareOp::AnyGt => ">",
+        PlanCompareOp::AnyGte => ">=",
+        PlanCompareOp::AnyLt => "<",
+        PlanCompareOp::AnyLte => "<=",
+        PlanCompareOp::AnyLike => "LIKE",
+        PlanCompareOp::AnyNotLike => "NOT LIKE",
+    }
+}
+
+fn collect_planned_operand_relations<'a>(
+    operand: &'a PlannedOperand,
+    relations: &mut Vec<&'a RelationTraversal>,
+) {
+    match operand {
+        PlannedOperand::Field(field) => {
+            if let Some(relation) = field.relation() {
+                if !relations
+                    .iter()
+                    .any(|existing| same_relation_steps(existing, relation))
+                {
+                    relations.push(relation);
+                }
+            }
+        }
+        PlannedOperand::Function { args, .. } => {
+            for arg in args {
+                collect_planned_operand_relations(arg, relations);
+            }
+        }
+        PlannedOperand::Value(_) => {}
+    }
+}
+
+fn same_relation_steps(left: &RelationTraversal, right: &RelationTraversal) -> bool {
+    left.steps == right.steps
+}
+
+fn validate_single_relation_chain(relation: &RelationTraversal) -> Result<(), FilterError> {
+    if relation.steps.is_empty() {
+        return Err(FilterError::with_kind(
+            FilterErrorKind::InvalidOperator,
+            format!("relation '{}' has no traversal steps", relation.field_path),
+        ));
+    }
+
+    if relation
+        .steps
+        .iter()
+        .any(|step| step.multiplicity == RelationMultiplicity::Multiple)
+    {
+        return Err(FilterError::with_kind(
+            FilterErrorKind::InvalidOperator,
+            "multi-value relation SQL rendering is not implemented",
+        ));
+    }
+
+    Ok(())
+}
+
 fn wrap_like(value: &Value) -> Value {
     match value {
         Value::String(value) => Value::String(normalize_like_pattern(value)),
@@ -2291,6 +2827,24 @@ fn quote_identifier_path(value: &str) -> Result<String, FilterError> {
         .map(quote_identifier_part)
         .collect::<Vec<_>>()
         .join("."))
+}
+
+fn quote_safe_identifier_part(value: &str) -> Result<String, FilterError> {
+    if !is_safe_identifier_part(value) {
+        return Err(FilterError::with_kind(
+            FilterErrorKind::UnsafeIdentifier,
+            format!("unsafe identifier '{value}'"),
+        ));
+    }
+
+    Ok(quote_identifier_part(value))
+}
+
+fn is_safe_identifier_part(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 fn quote_identifier_part(value: &str) -> String {

@@ -40,7 +40,7 @@ Status legend:
 | Schema-aware field validation | supported | Unknown fields are rejected. |
 | Resolver abstraction | supported | `FieldResolver` can map filter identifiers to SQL fragments and field kinds. |
 | Quoted schema identifiers | supported | `FilterSchema` resolves fields as quoted SQL identifier paths. |
-| Relation expansion planning | partial | `FilterPlan` can carry relation traversal metadata from a resolver; relation SQL rendering is still planned. See `docs/RELATION_QUERY_PLAN.md`. |
+| Relation expansion planning | partial | `FilterPlan` can carry relation traversal metadata and render single-value relation chains as correlated `EXISTS` SQL. Multi-value relation SQL is still planned. See `docs/RELATION_QUERY_PLAN.md`. |
 | JSON path extraction | partial | Schema fields with kind `json` can resolve nested paths such as `profile.name` to SQLite `json_extract(...)`; object keys and numeric array indexes are covered. |
 
 ## Functions

@@ -208,6 +208,8 @@ The first filter engine prototype supports:
 - optional schema-aware field/type/operator validation;
 - a first relation-aware `FilterPlan` layer for resolver-provided traversal
   metadata;
+- relation-plan SQL rendering for single-value relation chains as correlated
+  `EXISTS` predicates;
 - parameterized SQL output.
 
 See `docs/FILTER_COMPATIBILITY.md` for the current PocketBase filter
@@ -230,7 +232,7 @@ id IS NULL OR (status = TRUE AND score >= ?)
 Not implemented yet:
 
 - full PocketBase `fexpr` grammar compatibility;
-- relation expansion query planning;
+- multi-value relation SQL rendering;
 - Go FFI bindings;
 - `cargo-fuzz` corpus and CI fuzz target;
 - benchmark suite.

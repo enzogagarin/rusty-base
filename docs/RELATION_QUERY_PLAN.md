@@ -65,11 +65,14 @@ step, not the final relation-planning API.
 - `PlannedExpr` preserves the predicate shape without emitting SQL.
 - `ResolvedField` can carry optional `RelationTraversal` metadata.
 - Relation traversals are deduplicated in `FilterPlan::relations`.
+- `render_plan_sql(...)` can render plain predicates and single-value relation
+  chains as correlated `EXISTS` subqueries.
 - Existing SQL compilation and CLI behavior remain unchanged.
 
-This is deliberately not a join renderer yet. The host application or a future
-renderer still owns alias selection, access-rule composition, and the final SQL
-shape for single-value and multi-value relations.
+This is deliberately still a narrow renderer. It handles single-value relation
+chains, while the host application still owns access-rule composition,
+collection schema loading, and the final query around the returned predicate.
+Multi-value relation traversal remains planned.
 
 ## Non-Goals For The Current Filter Engine
 
@@ -86,6 +89,7 @@ should provide schema and request context, then execute the final query.
 1. Keep plain field resolution stable with `FieldResolver`. Done.
 2. Add explicit plan structs without changing the CLI behavior. Done.
 3. Add JSON-path field support. Done for schema-declared `json` roots.
-4. Add single-value relation SQL rendering.
+4. Add single-value relation SQL rendering. Done for correlated `EXISTS`
+   predicates over single-value relation chains.
 5. Add multi-value relation traversal and any-match SQL rendering.
 6. Add compatibility fixtures copied from PocketBase relation-rule examples.
