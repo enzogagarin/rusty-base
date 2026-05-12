@@ -141,6 +141,7 @@ The first filter engine prototype supports:
 - string, number, boolean, and null literals;
 - comparison operators: `=`, `!=`, `>`, `>=`, `<`, `<=`;
 - contains-like operators: `~`, `!~`;
+- PocketBase-style any-match operators for SQLite JSON arrays: `?=`, `?!=`, `?>`, `?>=`, `?<`, `?<=`, `?~`, `?!~`;
 - logical operators: `&&`, `||`;
 - parentheses;
 - expression count limits;

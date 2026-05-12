@@ -84,6 +84,14 @@ enum Token {
     Lte,
     Like,
     NotLike,
+    AnyEq,
+    AnyNe,
+    AnyGt,
+    AnyGte,
+    AnyLt,
+    AnyLte,
+    AnyLike,
+    AnyNotLike,
     And,
     Or,
     LParen,
@@ -163,6 +171,7 @@ impl<'a> Lexer<'a> {
                     self.bump();
                     Token::Like
                 }
+                '?' => self.lex_any_operator()?,
                 '&' => {
                     self.bump();
                     if self.peek() == Some('&') {
@@ -193,6 +202,53 @@ impl<'a> Lexer<'a> {
     fn skip_ws(&mut self) {
         while matches!(self.peek(), Some(c) if c.is_whitespace()) {
             self.bump();
+        }
+    }
+
+    fn lex_any_operator(&mut self) -> Result<Token, FilterError> {
+        self.bump();
+        match self.peek() {
+            Some('=') => {
+                self.bump();
+                Ok(Token::AnyEq)
+            }
+            Some('!') => {
+                self.bump();
+                match self.peek() {
+                    Some('=') => {
+                        self.bump();
+                        Ok(Token::AnyNe)
+                    }
+                    Some('~') => {
+                        self.bump();
+                        Ok(Token::AnyNotLike)
+                    }
+                    _ => Err(FilterError::new("unexpected character after '?!'")),
+                }
+            }
+            Some('>') => {
+                self.bump();
+                if self.peek() == Some('=') {
+                    self.bump();
+                    Ok(Token::AnyGte)
+                } else {
+                    Ok(Token::AnyGt)
+                }
+            }
+            Some('<') => {
+                self.bump();
+                if self.peek() == Some('=') {
+                    self.bump();
+                    Ok(Token::AnyLte)
+                } else {
+                    Ok(Token::AnyLt)
+                }
+            }
+            Some('~') => {
+                self.bump();
+                Ok(Token::AnyLike)
+            }
+            _ => Err(FilterError::new("unexpected character '?'")),
         }
     }
 
@@ -317,6 +373,14 @@ enum CompareOp {
     Lte,
     Like,
     NotLike,
+    AnyEq,
+    AnyNe,
+    AnyGt,
+    AnyGte,
+    AnyLt,
+    AnyLte,
+    AnyLike,
+    AnyNotLike,
 }
 
 struct Parser {
@@ -408,6 +472,14 @@ impl Parser {
             Token::Lte => CompareOp::Lte,
             Token::Like => CompareOp::Like,
             Token::NotLike => CompareOp::NotLike,
+            Token::AnyEq => CompareOp::AnyEq,
+            Token::AnyNe => CompareOp::AnyNe,
+            Token::AnyGt => CompareOp::AnyGt,
+            Token::AnyGte => CompareOp::AnyGte,
+            Token::AnyLt => CompareOp::AnyLt,
+            Token::AnyLte => CompareOp::AnyLte,
+            Token::AnyLike => CompareOp::AnyLike,
+            Token::AnyNotLike => CompareOp::AnyNotLike,
             other => {
                 return Err(FilterError::new(format!(
                     "expected operator, found {other:?}"
@@ -474,6 +546,10 @@ impl SqlCompiler {
             return Err(FilterError::new(format!("unsafe identifier '{field}'")));
         }
 
+        if is_any_match_op(op) {
+            return self.compile_any_match(field, op, value);
+        }
+
         match (op, value) {
             (CompareOp::Eq, Value::Null) => Ok(format!("{field} IS NULL")),
             (CompareOp::Ne, Value::Null) => Ok(format!("{field} IS NOT NULL")),
@@ -500,6 +576,28 @@ impl SqlCompiler {
             }
         }
     }
+
+    fn compile_any_match(
+        &mut self,
+        field: &str,
+        op: CompareOp,
+        value: &Value,
+    ) -> Result<String, FilterError> {
+        let inner_op = any_match_sql_op(op)?;
+        let escape_clause = match op {
+            CompareOp::AnyLike | CompareOp::AnyNotLike => {
+                self.params.push(wrap_like(value));
+                " ESCAPE '\\'"
+            }
+            _ => {
+                self.params.push(value.clone());
+                ""
+            }
+        };
+        Ok(format!(
+            "EXISTS (SELECT 1 FROM json_each({field}) WHERE json_each.value {inner_op} ?{escape_clause})"
+        ))
+    }
 }
 
 fn compare_op_sql(op: CompareOp) -> &'static str {
@@ -512,6 +610,42 @@ fn compare_op_sql(op: CompareOp) -> &'static str {
         CompareOp::Lte => "<=",
         CompareOp::Like => "LIKE",
         CompareOp::NotLike => "NOT LIKE",
+        CompareOp::AnyEq => "=",
+        CompareOp::AnyNe => "!=",
+        CompareOp::AnyGt => ">",
+        CompareOp::AnyGte => ">=",
+        CompareOp::AnyLt => "<",
+        CompareOp::AnyLte => "<=",
+        CompareOp::AnyLike => "LIKE",
+        CompareOp::AnyNotLike => "NOT LIKE",
+    }
+}
+
+fn is_any_match_op(op: CompareOp) -> bool {
+    matches!(
+        op,
+        CompareOp::AnyEq
+            | CompareOp::AnyNe
+            | CompareOp::AnyGt
+            | CompareOp::AnyGte
+            | CompareOp::AnyLt
+            | CompareOp::AnyLte
+            | CompareOp::AnyLike
+            | CompareOp::AnyNotLike
+    )
+}
+
+fn any_match_sql_op(op: CompareOp) -> Result<&'static str, FilterError> {
+    match op {
+        CompareOp::AnyEq => Ok("="),
+        CompareOp::AnyNe => Ok("!="),
+        CompareOp::AnyGt => Ok(">"),
+        CompareOp::AnyGte => Ok(">="),
+        CompareOp::AnyLt => Ok("<"),
+        CompareOp::AnyLte => Ok("<="),
+        CompareOp::AnyLike => Ok("LIKE"),
+        CompareOp::AnyNotLike => Ok("NOT LIKE"),
+        _ => Err(FilterError::new("not an any-match operator")),
     }
 }
 

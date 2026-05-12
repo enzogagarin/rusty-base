@@ -105,6 +105,7 @@ The first milestone is a hardened filter compiler that supports a useful subset:
 - numeric comparisons;
 - boolean/null handling;
 - LIKE/NOT LIKE with escaping;
+- PocketBase-style any-match operators over SQLite JSON arrays;
 - `&&`, `||`, and parentheses;
 - expression limits;
 - bound parameters.
