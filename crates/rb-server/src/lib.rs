@@ -24,6 +24,7 @@ use std::{
 };
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+const AUTH_TOKEN_TTL_MILLIS: u128 = 7 * 24 * 60 * 60 * 1000;
 
 #[derive(Debug)]
 pub enum ServerError {
@@ -233,6 +234,7 @@ pub struct RecordList {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AuthResponse {
     pub token: String,
+    pub expires: String,
     pub record: JsonValue,
 }
 
@@ -279,10 +281,12 @@ impl Store {
                 token TEXT PRIMARY KEY NOT NULL,
                 collection_name TEXT NOT NULL,
                 record_id TEXT NOT NULL,
-                created TEXT NOT NULL
+                created TEXT NOT NULL,
+                expires TEXT NOT NULL
             );
             "#,
         )?;
+        ensure_auth_token_expires_column(&conn)?;
         Ok(())
     }
 
@@ -633,20 +637,64 @@ impl Store {
             .ok_or_else(invalid_credentials)?;
         verify_password(password, password_hash)?;
 
-        let token = generate_token();
-        let now = now_timestamp();
-        conn.execute(
-            r#"
-            INSERT INTO "_rb_auth_tokens" (token, collection_name, record_id, created)
-            VALUES (?1, ?2, ?3, ?4)
-            "#,
-            params![&token, collection_name, &id, now],
-        )?;
+        let (token, expires) = insert_auth_token(&conn, collection_name, &id)?;
         drop(conn);
 
         Ok(AuthResponse {
             token,
+            expires,
             record: record_from_parts(collection_name, id, data, created, updated),
+        })
+    }
+
+    pub fn auth_refresh(
+        &self,
+        collection_name: &str,
+        token: &str,
+    ) -> Result<AuthResponse, ServerError> {
+        let (token_collection_name, record_id) = self.valid_token_subject(token)?;
+        if token_collection_name != collection_name {
+            return Err(ServerError::Forbidden("invalid auth token".to_string()));
+        }
+
+        let table_sql = quote_identifier(&record_table_name(collection_name)?);
+        let conn = self.connection()?;
+        let row = conn
+            .query_row(
+                &format!(
+                    "SELECT id, data, created, updated FROM {table_sql} WHERE id = ?1 LIMIT 1"
+                ),
+                params![&record_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| ServerError::Forbidden("auth record not found".to_string()))?;
+
+        conn.execute(
+            r#"DELETE FROM "_rb_auth_tokens" WHERE token = ?1"#,
+            params![token],
+        )?;
+        let (new_token, expires) = insert_auth_token(&conn, collection_name, &record_id)?;
+        drop(conn);
+
+        let (id, data, created, updated) = row;
+        Ok(AuthResponse {
+            token: new_token,
+            expires,
+            record: record_from_parts(
+                &collection_name,
+                id,
+                serde_json::from_str::<JsonValue>(&data)?,
+                created,
+                updated,
+            ),
         })
     }
 
@@ -655,24 +703,49 @@ impl Store {
         token: &str,
         context: FilterContext,
     ) -> Result<FilterContext, ServerError> {
+        let (collection_name, record_id) = self.valid_token_subject(token)?;
+        let record = self.read_record(&collection_name, &record_id)?;
+        Ok(context_with_auth_record_values(context, &record))
+    }
+
+    pub fn expire_token(&self, token: &str) -> Result<(), ServerError> {
+        let conn = self.connection()?;
+        conn.execute(
+            r#"UPDATE "_rb_auth_tokens" SET expires = ?1 WHERE token = ?2"#,
+            params!["0", token],
+        )?;
+        Ok(())
+    }
+
+    fn valid_token_subject(&self, token: &str) -> Result<(String, String), ServerError> {
         let conn = self.connection()?;
         let token_row = conn
             .query_row(
                 r#"
-                SELECT collection_name, record_id
+                SELECT collection_name, record_id, expires
                 FROM "_rb_auth_tokens"
                 WHERE token = ?1
                 "#,
                 params![token],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
             )
             .optional()?
             .ok_or_else(|| ServerError::Forbidden("invalid auth token".to_string()))?;
-        drop(conn);
+        let (collection_name, record_id, expires) = token_row;
+        let expires = expires
+            .parse::<u128>()
+            .map_err(|_| ServerError::Forbidden("invalid auth token".to_string()))?;
+        if expires <= now_millis() {
+            return Err(ServerError::Forbidden("expired auth token".to_string()));
+        }
 
-        let (collection_name, record_id) = token_row;
-        let record = self.read_record(&collection_name, &record_id)?;
-        Ok(context_with_auth_record_values(context, &record))
+        Ok((collection_name, record_id))
     }
 
     fn read_record(&self, collection_name: &str, id: &str) -> Result<JsonValue, ServerError> {
@@ -819,6 +892,12 @@ impl RustyBaseApp {
                         .auth_with_password(collection, &auth.identity, &auth.password)?;
                 Ok(HttpResponse::json(200, json!(response)))
             }
+            ("POST", ["api", "collections", collection, "auth-refresh"]) => {
+                let token = bearer_token(&request)
+                    .ok_or_else(|| ServerError::Forbidden("missing auth token".to_string()))?;
+                let response = self.store.auth_refresh(collection, token)?;
+                Ok(HttpResponse::json(200, json!(response)))
+            }
             ("GET", ["api", "collections", collection, "records"]) => {
                 let options =
                     list_options_from_query(&query, self.request_context(&request, &query)?)?;
@@ -936,6 +1015,7 @@ impl HttpResponse {
             200 => "OK",
             204 => "No Content",
             400 => "Bad Request",
+            403 => "Forbidden",
             404 => "Not Found",
             500 => "Internal Server Error",
             _ => "OK",
@@ -1369,6 +1449,57 @@ fn invalid_credentials() -> ServerError {
     ServerError::Forbidden("invalid auth credentials".to_string())
 }
 
+fn ensure_auth_token_expires_column(conn: &Connection) -> Result<(), ServerError> {
+    let mut stmt = conn.prepare(r#"PRAGMA table_info("_rb_auth_tokens")"#)?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let has_expires = rows
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|name| name == "expires");
+
+    if !has_expires {
+        conn.execute(
+            r#"ALTER TABLE "_rb_auth_tokens" ADD COLUMN expires TEXT NOT NULL DEFAULT '0'"#,
+            [],
+        )?;
+        conn.execute(
+            r#"
+            UPDATE "_rb_auth_tokens"
+            SET expires = CAST(CAST(created AS INTEGER) + CAST(?1 AS INTEGER) AS TEXT)
+            WHERE expires = '0'
+            "#,
+            params![AUTH_TOKEN_TTL_MILLIS.to_string()],
+        )?;
+    }
+
+    Ok(())
+}
+
+fn insert_auth_token(
+    conn: &Connection,
+    collection_name: &str,
+    record_id: &str,
+) -> Result<(String, String), ServerError> {
+    let token = generate_token();
+    let now = now_millis();
+    let expires = (now + AUTH_TOKEN_TTL_MILLIS).to_string();
+    conn.execute(
+        r#"
+        INSERT INTO "_rb_auth_tokens" (token, collection_name, record_id, created, expires)
+        VALUES (?1, ?2, ?3, ?4, ?5)
+        "#,
+        params![
+            &token,
+            collection_name,
+            record_id,
+            now.to_string(),
+            &expires
+        ],
+    )?;
+
+    Ok((token, expires))
+}
+
 fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError> {
     validate_collection_name(&collection.name)?;
     let mut seen = HashMap::new();
@@ -1628,11 +1759,14 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn now_timestamp() -> String {
-    let millis = SystemTime::now()
+    now_millis().to_string()
+}
+
+fn now_millis() -> u128 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis();
-    millis.to_string()
+        .as_millis()
 }
 
 fn split_path_query(path: &str) -> (String, HashMap<String, String>) {

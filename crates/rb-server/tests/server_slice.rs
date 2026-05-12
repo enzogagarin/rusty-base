@@ -3,7 +3,14 @@ use rb_server::{
     CollectionConfig, CollectionField, CollectionFieldKind, HttpRequest, ListOptions, RustyBaseApp,
     Store,
 };
+use rusqlite::{params, Connection};
 use serde_json::json;
+use std::{
+    env, fs,
+    path::PathBuf,
+    process,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[test]
 fn stores_collection_records_and_filters_with_filter_engine() {
@@ -130,10 +137,50 @@ fn hashes_auth_passwords_and_uses_login_tokens_for_rules() {
         .unwrap(),
     );
     assert_eq!(login.status, 200);
-    let token = login.body["token"].as_str().unwrap();
+    let token = login.body["token"].as_str().unwrap().to_string();
     assert!(token.starts_with("rb_"));
+    assert!(login.body["expires"]
+        .as_str()
+        .unwrap()
+        .parse::<u128>()
+        .is_ok());
     assert_eq!(login.body["record"]["id"], user_id);
     assert!(login.body["record"].get("passwordHash").is_none());
+
+    let admins = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "admins",
+                "type": "auth",
+                "fields": [{"name": "email", "kind": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(admins.status, 200);
+
+    let wrong_collection_refresh = app.handle(
+        HttpRequest::new("POST", "/api/collections/admins/auth-refresh")
+            .with_header("Authorization", format!("Bearer {token}")),
+    );
+    assert_eq!(wrong_collection_refresh.status, 403);
+
+    let refresh = app.handle(
+        HttpRequest::new("POST", "/api/collections/users/auth-refresh")
+            .with_header("Authorization", format!("Bearer {token}")),
+    );
+    assert_eq!(refresh.status, 200);
+    let refreshed_token = refresh.body["token"].as_str().unwrap().to_string();
+    assert_ne!(refreshed_token, token);
+    assert_eq!(refresh.body["record"]["id"], user_id);
+
+    let old_token = app.handle(
+        HttpRequest::new("POST", "/api/collections/users/auth-refresh")
+            .with_header("Authorization", format!("Bearer {token}")),
+    );
+    assert_eq!(old_token.status, 403);
 
     let posts = app.handle(
         HttpRequest::json(
@@ -170,11 +217,90 @@ fn hashes_auth_passwords_and_uses_login_tokens_for_rules() {
 
     let authorized = app.handle(
         HttpRequest::new("GET", "/api/collections/posts/records")
-            .with_header("Authorization", format!("Bearer {token}")),
+            .with_header("Authorization", format!("Bearer {refreshed_token}")),
     );
     assert_eq!(authorized.status, 200);
     assert_eq!(authorized.body["totalItems"], 1);
     assert_eq!(authorized.body["items"][0]["title"], "Token visible");
+
+    app.store().expire_token(&refreshed_token).unwrap();
+    let expired = app.handle(
+        HttpRequest::new("GET", "/api/collections/posts/records")
+            .with_header("Authorization", format!("Bearer {refreshed_token}")),
+    );
+    assert_eq!(expired.status, 403);
+    assert!(expired.body["message"]
+        .as_str()
+        .unwrap()
+        .contains("expired auth token"));
+}
+
+#[test]
+fn migrates_legacy_auth_tokens_with_expiration() {
+    let path = temp_db_path("legacy-auth-tokens");
+    let now = test_now_millis();
+
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE "_rb_auth_tokens" (
+                token TEXT PRIMARY KEY NOT NULL,
+                collection_name TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                created TEXT NOT NULL
+            );
+            CREATE TABLE "_rb_records_users" (
+                id TEXT PRIMARY KEY NOT NULL,
+                data TEXT NOT NULL,
+                created TEXT NOT NULL,
+                updated TEXT NOT NULL
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            r#"
+            INSERT INTO "_rb_auth_tokens" (token, collection_name, record_id, created)
+            VALUES (?1, ?2, ?3, ?4)
+            "#,
+            params!["legacy_token", "users", "user_1", now.to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            r#"
+            INSERT INTO "_rb_records_users" (id, data, created, updated)
+            VALUES (?1, ?2, ?3, ?3)
+            "#,
+            params![
+                "user_1",
+                json!({"email": "legacy@example.com"}).to_string(),
+                now.to_string()
+            ],
+        )
+        .unwrap();
+    }
+
+    let store = Store::open(&path).unwrap();
+    let context = store
+        .context_for_token("legacy_token", FilterContext::default())
+        .unwrap();
+    assert_eq!(
+        context.request.auth.get("id"),
+        Some(&FilterValue::String("user_1".to_string()))
+    );
+    drop(store);
+
+    let conn = Connection::open(&path).unwrap();
+    let expires: String = conn
+        .query_row(
+            r#"SELECT expires FROM "_rb_auth_tokens" WHERE token = ?1"#,
+            params!["legacy_token"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(expires.parse::<u128>().unwrap() > now);
+    fs::remove_file(path).ok();
 }
 
 #[test]
@@ -209,6 +335,21 @@ fn applies_create_rule_against_request_body_and_auth_context() {
         .unwrap();
 
     assert_eq!(record["title"], "Allowed");
+}
+
+fn temp_db_path(name: &str) -> PathBuf {
+    env::temp_dir().join(format!(
+        "rusty-base-{name}-{}-{}.db",
+        process::id(),
+        test_now_millis()
+    ))
+}
+
+fn test_now_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
 }
 
 #[test]

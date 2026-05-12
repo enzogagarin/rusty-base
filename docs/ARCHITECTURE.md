@@ -54,15 +54,17 @@ Responsibility:
 - provide the first PocketBase-style HTTP shell;
 - store collection metadata in SQLite;
 - store record data in per-collection SQLite tables;
-- support auth collections with Argon2 password hashes and bearer tokens;
+- support auth collections with Argon2 password hashes and expiring bearer
+  tokens;
+- rotate valid auth tokens through `auth-refresh`;
 - translate collection schemas into `rb-filter-engine` field resolvers;
 - apply list/view/create/update/delete filters with request context.
 
 Non-responsibility:
 
 - it is not a complete PocketBase API surface yet;
-- it does not implement token refresh, OAuth providers, or full auth settings
-  yet;
+- it does not implement OAuth providers, public logout/revoke routes, or full
+  auth settings yet;
 - it does not own files, realtime, admin UI, or migration compatibility yet.
 
 Current integration shape:

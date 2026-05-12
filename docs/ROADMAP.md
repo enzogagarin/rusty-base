@@ -171,6 +171,8 @@ Exit criteria:
 - Added a first auth MVP in `rb-server`: auth collections, Argon2 password
   hashing, `auth-with-password`, opaque bearer tokens, and real
   `@request.auth.*` population from authenticated records.
+- Added token expiration metadata, bearer-token expiry checks, and
+  `auth-refresh` rotation scoped to the requested auth collection.
 
 ## Next Sprint
 
@@ -178,7 +180,7 @@ Exit criteria:
 2. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 3. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.
-4. Add token expiration/refresh and align auth response/error shape more closely
-   with PocketBase.
+4. Add public logout/token revocation and align auth response/error shape more
+   closely with PocketBase.
 5. Add request field modifiers such as `:isset`, `:changed`, `:length`, and
    `:each`.

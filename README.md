@@ -210,6 +210,10 @@ TOKEN=$(curl -s http://127.0.0.1:8090/api/collections/users/auth-with-password \
   -d '{"identity":"burak@example.com","password":"correct horse"}' \
   | jq -r '.token')
 
+TOKEN=$(curl -s http://127.0.0.1:8090/api/collections/users/auth-refresh \
+  -H "authorization: Bearer $TOKEN" \
+  | jq -r '.token')
+
 curl -s http://127.0.0.1:8090/api/collections \
   -H 'content-type: application/json' \
   -d '{"name":"posts","fields":[{"name":"title","kind":"text"},{"name":"published","kind":"bool"},{"name":"owner","kind":"text"}],"listRule":"owner = @request.auth.id"}'
@@ -278,7 +282,9 @@ The first server slice supports:
   compiled through
   `rb-filter-engine`;
 - auth collections with Argon2 password hashing;
-- `auth-with-password` login with opaque bearer tokens;
+- `auth-with-password` login with opaque bearer tokens and expiration metadata;
+- `auth-refresh` token rotation for authenticated auth records;
+- bearer-token expiration checks before `@request.auth.*` is populated;
 - `Authorization: Bearer ...` request context population for `@request.auth.*`;
 - a temporary `x-rb-auth-id` compatibility header for tests and early manual
   experiments.
@@ -303,7 +309,7 @@ Not implemented yet:
 - request-context field modifiers such as `:isset`, `:changed`, `:length`, and
   `:each`;
 - cross-collection identifiers such as `@collection.*`;
-- token expiration/refresh and full PocketBase auth provider parity;
+- full PocketBase auth provider/settings parity and public logout/revoke routes;
 - exact PocketBase admin API/import-export compatibility;
 - files, realtime, and admin UI;
 - Go FFI bindings;
