@@ -40,7 +40,7 @@ Status legend:
 | Schema-aware field validation | supported | Unknown fields are rejected. |
 | Resolver abstraction | supported | `FieldResolver` can map filter identifiers to SQL fragments and field kinds. |
 | Quoted schema identifiers | supported | `FilterSchema` resolves fields as quoted SQL identifier paths. |
-| Relation expansion planning | partial | `FilterPlan` can carry relation traversal metadata and render single-value relation chains as correlated `EXISTS` SQL. Multi-value relation SQL is still planned. See `docs/RELATION_QUERY_PLAN.md`. |
+| Relation expansion planning | partial | `FilterPlan` can carry relation traversal metadata and render single-value and multi-value relation chains as correlated SQL. Multi-value `?` operators use any-match semantics; non-`?` multi-value relation comparisons use a match-all `NOT EXISTS` shape. See `docs/RELATION_QUERY_PLAN.md`. |
 | JSON path extraction | partial | Schema fields with kind `json` can resolve nested paths such as `profile.name` to SQLite `json_extract(...)`; object keys and numeric array indexes are covered. |
 
 ## Functions
@@ -48,7 +48,7 @@ Status legend:
 | Function | Status | Notes |
 | --- | --- | --- |
 | `strftime(format, value, ...)` | partial | Supports a string format, an optional time value, and string modifiers. |
-| `geoDistance(lonA, latA, lonB, latB)` | partial | Supports number literals and numeric fields. Relation multi-match behavior is not implemented. |
+| `geoDistance(lonA, latA, lonB, latB)` | partial | Supports number literals and numeric fields. Named-parameter rendering for repeated arguments is still planned. |
 
 ## Macros
 
@@ -65,6 +65,7 @@ Status legend:
 | Expression count limit | supported | Configurable through `FilterSettings`. |
 | Parentheses depth limit | supported | Configurable through `FilterSettings`. |
 | Parameterized values | supported | User values are emitted as bound parameters. |
+| Named parameters | supported | Named output APIs can reuse the same placeholder for repeated values, including repeated function arguments. Positional output remains the default. |
 | Parser resilience smoke test | supported | Deterministic generated-input test exists. |
 | Fuzz target | planned | `cargo-fuzz` target is still needed. |
 | Benchmarks | planned | Normal and pathological filter benches are still needed. |

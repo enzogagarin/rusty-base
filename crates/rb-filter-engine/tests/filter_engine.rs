@@ -1,7 +1,7 @@
 use rb_filter_engine::{
-    compile_ast, compile_filter, compile_filter_with_context, compile_filter_with_params,
-    compile_filter_with_settings, parse_filter, FilterContext, FilterDateTime, FilterErrorKind,
-    FilterSettings, Value,
+    compile_ast, compile_filter, compile_filter_with_context, compile_filter_with_named_params,
+    compile_filter_with_params, compile_filter_with_settings, parse_filter, FilterContext,
+    FilterDateTime, FilterErrorKind, FilterSettings, NamedParam, Value,
 };
 
 #[test]
@@ -81,6 +81,33 @@ fn compiles_geo_distance_function_operand() {
             Value::Number("1".to_string()),
             Value::Number("2".to_string()),
             Value::Number("200".to_string())
+        ]
+    );
+}
+
+#[test]
+fn compiles_geo_distance_with_named_params_reusing_repeated_arguments() {
+    let out = compile_filter_with_named_params("geoDistance(office.lon, office.lat, 1, 2) < 200")
+        .unwrap();
+    assert_eq!(
+        out.sql,
+        "(6371 * acos(cos(radians(office.lat)) * cos(radians(:p0)) * cos(radians(:p1) - radians(office.lon)) + sin(radians(office.lat)) * sin(radians(:p0)))) < :p2"
+    );
+    assert_eq!(
+        out.params,
+        vec![
+            NamedParam {
+                name: "p0".to_string(),
+                value: Value::Number("2".to_string()),
+            },
+            NamedParam {
+                name: "p1".to_string(),
+                value: Value::Number("1".to_string()),
+            },
+            NamedParam {
+                name: "p2".to_string(),
+                value: Value::Number("200".to_string()),
+            },
         ]
     );
 }

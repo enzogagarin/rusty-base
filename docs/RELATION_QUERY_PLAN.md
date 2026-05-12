@@ -65,14 +65,19 @@ step, not the final relation-planning API.
 - `PlannedExpr` preserves the predicate shape without emitting SQL.
 - `ResolvedField` can carry optional `RelationTraversal` metadata.
 - Relation traversals are deduplicated in `FilterPlan::relations`.
-- `render_plan_sql(...)` can render plain predicates and single-value relation
-  chains as correlated `EXISTS` subqueries.
+- `render_plan_sql(...)` can render plain predicates and relation chains as
+  correlated SQL.
+- Single-value relation comparisons render as `EXISTS` predicates.
+- Multi-value relation comparisons with `?` operators render as any-match
+  `EXISTS` predicates.
+- Multi-value relation comparisons without `?` operators render with a
+  match-all `NOT EXISTS (... NOT (...))` shape.
 - Existing SQL compilation and CLI behavior remain unchanged.
 
 This is deliberately still a narrow renderer. It handles single-value relation
-chains, while the host application still owns access-rule composition,
-collection schema loading, and the final query around the returned predicate.
-Multi-value relation traversal remains planned.
+chains and the first multi-value relation SQL shapes, while the host
+application still owns access-rule composition, collection schema loading, and
+the final query around the returned predicate.
 
 ## Non-Goals For The Current Filter Engine
 
@@ -91,5 +96,6 @@ should provide schema and request context, then execute the final query.
 3. Add JSON-path field support. Done for schema-declared `json` roots.
 4. Add single-value relation SQL rendering. Done for correlated `EXISTS`
    predicates over single-value relation chains.
-5. Add multi-value relation traversal and any-match SQL rendering.
+5. Add multi-value relation traversal and any-match SQL rendering. Done for
+   JSON-array relation ids with match-all and any-match predicate shapes.
 6. Add compatibility fixtures copied from PocketBase relation-rule examples.

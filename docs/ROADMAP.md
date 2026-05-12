@@ -156,13 +156,18 @@ Exit criteria:
   rendering and JSON path compatibility fixtures.
 - Added the first relation SQL renderer for single-value relation chains using
   correlated `EXISTS` predicates.
+- Added multi-value relation traversal rendering with any-match `?` operators
+  and default match-all predicates.
+- Added named-parameter SQL output APIs so repeated values can share the same
+  placeholder while existing positional output remains unchanged.
 
 ## Next Sprint
 
 1. Expand compatibility fixtures around placeholder-like wildcard cases.
-2. Add multi-value relation traversal and any-match SQL rendering.
-3. Add named-parameter rendering so repeated function arguments do not need
-   duplicated positional values.
-4. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
-5. Start the minimal `rb-server` HTTP/SQLite slice once relation rendering has
+2. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
+3. Add relation compatibility fixtures copied from PocketBase-style access-rule
+   examples.
+4. Start the minimal `rb-server` HTTP/SQLite slice once relation rendering has
    enough coverage.
+5. Add request-context identifiers such as `@request.auth.*` and
+   `@request.query.*`.

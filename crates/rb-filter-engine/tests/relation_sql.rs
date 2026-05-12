@@ -1,6 +1,7 @@
 use rb_filter_engine::{
-    plan_filter_with_resolver, render_plan_sql, render_plan_sql_with_options, FieldKind,
-    FieldResolver, FilterError, FilterErrorKind, RelationMultiplicity, RelationSqlOptions,
+    compile_filter_with_resolver, plan_filter_with_resolver, render_plan_sql,
+    render_plan_sql_with_named_params, render_plan_sql_with_options, FieldKind, FieldResolver,
+    FilterError, FilterErrorKind, NamedParam, RelationMultiplicity, RelationSqlOptions,
     RelationStep, RelationTraversal, ResolvedField, Value,
 };
 
@@ -38,6 +39,16 @@ impl FieldResolver for Resolver {
                 FieldKind::Text,
             )
             .with_relation(collaborators_relation("collaborators.name", "name"))),
+            "collaborators.created" => Ok(ResolvedField::with_kind(
+                "\"collaborator_records\".\"created\"",
+                FieldKind::DateTime,
+            )
+            .with_relation(collaborators_relation("collaborators.created", "created"))),
+            "team.members.name" => Ok(ResolvedField::with_kind(
+                "\"member_records\".\"name\"",
+                FieldKind::Text,
+            )
+            .with_relation(team_members_relation("team.members.name", "name"))),
             _ => Err(FilterError::with_kind(
                 FilterErrorKind::UnknownField,
                 format!("unknown field '{field}'"),
@@ -85,6 +96,23 @@ fn collaborators_relation(field_path: &str, leaf_field: &str) -> RelationTravers
     )
 }
 
+fn team_members_relation(field_path: &str, leaf_field: &str) -> RelationTraversal {
+    RelationTraversal::new(
+        field_path,
+        [
+            RelationStep::new("posts", "team", "teams", "id", RelationMultiplicity::Single),
+            RelationStep::new(
+                "teams",
+                "members",
+                "users",
+                "id",
+                RelationMultiplicity::Multiple,
+            ),
+        ],
+        leaf_field,
+    )
+}
+
 #[test]
 fn renders_single_value_relation_comparison_as_exists() {
     let plan = plan_filter_with_resolver(r#"author.name ~ "burak" && published = true"#, &Resolver)
@@ -109,6 +137,28 @@ fn renders_single_value_relation_with_custom_root_alias() {
         "EXISTS (SELECT 1 FROM \"users\" AS \"__rb_rel_0_0\" WHERE \"__rb_rel_0_0\".\"id\" = \"p\".\"author\" AND \"__rb_rel_0_0\".\"name\" = ?)"
     );
     assert_eq!(out.params, vec![Value::String("Burak".to_string())]);
+}
+
+#[test]
+fn renders_relation_plan_with_named_params_reusing_literals() {
+    let plan = plan_filter_with_resolver(
+        r#"author.name = "Burak" || author.nickname = "Burak""#,
+        &Resolver,
+    )
+    .unwrap();
+    let out = render_plan_sql_with_named_params(&plan).unwrap();
+
+    assert_eq!(
+        out.sql,
+        "EXISTS (SELECT 1 FROM \"users\" AS \"__rb_rel_0_0\" WHERE \"__rb_rel_0_0\".\"id\" = \"posts\".\"author\" AND \"__rb_rel_0_0\".\"name\" = :p0) OR EXISTS (SELECT 1 FROM \"users\" AS \"__rb_rel_0_0\" WHERE \"__rb_rel_0_0\".\"id\" = \"posts\".\"author\" AND \"__rb_rel_0_0\".\"nickname\" = :p0)"
+    );
+    assert_eq!(
+        out.params,
+        vec![NamedParam {
+            name: "p0".to_string(),
+            value: Value::String("Burak".to_string()),
+        }]
+    );
 }
 
 #[test]
@@ -155,10 +205,78 @@ fn renders_nested_single_value_relation_chain() {
 }
 
 #[test]
-fn rejects_multi_value_relation_sql_rendering_for_now() {
-    let plan = plan_filter_with_resolver(r#"collaborators.name = "Burak""#, &Resolver).unwrap();
-    let err = render_plan_sql(&plan).unwrap_err();
+fn renders_multi_value_relation_any_match_as_exists() {
+    let plan = plan_filter_with_resolver(r#"collaborators.name ?= "Burak""#, &Resolver).unwrap();
+    let out = render_plan_sql(&plan).unwrap();
+
+    assert_eq!(
+        out.sql,
+        "EXISTS (SELECT 1 FROM \"users\" AS \"__rb_rel_0_0\" WHERE EXISTS (SELECT 1 FROM json_each(\"posts\".\"collaborators\") AS \"__rb_rel_0_0_each\" WHERE \"__rb_rel_0_0_each\".\"value\" = \"__rb_rel_0_0\".\"id\") AND \"__rb_rel_0_0\".\"name\" = ?)"
+    );
+    assert_eq!(out.params, vec![Value::String("Burak".to_string())]);
+}
+
+#[test]
+fn direct_sql_compiler_does_not_render_relation_any_match() {
+    let err =
+        compile_filter_with_resolver(r#"collaborators.name ?= "Burak""#, &Resolver).unwrap_err();
 
     assert_eq!(err.kind(), FilterErrorKind::InvalidOperator);
-    assert!(err.to_string().contains("multi-value relation"));
+    assert!(err.to_string().contains("any-match operator"));
+}
+
+#[test]
+fn renders_multi_value_relation_like_any_match_as_exists() {
+    let plan = plan_filter_with_resolver(r#"collaborators.name ?~ "burak""#, &Resolver).unwrap();
+    let out = render_plan_sql(&plan).unwrap();
+
+    assert_eq!(
+        out.sql,
+        "EXISTS (SELECT 1 FROM \"users\" AS \"__rb_rel_0_0\" WHERE EXISTS (SELECT 1 FROM json_each(\"posts\".\"collaborators\") AS \"__rb_rel_0_0_each\" WHERE \"__rb_rel_0_0_each\".\"value\" = \"__rb_rel_0_0\".\"id\") AND \"__rb_rel_0_0\".\"name\" LIKE ? ESCAPE '\\')"
+    );
+    assert_eq!(out.params, vec![Value::String("%burak%".to_string())]);
+}
+
+#[test]
+fn renders_function_any_match_inside_multi_value_relation_exists() {
+    let plan =
+        plan_filter_with_resolver("strftime('%Y', collaborators.created) ?= '2026'", &Resolver)
+            .unwrap();
+    let out = render_plan_sql(&plan).unwrap();
+
+    assert_eq!(
+        out.sql,
+        "EXISTS (SELECT 1 FROM \"users\" AS \"__rb_rel_0_0\" WHERE EXISTS (SELECT 1 FROM json_each(\"posts\".\"collaborators\") AS \"__rb_rel_0_0_each\" WHERE \"__rb_rel_0_0_each\".\"value\" = \"__rb_rel_0_0\".\"id\") AND strftime(?,\"__rb_rel_0_0\".\"created\") = ?)"
+    );
+    assert_eq!(
+        out.params,
+        vec![
+            Value::String("%Y".to_string()),
+            Value::String("2026".to_string())
+        ]
+    );
+}
+
+#[test]
+fn renders_nested_multi_value_relation_any_match() {
+    let plan = plan_filter_with_resolver(r#"team.members.name ?= "Burak""#, &Resolver).unwrap();
+    let out = render_plan_sql(&plan).unwrap();
+
+    assert_eq!(
+        out.sql,
+        "EXISTS (SELECT 1 FROM \"teams\" AS \"__rb_rel_0_0\", \"users\" AS \"__rb_rel_0_1\" WHERE \"__rb_rel_0_0\".\"id\" = \"posts\".\"team\" AND EXISTS (SELECT 1 FROM json_each(\"__rb_rel_0_0\".\"members\") AS \"__rb_rel_0_1_each\" WHERE \"__rb_rel_0_1_each\".\"value\" = \"__rb_rel_0_1\".\"id\") AND \"__rb_rel_0_1\".\"name\" = ?)"
+    );
+    assert_eq!(out.params, vec![Value::String("Burak".to_string())]);
+}
+
+#[test]
+fn renders_multi_value_relation_default_match_all_as_not_exists() {
+    let plan = plan_filter_with_resolver(r#"collaborators.name = "Burak""#, &Resolver).unwrap();
+    let out = render_plan_sql(&plan).unwrap();
+
+    assert_eq!(
+        out.sql,
+        "NOT EXISTS (SELECT 1 FROM \"users\" AS \"__rb_rel_0_0\" WHERE EXISTS (SELECT 1 FROM json_each(\"posts\".\"collaborators\") AS \"__rb_rel_0_0_each\" WHERE \"__rb_rel_0_0_each\".\"value\" = \"__rb_rel_0_0\".\"id\") AND NOT (\"__rb_rel_0_0\".\"name\" = ?))"
+    );
+    assert_eq!(out.params, vec![Value::String("Burak".to_string())]);
 }

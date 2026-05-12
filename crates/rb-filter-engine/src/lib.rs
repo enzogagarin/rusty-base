@@ -38,6 +38,18 @@ pub struct CompileOutput {
     pub params: Vec<Value>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedCompileOutput {
+    pub sql: String,
+    pub params: Vec<NamedParam>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedParam {
+    pub name: String,
+    pub value: Value,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FilterContext {
     pub now: FilterDateTime,
@@ -195,7 +207,7 @@ pub struct FilterAst {
     expr: Expr,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Value {
     String(String),
     Number(String),
@@ -594,7 +606,23 @@ pub fn compile_ast_with_context(
     let sql = compiler.compile(&ast.expr)?;
     Ok(CompileOutput {
         sql,
-        params: compiler.params,
+        params: compiler.params.into_positional(),
+    })
+}
+
+pub fn compile_ast_with_named_params(ast: &FilterAst) -> Result<NamedCompileOutput, FilterError> {
+    compile_ast_with_named_params_and_context(ast, FilterContext::default())
+}
+
+pub fn compile_ast_with_named_params_and_context(
+    ast: &FilterAst,
+    context: FilterContext,
+) -> Result<NamedCompileOutput, FilterError> {
+    let mut compiler = SqlCompiler::with_named_context(context);
+    let sql = compiler.compile(&ast.expr)?;
+    Ok(NamedCompileOutput {
+        sql,
+        params: compiler.params.into_named(),
     })
 }
 
@@ -614,7 +642,27 @@ pub fn compile_ast_with_resolver_and_context(
     let sql = compiler.compile(&ast.expr)?;
     Ok(CompileOutput {
         sql,
-        params: compiler.params,
+        params: compiler.params.into_positional(),
+    })
+}
+
+pub fn compile_ast_with_resolver_and_named_params(
+    ast: &FilterAst,
+    resolver: &dyn FieldResolver,
+) -> Result<NamedCompileOutput, FilterError> {
+    compile_ast_with_resolver_and_named_params_and_context(ast, resolver, FilterContext::default())
+}
+
+pub fn compile_ast_with_resolver_and_named_params_and_context(
+    ast: &FilterAst,
+    resolver: &dyn FieldResolver,
+    context: FilterContext,
+) -> Result<NamedCompileOutput, FilterError> {
+    let mut compiler = SqlCompiler::with_resolver_and_named_context(resolver, context);
+    let sql = compiler.compile(&ast.expr)?;
+    Ok(NamedCompileOutput {
+        sql,
+        params: compiler.params.into_named(),
     })
 }
 
@@ -631,6 +679,21 @@ pub fn compile_ast_with_schema_and_context(
     context: FilterContext,
 ) -> Result<CompileOutput, FilterError> {
     compile_ast_with_resolver_and_context(ast, schema, context)
+}
+
+pub fn compile_ast_with_schema_and_named_params(
+    ast: &FilterAst,
+    schema: &FilterSchema,
+) -> Result<NamedCompileOutput, FilterError> {
+    compile_ast_with_resolver_and_named_params(ast, schema)
+}
+
+pub fn compile_ast_with_schema_and_named_params_and_context(
+    ast: &FilterAst,
+    schema: &FilterSchema,
+    context: FilterContext,
+) -> Result<NamedCompileOutput, FilterError> {
+    compile_ast_with_resolver_and_named_params_and_context(ast, schema, context)
 }
 
 pub fn plan_ast(ast: &FilterAst) -> Result<FilterPlan, FilterError> {
@@ -705,6 +768,19 @@ pub fn compile_filter_with_settings(
     compile_ast(&ast)
 }
 
+pub fn compile_filter_with_named_params(input: &str) -> Result<NamedCompileOutput, FilterError> {
+    let ast = parse_filter(input)?;
+    compile_ast_with_named_params(&ast)
+}
+
+pub fn compile_filter_with_named_params_and_context(
+    input: &str,
+    context: FilterContext,
+) -> Result<NamedCompileOutput, FilterError> {
+    let ast = parse_filter(input)?;
+    compile_ast_with_named_params_and_context(&ast, context)
+}
+
 pub fn plan_filter(input: &str) -> Result<FilterPlan, FilterError> {
     plan_filter_with_settings(input, FilterSettings::default())
 }
@@ -758,6 +834,23 @@ pub fn compile_filter_with_schema_and_context(
     compile_ast_with_schema_and_context(&ast, schema, context)
 }
 
+pub fn compile_filter_with_schema_and_named_params(
+    input: &str,
+    schema: &FilterSchema,
+) -> Result<NamedCompileOutput, FilterError> {
+    let ast = parse_filter(input)?;
+    compile_ast_with_schema_and_named_params(&ast, schema)
+}
+
+pub fn compile_filter_with_schema_and_named_params_and_context(
+    input: &str,
+    schema: &FilterSchema,
+    context: FilterContext,
+) -> Result<NamedCompileOutput, FilterError> {
+    let ast = parse_filter(input)?;
+    compile_ast_with_schema_and_named_params_and_context(&ast, schema, context)
+}
+
 pub fn plan_filter_with_schema(
     input: &str,
     schema: &FilterSchema,
@@ -808,6 +901,23 @@ pub fn compile_filter_with_resolver_and_context(
     compile_ast_with_resolver_and_context(&ast, resolver, context)
 }
 
+pub fn compile_filter_with_resolver_and_named_params(
+    input: &str,
+    resolver: &dyn FieldResolver,
+) -> Result<NamedCompileOutput, FilterError> {
+    let ast = parse_filter(input)?;
+    compile_ast_with_resolver_and_named_params(&ast, resolver)
+}
+
+pub fn compile_filter_with_resolver_and_named_params_and_context(
+    input: &str,
+    resolver: &dyn FieldResolver,
+    context: FilterContext,
+) -> Result<NamedCompileOutput, FilterError> {
+    let ast = parse_filter(input)?;
+    compile_ast_with_resolver_and_named_params_and_context(&ast, resolver, context)
+}
+
 pub fn plan_filter_with_resolver(
     input: &str,
     resolver: &dyn FieldResolver,
@@ -845,7 +955,25 @@ pub fn render_plan_sql_with_options(
     let sql = renderer.render_expr(&plan.predicate)?;
     Ok(CompileOutput {
         sql,
-        params: renderer.params,
+        params: renderer.params.into_positional(),
+    })
+}
+
+pub fn render_plan_sql_with_named_params(
+    plan: &FilterPlan,
+) -> Result<NamedCompileOutput, FilterError> {
+    render_plan_sql_with_named_params_and_options(plan, RelationSqlOptions::default())
+}
+
+pub fn render_plan_sql_with_named_params_and_options(
+    plan: &FilterPlan,
+    options: RelationSqlOptions,
+) -> Result<NamedCompileOutput, FilterError> {
+    let mut renderer = PlanSqlRenderer::new_named(&plan.relations, options);
+    let sql = renderer.render_expr(&plan.predicate)?;
+    Ok(NamedCompileOutput {
+        sql,
+        params: renderer.params.into_named(),
     })
 }
 
@@ -1516,7 +1644,7 @@ impl<'a> FilterPlanner<'a> {
                 let right = self.plan_operand(right)?;
                 let resolved_left = planned_operand_to_resolved(&left);
                 let resolved_right = planned_operand_to_resolved(&right);
-                validate_compare_operands(&resolved_left, *op, &resolved_right)?;
+                validate_plan_compare_operands(&resolved_left, *op, &resolved_right)?;
 
                 Ok(PlannedExpr::Compare {
                     left,
@@ -1610,8 +1738,76 @@ impl<'a> FilterPlanner<'a> {
     }
 }
 
+#[derive(Debug, Clone)]
+enum SqlParams {
+    Positional(Vec<Value>),
+    Named {
+        params: Vec<NamedParam>,
+        names_by_value: HashMap<Value, String>,
+    },
+}
+
+impl SqlParams {
+    fn positional() -> Self {
+        Self::Positional(Vec::new())
+    }
+
+    fn named() -> Self {
+        Self::Named {
+            params: Vec::new(),
+            names_by_value: HashMap::new(),
+        }
+    }
+
+    fn bind(&mut self, value: Value) -> String {
+        match self {
+            Self::Positional(params) => {
+                params.push(value);
+                "?".to_string()
+            }
+            Self::Named {
+                params,
+                names_by_value,
+            } => {
+                if let Some(name) = names_by_value.get(&value) {
+                    return format!(":{name}");
+                }
+
+                let name = format!("p{}", params.len());
+                names_by_value.insert(value.clone(), name.clone());
+                params.push(NamedParam {
+                    name: name.clone(),
+                    value,
+                });
+                format!(":{name}")
+            }
+        }
+    }
+
+    fn into_positional(self) -> Vec<Value> {
+        match self {
+            Self::Positional(params) => params,
+            Self::Named { params, .. } => params.into_iter().map(|param| param.value).collect(),
+        }
+    }
+
+    fn into_named(self) -> Vec<NamedParam> {
+        match self {
+            Self::Named { params, .. } => params,
+            Self::Positional(params) => params
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| NamedParam {
+                    name: format!("p{index}"),
+                    value,
+                })
+                .collect(),
+        }
+    }
+}
+
 struct SqlCompiler<'a> {
-    params: Vec<Value>,
+    params: SqlParams,
     field_resolver: Option<&'a dyn FieldResolver>,
     context: FilterContext,
 }
@@ -1625,7 +1821,15 @@ impl Default for SqlCompiler<'_> {
 impl<'a> SqlCompiler<'a> {
     fn with_context(context: FilterContext) -> Self {
         Self {
-            params: Vec::new(),
+            params: SqlParams::positional(),
+            field_resolver: None,
+            context,
+        }
+    }
+
+    fn with_named_context(context: FilterContext) -> Self {
+        Self {
+            params: SqlParams::named(),
             field_resolver: None,
             context,
         }
@@ -1636,7 +1840,18 @@ impl<'a> SqlCompiler<'a> {
         context: FilterContext,
     ) -> Self {
         Self {
-            params: Vec::new(),
+            params: SqlParams::positional(),
+            field_resolver: Some(field_resolver),
+            context,
+        }
+    }
+
+    fn with_resolver_and_named_context(
+        field_resolver: &'a dyn FieldResolver,
+        context: FilterContext,
+    ) -> Self {
+        Self {
+            params: SqlParams::named(),
             field_resolver: Some(field_resolver),
             context,
         }
@@ -1803,12 +2018,10 @@ impl<'a> SqlCompiler<'a> {
             ResolvedOperand::Field { resolved, .. } => resolved.sql.clone(),
             ResolvedOperand::Function { name, args, .. } => self.render_function(name, args),
             ResolvedOperand::Value(Value::String(value)) => {
-                self.params.push(Value::String(value.clone()));
-                "?".to_string()
+                self.params.bind(Value::String(value.clone()))
             }
             ResolvedOperand::Value(Value::Number(value)) => {
-                self.params.push(Value::Number(value.clone()));
-                "?".to_string()
+                self.params.bind(Value::Number(value.clone()))
             }
             ResolvedOperand::Value(Value::Bool(true)) => "TRUE".to_string(),
             ResolvedOperand::Value(Value::Bool(false)) => "FALSE".to_string(),
@@ -1822,10 +2035,7 @@ impl<'a> SqlCompiler<'a> {
             ResolvedOperand::Function { name, args, .. } => {
                 format!("('%' || {} || '%')", self.render_function(name, args))
             }
-            ResolvedOperand::Value(value) => {
-                self.params.push(wrap_like(value));
-                "?".to_string()
-            }
+            ResolvedOperand::Value(value) => self.params.bind(wrap_like(value)),
         }
     }
 
@@ -1884,7 +2094,7 @@ impl<'a> SqlCompiler<'a> {
 }
 
 struct PlanSqlRenderer<'a> {
-    params: Vec<Value>,
+    params: SqlParams,
     relations: &'a [RelationTraversal],
     options: RelationSqlOptions,
 }
@@ -1897,7 +2107,15 @@ struct RelationRenderContext<'a> {
 impl<'a> PlanSqlRenderer<'a> {
     fn new(relations: &'a [RelationTraversal], options: RelationSqlOptions) -> Self {
         Self {
-            params: Vec::new(),
+            params: SqlParams::positional(),
+            relations,
+            options,
+        }
+    }
+
+    fn new_named(relations: &'a [RelationTraversal], options: RelationSqlOptions) -> Self {
+        Self {
+            params: SqlParams::named(),
             relations,
             options,
         }
@@ -1934,8 +2152,18 @@ impl<'a> PlanSqlRenderer<'a> {
             relation,
             relation_index,
         };
-        let inner_sql = self.render_plain_compare(left, op, right, Some(&context))?;
-        self.render_relation_exists(&context, inner_sql)
+        let inner_op = if relation_has_multiple_step(relation) && is_plan_any_match_op(op) {
+            plan_any_match_inner_op(op)?
+        } else {
+            op
+        };
+        let inner_sql = self.render_plain_compare(left, inner_op, right, Some(&context))?;
+
+        if relation_has_multiple_step(relation) && !is_plan_any_match_op(op) {
+            self.render_relation_for_all(&context, inner_sql)
+        } else {
+            self.render_relation_exists(&context, inner_sql)
+        }
     }
 
     fn comparison_relation<'b>(
@@ -1961,7 +2189,7 @@ impl<'a> PlanSqlRenderer<'a> {
             ));
         }
 
-        validate_single_relation_chain(relation)?;
+        validate_relation_chain(relation)?;
         Ok(Some(relation))
     }
 
@@ -2087,12 +2315,10 @@ impl<'a> PlanSqlRenderer<'a> {
                 self.render_function(name, args, relation_context)
             }
             PlannedOperand::Value(Value::String(value)) => {
-                self.params.push(Value::String(value.clone()));
-                Ok("?".to_string())
+                Ok(self.params.bind(Value::String(value.clone())))
             }
             PlannedOperand::Value(Value::Number(value)) => {
-                self.params.push(Value::Number(value.clone()));
-                Ok("?".to_string())
+                Ok(self.params.bind(Value::Number(value.clone())))
             }
             PlannedOperand::Value(Value::Bool(true)) => Ok("TRUE".to_string()),
             PlannedOperand::Value(Value::Bool(false)) => Ok("FALSE".to_string()),
@@ -2139,10 +2365,7 @@ impl<'a> PlanSqlRenderer<'a> {
                 let rendered = self.render_operand(operand, relation_context)?;
                 Ok(format!("('%' || {rendered} || '%')"))
             }
-            PlannedOperand::Value(value) => {
-                self.params.push(wrap_like(value));
-                Ok("?".to_string())
-            }
+            PlannedOperand::Value(value) => Ok(self.params.bind(wrap_like(value))),
         }
     }
 
@@ -2191,7 +2414,7 @@ impl<'a> PlanSqlRenderer<'a> {
         context: &RelationRenderContext<'_>,
         inner_sql: String,
     ) -> Result<String, FilterError> {
-        validate_single_relation_chain(context.relation)?;
+        validate_relation_chain(context.relation)?;
 
         let from_clause = context
             .relation
@@ -2215,6 +2438,35 @@ impl<'a> PlanSqlRenderer<'a> {
         ))
     }
 
+    fn render_relation_for_all(
+        &self,
+        context: &RelationRenderContext<'_>,
+        inner_sql: String,
+    ) -> Result<String, FilterError> {
+        validate_relation_chain(context.relation)?;
+
+        let from_clause = context
+            .relation
+            .steps
+            .iter()
+            .enumerate()
+            .map(|(index, step)| {
+                let target_table = quote_safe_identifier_part(&step.target_collection)?;
+                let alias = self.relation_alias_sql(context.relation_index, index);
+                Ok(format!("{target_table} AS {alias}"))
+            })
+            .collect::<Result<Vec<_>, FilterError>>()?
+            .join(", ");
+
+        let mut conditions = self.relation_link_conditions(context)?;
+        conditions.push(format!("NOT ({inner_sql})"));
+
+        Ok(format!(
+            "NOT EXISTS (SELECT 1 FROM {from_clause} WHERE {})",
+            conditions.join(" AND ")
+        ))
+    }
+
     fn relation_link_conditions(
         &self,
         context: &RelationRenderContext<'_>,
@@ -2234,9 +2486,20 @@ impl<'a> PlanSqlRenderer<'a> {
                 let source_field = quote_safe_identifier_part(&step.source_field)?;
                 let target_field = quote_safe_identifier_part(&step.target_field)?;
 
-                Ok(format!(
-                    "{target_alias}.{target_field} = {source_alias}.{source_field}"
-                ))
+                match step.multiplicity {
+                    RelationMultiplicity::Single => Ok(format!(
+                        "{target_alias}.{target_field} = {source_alias}.{source_field}"
+                    )),
+                    RelationMultiplicity::Multiple => {
+                        let array_alias =
+                            self.relation_array_alias_sql(context.relation_index, index);
+                        let value_field = quote_identifier_part("value");
+
+                        Ok(format!(
+                            "EXISTS (SELECT 1 FROM json_each({source_alias}.{source_field}) AS {array_alias} WHERE {array_alias}.{value_field} = {target_alias}.{target_field})"
+                        ))
+                    }
+                }
             })
             .collect()
     }
@@ -2246,7 +2509,7 @@ impl<'a> PlanSqlRenderer<'a> {
         context: &RelationRenderContext<'_>,
         relation: &RelationTraversal,
     ) -> Result<String, FilterError> {
-        validate_single_relation_chain(context.relation)?;
+        validate_relation_chain(context.relation)?;
 
         let last_step_index = relation.steps.len() - 1;
         let alias = self.relation_alias_sql(context.relation_index, last_step_index);
@@ -2265,6 +2528,10 @@ impl<'a> PlanSqlRenderer<'a> {
 
     fn relation_alias_sql(&self, relation_index: usize, step_index: usize) -> String {
         quote_identifier_part(&format!("__rb_rel_{relation_index}_{step_index}"))
+    }
+
+    fn relation_array_alias_sql(&self, relation_index: usize, step_index: usize) -> String {
+        quote_identifier_part(&format!("__rb_rel_{relation_index}_{step_index}_each"))
     }
 
     fn relation_index_for_chain(&self, relation: &RelationTraversal) -> Result<usize, FilterError> {
@@ -2346,10 +2613,40 @@ fn validate_compare_operands(
     op: CompareOp,
     right: &ResolvedOperand,
 ) -> Result<(), FilterError> {
+    validate_compare_operands_with_options(left, op, right, false)
+}
+
+fn validate_plan_compare_operands(
+    left: &ResolvedOperand,
+    op: CompareOp,
+    right: &ResolvedOperand,
+) -> Result<(), FilterError> {
+    validate_compare_operands_with_options(left, op, right, true)
+}
+
+fn validate_compare_operands_with_options(
+    left: &ResolvedOperand,
+    op: CompareOp,
+    right: &ResolvedOperand,
+    allow_relation_any_match: bool,
+) -> Result<(), FilterError> {
+    let left_relation_any_match = allow_relation_any_match
+        && is_any_match_op(op)
+        && resolved_operand_has_multiple_relation(left);
     match left {
         ResolvedOperand::Field { .. } | ResolvedOperand::Function { .. } => {
             if let Some(kind) = left.kind() {
-                validate_field_operation(left.name_for_errors(), kind, op, right.as_value())?;
+                let validation_op = if left_relation_any_match {
+                    compare_any_match_inner_op(op)?
+                } else {
+                    op
+                };
+                validate_field_operation(
+                    left.name_for_errors(),
+                    kind,
+                    validation_op,
+                    right.as_value(),
+                )?;
             };
         }
         ResolvedOperand::Value(_) if is_any_match_op(op) => {
@@ -2372,6 +2669,19 @@ fn validate_compare_operands(
     }
 
     Ok(())
+}
+
+fn resolved_operand_has_multiple_relation(operand: &ResolvedOperand) -> bool {
+    match operand {
+        ResolvedOperand::Field { resolved, .. } => resolved
+            .relation
+            .as_ref()
+            .is_some_and(relation_has_multiple_step),
+        ResolvedOperand::Function { args, .. } => {
+            args.iter().any(resolved_operand_has_multiple_relation)
+        }
+        ResolvedOperand::Value(_) => false,
+    }
 }
 
 fn validate_strftime_args(args: &[ResolvedOperand]) -> Result<FieldKind, FilterError> {
@@ -2466,10 +2776,13 @@ fn validate_field_operation(
             }
             Ok(())
         } else {
-            Err(FilterError::new(format!(
-                "any-match operator {} is only allowed on array fields",
-                op_symbol(op)
-            )))
+            Err(FilterError::with_kind(
+                FilterErrorKind::InvalidOperator,
+                format!(
+                    "any-match operator {} is only allowed on array fields",
+                    op_symbol(op)
+                ),
+            ))
         };
     }
 
@@ -2643,6 +2956,20 @@ fn any_match_sql_op(op: CompareOp) -> Result<&'static str, FilterError> {
     }
 }
 
+fn compare_any_match_inner_op(op: CompareOp) -> Result<CompareOp, FilterError> {
+    match op {
+        CompareOp::AnyEq => Ok(CompareOp::Eq),
+        CompareOp::AnyNe => Ok(CompareOp::Ne),
+        CompareOp::AnyGt => Ok(CompareOp::Gt),
+        CompareOp::AnyGte => Ok(CompareOp::Gte),
+        CompareOp::AnyLt => Ok(CompareOp::Lt),
+        CompareOp::AnyLte => Ok(CompareOp::Lte),
+        CompareOp::AnyLike => Ok(CompareOp::Like),
+        CompareOp::AnyNotLike => Ok(CompareOp::NotLike),
+        _ => Err(FilterError::new("not an any-match operator")),
+    }
+}
+
 fn planned_operand_is_null_value(operand: &PlannedOperand) -> bool {
     matches!(operand, PlannedOperand::Value(Value::Null))
 }
@@ -2671,6 +2998,20 @@ fn plan_any_match_sql_op(op: PlanCompareOp) -> Result<&'static str, FilterError>
         PlanCompareOp::AnyLte => Ok("<="),
         PlanCompareOp::AnyLike => Ok("LIKE"),
         PlanCompareOp::AnyNotLike => Ok("NOT LIKE"),
+        _ => Err(FilterError::new("not an any-match operator")),
+    }
+}
+
+fn plan_any_match_inner_op(op: PlanCompareOp) -> Result<PlanCompareOp, FilterError> {
+    match op {
+        PlanCompareOp::AnyEq => Ok(PlanCompareOp::Eq),
+        PlanCompareOp::AnyNe => Ok(PlanCompareOp::Ne),
+        PlanCompareOp::AnyGt => Ok(PlanCompareOp::Gt),
+        PlanCompareOp::AnyGte => Ok(PlanCompareOp::Gte),
+        PlanCompareOp::AnyLt => Ok(PlanCompareOp::Lt),
+        PlanCompareOp::AnyLte => Ok(PlanCompareOp::Lte),
+        PlanCompareOp::AnyLike => Ok(PlanCompareOp::Like),
+        PlanCompareOp::AnyNotLike => Ok(PlanCompareOp::NotLike),
         _ => Err(FilterError::new("not an any-match operator")),
     }
 }
@@ -2724,22 +3065,18 @@ fn same_relation_steps(left: &RelationTraversal, right: &RelationTraversal) -> b
     left.steps == right.steps
 }
 
-fn validate_single_relation_chain(relation: &RelationTraversal) -> Result<(), FilterError> {
+fn relation_has_multiple_step(relation: &RelationTraversal) -> bool {
+    relation
+        .steps
+        .iter()
+        .any(|step| step.multiplicity == RelationMultiplicity::Multiple)
+}
+
+fn validate_relation_chain(relation: &RelationTraversal) -> Result<(), FilterError> {
     if relation.steps.is_empty() {
         return Err(FilterError::with_kind(
             FilterErrorKind::InvalidOperator,
             format!("relation '{}' has no traversal steps", relation.field_path),
-        ));
-    }
-
-    if relation
-        .steps
-        .iter()
-        .any(|step| step.multiplicity == RelationMultiplicity::Multiple)
-    {
-        return Err(FilterError::with_kind(
-            FilterErrorKind::InvalidOperator,
-            "multi-value relation SQL rendering is not implemented",
         ));
     }
 
