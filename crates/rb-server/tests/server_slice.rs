@@ -2078,6 +2078,12 @@ fn migrates_legacy_auth_tokens_with_expiration() {
                 record_id TEXT NOT NULL,
                 created TEXT NOT NULL
             );
+            CREATE TABLE "_rb_collections" (
+                name TEXT PRIMARY KEY NOT NULL,
+                schema_json TEXT NOT NULL,
+                created TEXT NOT NULL,
+                updated TEXT NOT NULL
+            );
             CREATE TABLE "_rb_records_users" (
                 id TEXT PRIMARY KEY NOT NULL,
                 data TEXT NOT NULL,
@@ -2085,6 +2091,22 @@ fn migrates_legacy_auth_tokens_with_expiration() {
                 updated TEXT NOT NULL
             );
             "#,
+        )
+        .unwrap();
+        conn.execute(
+            r#"
+            INSERT INTO "_rb_collections" (name, schema_json, created, updated)
+            VALUES (?1, ?2, ?3, ?3)
+            "#,
+            params![
+                "users",
+                serde_json::to_string(&CollectionConfig::auth(
+                    "users",
+                    [CollectionField::new("email", CollectionFieldKind::Email)]
+                ))
+                .unwrap(),
+                now.to_string()
+            ],
         )
         .unwrap();
         conn.execute(
@@ -3307,12 +3329,52 @@ fn manages_collections_by_id_and_projects_collection_responses() {
     let record = app.handle(
         HttpRequest::json(
             "POST",
-            "/api/collections/articles/records",
-            json!({"title": "Keep metadata sharp"}),
+            "/api/collections/posts_collection/records",
+            json!({"id": "post_1", "title": "Keep metadata sharp"}),
         )
         .unwrap(),
     );
     assert_eq!(record.status, 200);
+    assert_eq!(record.body["collectionId"], "posts_collection");
+    assert_eq!(record.body["collectionName"], "articles");
+
+    let record_by_collection_id = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts_collection/records/post_1",
+    ));
+    assert_eq!(record_by_collection_id.status, 200);
+    assert_eq!(
+        record_by_collection_id.body["collectionId"],
+        "posts_collection"
+    );
+    assert_eq!(record_by_collection_id.body["collectionName"], "articles");
+    assert_eq!(record_by_collection_id.body["title"], "Keep metadata sharp");
+
+    let updated_by_collection_id = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts_collection/records/post_1",
+            json!({"title": "Still sharp"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(updated_by_collection_id.status, 200);
+    assert_eq!(
+        updated_by_collection_id.body["collectionId"],
+        "posts_collection"
+    );
+    assert_eq!(updated_by_collection_id.body["title"], "Still sharp");
+
+    let list_by_collection_id = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts_collection/records",
+    ));
+    assert_eq!(list_by_collection_id.status, 200);
+    assert_eq!(list_by_collection_id.body["totalItems"], 1);
+    assert_eq!(
+        list_by_collection_id.body["items"][0]["collectionId"],
+        "posts_collection"
+    );
 
     let truncated = app.handle(HttpRequest::new(
         "DELETE",

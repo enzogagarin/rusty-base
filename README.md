@@ -300,6 +300,8 @@ The first server slice supports:
 - persisted collection IDs with collection metadata lookup/update/truncate/delete
   by either ID or name, plus `fields` projection on create/view/update
   responses;
+- record list/view/create/update/delete routes resolve collection IDs or names
+  and return PocketBase-style `collectionId` plus `collectionName`;
 - persisted collection field IDs with PocketBase-style `type` field metadata
   output while still accepting legacy Rusty Base `kind` input;
 - first common/text/select/url/editor field option metadata parity for
@@ -329,8 +331,8 @@ The first server slice supports:
 - `GET/PATCH /api/settings` for superuser-managed PocketBase-style app
   settings, including persisted meta/logs/batch/smtp/s3/backups/rate limit and
   trusted proxy sections with secret redaction;
-- `GET/POST /api/collections/:collection/records`;
-- `GET/PATCH/DELETE /api/collections/:collection/records/:id`;
+- `GET/POST /api/collections/:collectionIdOrName/records`;
+- `GET/PATCH/DELETE /api/collections/:collectionIdOrName/records/:id`;
 - JSON `POST /api/batch` for transactional record create/update/upsert/delete
   request batches, honoring the persisted batch `enabled`, `maxRequests`, and
   `maxBodySize` settings;

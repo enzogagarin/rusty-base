@@ -100,6 +100,8 @@ Responsibility:
   and response projection;
 - persist collection IDs and resolve collection management routes by either ID
   or name;
+- resolve record routes by collection ID or name and include PocketBase-style
+  `collectionId`/`collectionName` metadata in record responses;
 - persist collection field IDs and return PocketBase-style `type` metadata
   while preserving `kind` as accepted legacy input;
 - preserve first common/text/select/url/editor field option metadata used by

@@ -261,6 +261,8 @@ Exit criteria:
 - Added persisted collection IDs, collection metadata lookup/update/truncate/
   delete by ID or name, collection `id` filtering/sorting, and `fields`
   projection on collection create/view/update responses.
+- Added record route lookup by collection ID or name and PocketBase-style
+  `collectionId` metadata on record/auth responses.
 - Added persisted collection field IDs, PocketBase-style `type` field metadata
   responses, export/import field ID preservation, and backwards-compatible
   `kind` input parsing.

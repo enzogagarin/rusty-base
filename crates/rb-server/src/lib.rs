@@ -2056,6 +2056,7 @@ impl Store {
         context: FilterContext,
     ) -> Result<JsonValue, ServerError> {
         let collection = self.get_collection(collection_name)?;
+        let collection_name = collection.name.as_str();
         let object = data_object_mut(&mut data)?;
         let file_changes = prepare_file_changes(&collection, object, uploads, None)?;
         prepare_record_value_modifiers(&collection, object, None)?;
@@ -2072,6 +2073,7 @@ impl Store {
 
         object.remove("created");
         object.remove("updated");
+        object.remove("collectionId");
         object.remove("collectionName");
 
         let mut rule_data = data.clone();
@@ -2114,6 +2116,8 @@ impl Store {
     ) -> Result<JsonValue, ServerError> {
         validate_record_id(id)?;
         let collection = self.get_collection(collection_name)?;
+        let collection_name = collection.name.as_str();
+        let collection_id = record_collection_id(&collection);
         let resolver = RecordResolver::new(&collection);
         let mut params = vec![SqlValue::Text(id.to_string())];
         let mut where_parts = vec!["id = ?".to_string()];
@@ -2137,7 +2141,7 @@ impl Store {
         );
         let conn = self.connection()?;
         conn.query_row(&sql, params_from_iter(params.iter()), |row| {
-            row_to_record(collection_name, row)
+            row_to_record(collection_name, &collection_id, row)
         })
         .optional()?
         .ok_or_else(|| ServerError::NotFound(format!("record '{id}' not found")))
@@ -2149,6 +2153,8 @@ impl Store {
         options: ListOptions,
     ) -> Result<RecordList, ServerError> {
         let collection = self.get_collection(collection_name)?;
+        let collection_name = collection.name.as_str();
+        let collection_id = record_collection_id(&collection);
         let resolver = RecordResolver::new(&collection);
         let predicate = compile_list_predicate(&collection, &resolver, &options)?;
         let order_sql = record_sort_sql(&resolver, options.sort.as_deref())?;
@@ -2182,7 +2188,7 @@ impl Store {
 
             let mut stmt = conn.prepare(&list_sql)?;
             let rows = stmt.query_map(params_from_iter(list_params.iter()), |row| {
-                row_to_record(collection_name, row)
+                row_to_record(collection_name, &collection_id, row)
             })?;
             let items = rows.collect::<Result<Vec<_>, _>>()?;
             (total_items, items)
@@ -2257,6 +2263,7 @@ impl Store {
     ) -> Result<JsonValue, ServerError> {
         validate_record_id(id)?;
         let collection = self.get_collection(collection_name)?;
+        let collection_name = collection.name.as_str();
         let mut patch = patch;
         let mut existing = self.read_record(collection_name, id)?;
         let stored_files = {
@@ -2291,6 +2298,7 @@ impl Store {
         existing_object.remove("id");
         existing_object.remove("created");
         existing_object.remove("updated");
+        existing_object.remove("collectionId");
         existing_object.remove("collectionName");
 
         for (key, value) in patch_object {
@@ -2331,6 +2339,7 @@ impl Store {
     ) -> Result<(), ServerError> {
         validate_record_id(id)?;
         let collection = self.get_collection(collection_name)?;
+        let collection_name = collection.name.as_str();
         self.read_record(collection_name, id)?;
         if !is_superuser_context(&context) {
             self.enforce_existing_record_rule(
@@ -2385,6 +2394,8 @@ impl Store {
         password: &str,
     ) -> Result<AuthResponse, ServerError> {
         let collection = self.auth_collection(collection_name)?;
+        let collection_name = collection.name.as_str();
+        let collection_id = record_collection_id(&collection);
         let password_config = auth_password_config(&collection);
         if !password_config.enabled {
             return Err(invalid_credentials());
@@ -2435,7 +2446,7 @@ impl Store {
         Ok(AuthResponse {
             token,
             expires,
-            record: record_from_parts(collection_name, id, data, created, updated),
+            record: record_from_parts(collection_name, &collection_id, id, data, created, updated),
         })
     }
 
@@ -2445,6 +2456,8 @@ impl Store {
         token: &str,
     ) -> Result<AuthResponse, ServerError> {
         let collection = self.auth_collection(collection_name)?;
+        let collection_name = collection.name.as_str();
+        let collection_id = record_collection_id(&collection);
         let (token_collection_name, record_id, renewable) = self.valid_auth_token_subject(token)?;
         if token_collection_name != collection_name {
             return Err(ServerError::Forbidden("invalid auth token".to_string()));
@@ -2492,7 +2505,8 @@ impl Store {
             token: new_token,
             expires,
             record: record_from_parts(
-                &collection_name,
+                collection_name,
+                &collection_id,
                 id,
                 serde_json::from_str::<JsonValue>(&data)?,
                 created,
@@ -2508,6 +2522,8 @@ impl Store {
         duration_seconds: Option<u64>,
     ) -> Result<AuthResponse, ServerError> {
         let collection = self.auth_collection(collection_name)?;
+        let collection_name = collection.name.as_str();
+        let collection_id = record_collection_id(&collection);
         validate_record_id(record_id)?;
 
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
@@ -2544,6 +2560,7 @@ impl Store {
             expires,
             record: record_from_parts(
                 collection_name,
+                &collection_id,
                 id,
                 serde_json::from_str::<JsonValue>(&data)?,
                 created,
@@ -2613,6 +2630,8 @@ impl Store {
         password: &str,
     ) -> Result<AuthResponse, ServerError> {
         let collection = self.auth_collection(collection_name)?;
+        let collection_name = collection.name.as_str();
+        let collection_id = record_collection_id(&collection);
         let conn = self.connection()?;
         let (record_id, token_data) =
             match auth_action_subject_data(&conn, collection_name, AuthActionKind::Otp, otp_id) {
@@ -2672,7 +2691,7 @@ impl Store {
         Ok(AuthResponse {
             token,
             expires,
-            record: record_from_parts(collection_name, id, data, created, updated),
+            record: record_from_parts(collection_name, &collection_id, id, data, created, updated),
         })
     }
 
@@ -2684,6 +2703,8 @@ impl Store {
         create_data: &JsonValue,
     ) -> Result<(AuthResponse, JsonValue), ServerError> {
         let collection = self.auth_collection(collection_name)?;
+        let collection_name = collection.name.as_str();
+        let collection_id = record_collection_id(&collection);
         ensure_oauth2_provider_configured(&collection, provider)?;
         let conn = self.connection()?;
         let linked_record_id = conn
@@ -2781,7 +2802,14 @@ impl Store {
             AuthResponse {
                 token,
                 expires,
-                record: record_from_parts(collection_name, id, data, created, updated),
+                record: record_from_parts(
+                    collection_name,
+                    &collection_id,
+                    id,
+                    data,
+                    created,
+                    updated,
+                ),
             },
             meta,
         ))
@@ -3538,12 +3566,15 @@ impl Store {
     fn read_record(&self, collection_name: &str, id: &str) -> Result<JsonValue, ServerError> {
         validate_record_id(id)?;
 
+        let collection = self.get_collection(collection_name)?;
+        let collection_name = collection.name.as_str();
+        let collection_id = record_collection_id(&collection);
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
         let conn = self.connection()?;
         conn.query_row(
             &format!("SELECT id, data, created, updated FROM {table_sql} WHERE id = ?1 LIMIT 1"),
             params![id],
-            |row| row_to_record(collection_name, row),
+            |row| row_to_record(collection_name, &collection_id, row),
         )
         .optional()?
         .ok_or_else(|| ServerError::NotFound(format!("record '{id}' not found")))
@@ -5925,6 +5956,7 @@ fn insert_oauth2_auth_record_tx(
     object.remove("id");
     object.remove("created");
     object.remove("updated");
+    object.remove("collectionId");
     object.remove("collectionName");
     object.remove("password");
     object.remove("passwordConfirm");
@@ -6607,7 +6639,11 @@ fn json_to_filter_value(value: &JsonValue) -> FilterValue {
     }
 }
 
-fn row_to_record(collection_name: &str, row: &rusqlite::Row<'_>) -> rusqlite::Result<JsonValue> {
+fn row_to_record(
+    collection_name: &str,
+    collection_id: &str,
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<JsonValue> {
     let id = row.get::<_, String>(0)?;
     let data = row.get::<_, String>(1)?;
     let created = row.get::<_, String>(2)?;
@@ -6616,6 +6652,7 @@ fn row_to_record(collection_name: &str, row: &rusqlite::Row<'_>) -> rusqlite::Re
 
     Ok(record_from_parts(
         collection_name,
+        collection_id,
         id,
         data,
         created,
@@ -6652,12 +6689,17 @@ fn collection_id_value(collection: &CollectionConfig) -> Option<String> {
         .map(str::to_string)
 }
 
+fn record_collection_id(collection: &CollectionConfig) -> String {
+    collection_id_value(collection).unwrap_or_else(|| collection.name.clone())
+}
+
 fn collection_id_sql() -> String {
     r#"COALESCE(NULLIF(json_extract("schema_json", '$.id'), ''), "name")"#.to_string()
 }
 
 fn record_from_parts(
     collection_name: &str,
+    collection_id: &str,
     id: String,
     data: JsonValue,
     created: String,
@@ -6670,6 +6712,10 @@ fn record_from_parts(
 
     record.remove("passwordHash");
     record.insert("id".to_string(), JsonValue::String(id));
+    record.insert(
+        "collectionId".to_string(),
+        JsonValue::String(collection_id.to_string()),
+    );
     record.insert(
         "collectionName".to_string(),
         JsonValue::String(collection_name.to_string()),
@@ -9758,7 +9804,7 @@ fn data_object_mut(value: &mut JsonValue) -> Result<&mut Map<String, JsonValue>,
 fn is_system_record_key(key: &str) -> bool {
     matches!(
         key,
-        "id" | "created" | "updated" | "collectionName" | "passwordHash"
+        "id" | "created" | "updated" | "collectionId" | "collectionName" | "passwordHash"
     )
 }
 
