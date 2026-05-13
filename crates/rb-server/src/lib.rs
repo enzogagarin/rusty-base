@@ -212,6 +212,7 @@ impl CollectionField {
 pub enum CollectionFieldKind {
     Text,
     Email,
+    File,
     Number,
     Bool,
     #[serde(rename = "datetime")]
@@ -226,6 +227,7 @@ impl From<CollectionFieldKind> for FieldKind {
         match value {
             CollectionFieldKind::Text => Self::Text,
             CollectionFieldKind::Email => Self::Text,
+            CollectionFieldKind::File => Self::Text,
             CollectionFieldKind::Number => Self::Number,
             CollectionFieldKind::Bool => Self::Bool,
             CollectionFieldKind::DateTime => Self::DateTime,
@@ -274,6 +276,28 @@ pub struct AuthResponse {
     pub token: String,
     pub expires: String,
     pub record: JsonValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileUpload {
+    field_name: String,
+    original_name: String,
+    content_type: String,
+    data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StoredFileInput {
+    field_name: String,
+    filename: String,
+    content_type: String,
+    data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StoredFile {
+    content_type: String,
+    data: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -485,6 +509,16 @@ impl Store {
                 created TEXT NOT NULL,
                 expires TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS "_rb_files" (
+                collection_name TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                field_name TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                content_type TEXT NOT NULL,
+                data BLOB NOT NULL,
+                created TEXT NOT NULL,
+                PRIMARY KEY (collection_name, record_id, filename)
+            );
             "#,
         )?;
         ensure_auth_token_expires_column(&conn)?;
@@ -598,6 +632,10 @@ impl Store {
                 r#"UPDATE "_rb_auth_action_tokens" SET collection_name = ?1 WHERE collection_name = ?2"#,
                 params![&new_name, old_name],
             )?;
+            tx.execute(
+                r#"UPDATE "_rb_files" SET collection_name = ?1 WHERE collection_name = ?2"#,
+                params![&new_name, old_name],
+            )?;
         }
 
         let affected = tx.execute(
@@ -649,6 +687,10 @@ impl Store {
                 )?;
                 tx.execute(
                     r#"DELETE FROM "_rb_auth_action_tokens" WHERE collection_name = ?1"#,
+                    params![name],
+                )?;
+                tx.execute(
+                    r#"DELETE FROM "_rb_files" WHERE collection_name = ?1"#,
                     params![name],
                 )?;
                 tx.execute(
@@ -739,6 +781,10 @@ impl Store {
             r#"DELETE FROM "_rb_auth_action_tokens" WHERE collection_name = ?1"#,
             params![name],
         )?;
+        tx.execute(
+            r#"DELETE FROM "_rb_files" WHERE collection_name = ?1"#,
+            params![name],
+        )?;
         let affected = tx.execute(
             r#"DELETE FROM "_rb_collections" WHERE name = ?1"#,
             params![name],
@@ -767,6 +813,10 @@ impl Store {
             r#"DELETE FROM "_rb_auth_action_tokens" WHERE collection_name = ?1"#,
             params![name],
         )?;
+        conn.execute(
+            r#"DELETE FROM "_rb_files" WHERE collection_name = ?1"#,
+            params![name],
+        )?;
         Ok(())
     }
 
@@ -781,11 +831,22 @@ impl Store {
     pub fn create_record_with_context(
         &self,
         collection_name: &str,
+        data: JsonValue,
+        context: FilterContext,
+    ) -> Result<JsonValue, ServerError> {
+        self.create_record_with_uploads(collection_name, data, Vec::new(), context)
+    }
+
+    fn create_record_with_uploads(
+        &self,
+        collection_name: &str,
         mut data: JsonValue,
+        uploads: Vec<FileUpload>,
         context: FilterContext,
     ) -> Result<JsonValue, ServerError> {
         let collection = self.get_collection(collection_name)?;
         let object = data_object_mut(&mut data)?;
+        let stored_files = prepare_file_uploads(&collection, object, uploads)?;
         validate_record_fields(&collection, object)?;
         prepare_auth_password(&collection, object, true)?;
 
@@ -822,6 +883,7 @@ impl Store {
             ),
             params![id, data_json, now],
         )?;
+        store_file_uploads(&conn, collection_name, &id, &stored_files)?;
         drop(conn);
 
         self.read_record(collection_name, &id)
@@ -955,9 +1017,24 @@ impl Store {
         patch: JsonValue,
         context: FilterContext,
     ) -> Result<JsonValue, ServerError> {
+        self.update_record_with_uploads(collection_name, id, patch, Vec::new(), context)
+    }
+
+    fn update_record_with_uploads(
+        &self,
+        collection_name: &str,
+        id: &str,
+        patch: JsonValue,
+        uploads: Vec<FileUpload>,
+        context: FilterContext,
+    ) -> Result<JsonValue, ServerError> {
         validate_record_id(id)?;
         let collection = self.get_collection(collection_name)?;
         let mut patch = patch;
+        let stored_files = {
+            let patch_object = data_object_mut(&mut patch)?;
+            prepare_file_uploads(&collection, patch_object, uploads)?
+        };
         {
             let patch_object = data_object_mut(&mut patch)?;
             validate_record_fields(&collection, patch_object)?;
@@ -995,6 +1072,7 @@ impl Store {
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
         let data_json = serde_json::to_string(&existing)?;
         let conn = self.connection()?;
+        delete_replaced_file_fields(&conn, collection_name, id, &stored_files)?;
         let affected = conn.execute(
             &format!("UPDATE {table_sql} SET data = ?1, updated = ?2 WHERE id = ?3"),
             params![data_json, now, id],
@@ -1002,6 +1080,7 @@ impl Store {
         if affected == 0 {
             return Err(ServerError::NotFound(format!("record '{id}' not found")));
         }
+        store_file_uploads(&conn, collection_name, id, &stored_files)?;
         drop(conn);
 
         self.read_record(collection_name, id)
@@ -1038,6 +1117,10 @@ impl Store {
         if affected == 0 {
             return Err(ServerError::NotFound(format!("record '{id}' not found")));
         }
+        conn.execute(
+            r#"DELETE FROM "_rb_files" WHERE collection_name = ?1 AND record_id = ?2"#,
+            params![collection_name, id],
+        )?;
         if collection.collection_type == CollectionType::Auth {
             conn.execute(
                 r#"DELETE FROM "_rb_auth_tokens" WHERE collection_name = ?1 AND record_id = ?2"#,
@@ -1388,6 +1471,36 @@ impl Store {
         Ok(())
     }
 
+    fn get_file(
+        &self,
+        collection_name: &str,
+        record_id: &str,
+        filename: &str,
+    ) -> Result<StoredFile, ServerError> {
+        validate_collection_name(collection_name)?;
+        validate_record_id(record_id)?;
+        validate_file_name(filename)?;
+
+        let conn = self.connection()?;
+        conn.query_row(
+            r#"
+            SELECT content_type, data
+            FROM "_rb_files"
+            WHERE collection_name = ?1 AND record_id = ?2 AND filename = ?3
+            LIMIT 1
+            "#,
+            params![collection_name, record_id, filename],
+            |row| {
+                Ok(StoredFile {
+                    content_type: row.get::<_, String>(0)?,
+                    data: row.get::<_, Vec<u8>>(1)?,
+                })
+            },
+        )
+        .optional()?
+        .ok_or_else(|| ServerError::NotFound(format!("file '{filename}' not found")))
+    }
+
     fn expand_records(
         &self,
         collection: &CollectionConfig,
@@ -1677,6 +1790,12 @@ impl RustyBaseApp {
                 200,
                 json!({"code": 200, "message": "API is healthy."}),
             )),
+            ("GET", ["api", "files", collection, record_id, filename]) => {
+                let context = self.request_context(&request, &query)?;
+                self.store.get_record(collection, record_id, context)?;
+                let file = self.store.get_file(collection, record_id, filename)?;
+                Ok(HttpResponse::bytes(200, file.content_type, file.data))
+            }
             ("GET", ["api", "collections"]) => {
                 let collections = self.store.list_collections()?;
                 Ok(HttpResponse::json(200, json!({"items": collections})))
@@ -1802,11 +1921,15 @@ impl RustyBaseApp {
                 Ok(HttpResponse::json(200, json!(list)))
             }
             ("POST", ["api", "collections", collection, "records"]) => {
-                let data: JsonValue = serde_json::from_slice(&request.body)?;
+                let collection_config = self.store.get_collection(collection)?;
+                let (data, uploads) = record_payload_from_request(&request, &collection_config)?;
                 let context = self.request_context(&request, &query)?;
-                let mut record =
-                    self.store
-                        .create_record_with_context(collection, data, context.clone())?;
+                let mut record = self.store.create_record_with_uploads(
+                    collection,
+                    data,
+                    uploads,
+                    context.clone(),
+                )?;
                 let expands = expand_options_from_query(&query)?;
                 self.store
                     .expand_record_response(collection, &mut record, &expands, &context)?;
@@ -1825,12 +1948,14 @@ impl RustyBaseApp {
                 Ok(HttpResponse::json(200, record))
             }
             ("PATCH", ["api", "collections", collection, "records", id]) => {
-                let patch: JsonValue = serde_json::from_slice(&request.body)?;
+                let collection_config = self.store.get_collection(collection)?;
+                let (patch, uploads) = record_payload_from_request(&request, &collection_config)?;
                 let context = self.request_context(&request, &query)?;
-                let mut record = self.store.update_record_with_context(
+                let mut record = self.store.update_record_with_uploads(
                     collection,
                     id,
                     patch,
+                    uploads,
                     context.clone(),
                 )?;
                 let expands = expand_options_from_query(&query)?;
@@ -1912,11 +2037,27 @@ impl HttpRequest {
 pub struct HttpResponse {
     pub status: u16,
     pub body: JsonValue,
+    pub content_type: String,
+    pub raw_body: Vec<u8>,
 }
 
 impl HttpResponse {
     pub fn json(status: u16, body: JsonValue) -> Self {
-        Self { status, body }
+        Self {
+            status,
+            body,
+            content_type: "application/json".to_string(),
+            raw_body: Vec::new(),
+        }
+    }
+
+    pub fn bytes(status: u16, content_type: impl Into<String>, body: Vec<u8>) -> Self {
+        Self {
+            status,
+            body: JsonValue::Null,
+            content_type: content_type.into(),
+            raw_body: body,
+        }
     }
 
     pub fn to_http_bytes(&self) -> Vec<u8> {
@@ -1931,13 +2072,16 @@ impl HttpResponse {
         };
         let body = if self.status == 204 {
             Vec::new()
-        } else {
+        } else if self.content_type == "application/json" && self.raw_body.is_empty() {
             serde_json::to_vec(&self.body).unwrap_or_else(|_| b"{}".to_vec())
+        } else {
+            self.raw_body.clone()
         };
         format!(
-            "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             self.status,
             status_text,
+            self.content_type,
             body.len()
         )
         .into_bytes()
@@ -2376,6 +2520,249 @@ fn auth_identity_fields(collection: &CollectionConfig) -> Vec<String> {
         .filter(|field| field.name == "email" || field.name == "username")
         .map(|field| field.name.clone())
         .collect()
+}
+
+fn record_payload_from_request(
+    request: &HttpRequest,
+    collection: &CollectionConfig,
+) -> Result<(JsonValue, Vec<FileUpload>), ServerError> {
+    let Some(boundary) = multipart_boundary(request) else {
+        return Ok((serde_json::from_slice(&request.body)?, Vec::new()));
+    };
+
+    multipart_record_payload(&request.body, &boundary, collection)
+}
+
+fn multipart_boundary(request: &HttpRequest) -> Option<String> {
+    let content_type = request.headers.get("content-type")?;
+    let mut parts = content_type.split(';').map(str::trim);
+    if !parts
+        .next()
+        .is_some_and(|value| value.eq_ignore_ascii_case("multipart/form-data"))
+    {
+        return None;
+    }
+
+    for part in parts {
+        let Some((name, value)) = part.split_once('=') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case("boundary") {
+            return Some(value.trim().trim_matches('"').to_string());
+        }
+    }
+
+    None
+}
+
+fn multipart_record_payload(
+    body: &[u8],
+    boundary: &str,
+    collection: &CollectionConfig,
+) -> Result<(JsonValue, Vec<FileUpload>), ServerError> {
+    let mut object = Map::new();
+    let mut uploads = Vec::new();
+    let file_fields = collection
+        .fields
+        .iter()
+        .filter(|field| field.kind == CollectionFieldKind::File)
+        .map(|field| field.name.as_str())
+        .collect::<HashSet<_>>();
+
+    for part in parse_multipart_parts(body, boundary)? {
+        let Some(name) = part.name else {
+            continue;
+        };
+
+        if let Some(filename) = part.filename {
+            uploads.push(FileUpload {
+                field_name: name,
+                original_name: filename,
+                content_type: part
+                    .content_type
+                    .unwrap_or_else(|| "application/octet-stream".to_string()),
+                data: part.data,
+            });
+            continue;
+        }
+
+        let value = String::from_utf8(part.data).map_err(|_| {
+            ServerError::BadRequest("multipart form field must be valid UTF-8".to_string())
+        })?;
+        if file_fields.contains(name.as_str()) && value.is_empty() {
+            continue;
+        }
+        let value = multipart_text_value(collection, &name, value)?;
+        insert_form_value(&mut object, name, value);
+    }
+
+    Ok((JsonValue::Object(object), uploads))
+}
+
+fn multipart_text_value(
+    collection: &CollectionConfig,
+    name: &str,
+    value: String,
+) -> Result<JsonValue, ServerError> {
+    let Some(field) = collection.fields.iter().find(|field| field.name == name) else {
+        return Ok(JsonValue::String(value));
+    };
+
+    match field.kind {
+        CollectionFieldKind::Bool => match value.as_str() {
+            "true" => Ok(JsonValue::Bool(true)),
+            "false" => Ok(JsonValue::Bool(false)),
+            _ => Err(validation_error(
+                "Failed to validate record.",
+                name,
+                "validation_invalid_bool",
+                format!("Field '{name}' must be a boolean."),
+            )),
+        },
+        CollectionFieldKind::Number => value
+            .parse::<serde_json::Number>()
+            .map(JsonValue::Number)
+            .map_err(|_| {
+                validation_error(
+                    "Failed to validate record.",
+                    name,
+                    "validation_invalid_number",
+                    format!("Field '{name}' must be a number."),
+                )
+            }),
+        CollectionFieldKind::Array | CollectionFieldKind::Json => serde_json::from_str(&value)
+            .map_err(|_| {
+                validation_error(
+                    "Failed to validate record.",
+                    name,
+                    "validation_invalid_json",
+                    format!("Field '{name}' must be valid JSON."),
+                )
+            }),
+        _ => Ok(JsonValue::String(value)),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MultipartPart {
+    name: Option<String>,
+    filename: Option<String>,
+    content_type: Option<String>,
+    data: Vec<u8>,
+}
+
+fn parse_multipart_parts(body: &[u8], boundary: &str) -> Result<Vec<MultipartPart>, ServerError> {
+    if boundary.is_empty() {
+        return Err(ServerError::BadRequest(
+            "multipart boundary is required".to_string(),
+        ));
+    }
+
+    let marker = format!("--{boundary}").into_bytes();
+    let mut cursor = find_subslice(body, &marker)
+        .ok_or_else(|| ServerError::BadRequest("multipart boundary not found".to_string()))?;
+    let mut parts = Vec::new();
+
+    loop {
+        if !body[cursor..].starts_with(&marker) {
+            return Err(ServerError::BadRequest(
+                "invalid multipart boundary".to_string(),
+            ));
+        }
+        cursor += marker.len();
+
+        if body[cursor..].starts_with(b"--") {
+            break;
+        }
+        if body[cursor..].starts_with(b"\r\n") {
+            cursor += 2;
+        }
+
+        let header_len = find_subslice(&body[cursor..], b"\r\n\r\n")
+            .ok_or_else(|| ServerError::BadRequest("multipart headers not closed".to_string()))?;
+        let header_bytes = &body[cursor..cursor + header_len];
+        cursor += header_len + 4;
+
+        let next_boundary = find_subslice(&body[cursor..], &boundary_separator(&marker))
+            .ok_or_else(|| ServerError::BadRequest("multipart part not closed".to_string()))?;
+        let data = body[cursor..cursor + next_boundary].to_vec();
+        cursor += next_boundary + 2;
+
+        parts.push(parse_multipart_part(header_bytes, data)?);
+    }
+
+    Ok(parts)
+}
+
+fn boundary_separator(marker: &[u8]) -> Vec<u8> {
+    let mut separator = Vec::with_capacity(marker.len() + 2);
+    separator.extend_from_slice(b"\r\n");
+    separator.extend_from_slice(marker);
+    separator
+}
+
+fn parse_multipart_part(headers: &[u8], data: Vec<u8>) -> Result<MultipartPart, ServerError> {
+    let headers = std::str::from_utf8(headers)
+        .map_err(|_| ServerError::BadRequest("multipart headers must be UTF-8".to_string()))?;
+    let mut name = None;
+    let mut filename = None;
+    let mut content_type = None;
+
+    for line in headers.split("\r\n") {
+        let Some((header_name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if header_name.eq_ignore_ascii_case("content-disposition") {
+            name = quoted_header_param(value, "name");
+            filename = quoted_header_param(value, "filename");
+        } else if header_name.eq_ignore_ascii_case("content-type") {
+            content_type = Some(value.trim().to_string());
+        }
+    }
+
+    Ok(MultipartPart {
+        name,
+        filename,
+        content_type,
+        data,
+    })
+}
+
+fn quoted_header_param(value: &str, param: &str) -> Option<String> {
+    for part in value.split(';').map(str::trim) {
+        let Some((name, raw_value)) = part.split_once('=') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case(param) {
+            return Some(raw_value.trim().trim_matches('"').to_string());
+        }
+    }
+
+    None
+}
+
+fn insert_form_value(object: &mut Map<String, JsonValue>, name: String, value: JsonValue) {
+    if let Some(existing) = object.get_mut(&name) {
+        match existing {
+            JsonValue::Array(values) => values.push(value),
+            other => {
+                let first = std::mem::take(other);
+                *other = JsonValue::Array(vec![first, value]);
+            }
+        }
+    } else {
+        object.insert(name, value);
+    }
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn project_record_response(record: &mut JsonValue, fields: &[String]) -> Result<(), ServerError> {
@@ -3229,6 +3616,194 @@ fn validate_field_name(name: &str) -> Result<(), ServerError> {
     }
 }
 
+fn prepare_file_uploads(
+    collection: &CollectionConfig,
+    object: &mut Map<String, JsonValue>,
+    uploads: Vec<FileUpload>,
+) -> Result<Vec<StoredFileInput>, ServerError> {
+    let mut grouped: HashMap<String, Vec<FileUpload>> = HashMap::new();
+    for upload in uploads {
+        grouped
+            .entry(upload.field_name.clone())
+            .or_default()
+            .push(upload);
+    }
+
+    let mut stored = Vec::new();
+    for (field_name, uploads) in grouped {
+        let field = collection
+            .fields
+            .iter()
+            .find(|field| field.name == field_name)
+            .ok_or_else(|| {
+                validation_error(
+                    "Failed to validate record.",
+                    &field_name,
+                    "validation_unknown_field",
+                    format!("Unknown field for collection '{}'.", collection.name),
+                )
+            })?;
+        if field.kind != CollectionFieldKind::File {
+            return Err(validation_error(
+                "Failed to validate record.",
+                &field_name,
+                "validation_invalid_file_field",
+                "Uploaded files are only allowed on file fields.",
+            ));
+        }
+
+        let max_select = field.max_select.unwrap_or(1).max(1);
+        if uploads.len() as u64 > max_select {
+            return Err(validation_error(
+                "Failed to validate record.",
+                &field_name,
+                "validation_max_select",
+                format!("Field '{field_name}' accepts at most {max_select} file(s)."),
+            ));
+        }
+
+        let mut filenames = Vec::new();
+        for upload in uploads {
+            let filename = stored_file_name(&upload.original_name);
+            validate_file_name(&filename)?;
+            filenames.push(JsonValue::String(filename.clone()));
+            stored.push(StoredFileInput {
+                field_name: field_name.clone(),
+                filename,
+                content_type: normalize_content_type(&upload.content_type),
+                data: upload.data,
+            });
+        }
+
+        let value = if max_select <= 1 {
+            filenames
+                .into_iter()
+                .next()
+                .unwrap_or(JsonValue::String(String::new()))
+        } else {
+            JsonValue::Array(filenames)
+        };
+        object.insert(field_name, value);
+    }
+
+    Ok(stored)
+}
+
+fn store_file_uploads(
+    conn: &Connection,
+    collection_name: &str,
+    record_id: &str,
+    files: &[StoredFileInput],
+) -> Result<(), ServerError> {
+    let now = now_timestamp();
+    for file in files {
+        conn.execute(
+            r#"
+            INSERT OR REPLACE INTO "_rb_files"
+                (collection_name, record_id, field_name, filename, content_type, data, created)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+            params![
+                collection_name,
+                record_id,
+                &file.field_name,
+                &file.filename,
+                &file.content_type,
+                &file.data,
+                &now
+            ],
+        )?;
+    }
+
+    Ok(())
+}
+
+fn delete_replaced_file_fields(
+    conn: &Connection,
+    collection_name: &str,
+    record_id: &str,
+    files: &[StoredFileInput],
+) -> Result<(), ServerError> {
+    let fields = files
+        .iter()
+        .map(|file| file.field_name.as_str())
+        .collect::<HashSet<_>>();
+    for field in fields {
+        conn.execute(
+            r#"
+            DELETE FROM "_rb_files"
+            WHERE collection_name = ?1 AND record_id = ?2 AND field_name = ?3
+            "#,
+            params![collection_name, record_id, field],
+        )?;
+    }
+
+    Ok(())
+}
+
+fn stored_file_name(original: &str) -> String {
+    let basename = original
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("file");
+    let sanitized = sanitize_file_name(basename);
+    let suffix = generate_file_suffix();
+
+    if let Some((stem, ext)) = sanitized.rsplit_once('.') {
+        if !stem.is_empty() && !ext.is_empty() {
+            return format!("{stem}_{suffix}.{ext}");
+        }
+    }
+
+    format!("{sanitized}_{suffix}")
+}
+
+fn sanitize_file_name(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('.')
+        .to_string();
+
+    if sanitized.is_empty() {
+        "file".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn normalize_content_type(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        "application/octet-stream".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn validate_file_name(name: &str) -> Result<(), ServerError> {
+    if !name.is_empty()
+        && name.len() <= 255
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.chars().any(char::is_control)
+    {
+        Ok(())
+    } else {
+        Err(ServerError::BadRequest(format!(
+            "unsafe file name '{name}'"
+        )))
+    }
+}
+
 fn validate_record_fields(
     collection: &CollectionConfig,
     object: &Map<String, JsonValue>,
@@ -3459,6 +4034,12 @@ fn generate_token() -> String {
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
     format!("rb_{}", hex_encode(&bytes))
+}
+
+fn generate_file_suffix() -> String {
+    let mut bytes = [0u8; 5];
+    OsRng.fill_bytes(&mut bytes);
+    hex_encode(&bytes)
 }
 
 fn hash_password(password: &str) -> Result<String, ServerError> {

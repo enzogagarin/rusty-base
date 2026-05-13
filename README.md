@@ -300,6 +300,9 @@ The first server slice supports:
   `DELETE /api/collections/:collection/truncate`;
 - `GET/POST /api/collections/:collection/records`;
 - `GET/PATCH/DELETE /api/collections/:collection/records/:id`;
+- PocketBase-style `file` collection field input, multipart record
+  create/update uploads, and `GET /api/files/:collection/:record/:filename`
+  downloads backed by the first SQLite file store;
 - PocketBase-like list response shape with `page`, `perPage`, `totalItems`,
   `totalPages`, and `items`;
 - first `?expand=relation,nested.relation` support for relation record
@@ -350,12 +353,14 @@ Not implemented yet:
 - full PocketBase `fexpr` grammar compatibility;
 - full PocketBase modifier compatibility for uploaded files and relation-edge
   cases;
+- file thumbnails, protected files, S3/local filesystem adapters, and large-file
+  streaming beyond the current SQLite-backed file MVP;
 - cross-collection identifiers such as `@collection.*`;
 - full PocketBase auth provider/settings parity beyond the current
   password/verification/reset token flow;
 - exact PocketBase admin API/export compatibility;
 - complete relation `expand` edge-case parity and relation permission fixtures;
-- files, realtime, and admin UI;
+- realtime and admin UI;
 - Go FFI bindings;
 - `cargo-fuzz` corpus and CI fuzz target;
 - benchmark suite.

@@ -1030,6 +1030,106 @@ fn handles_pocketbase_style_records_http_routes() {
 }
 
 #[test]
+fn uploads_and_serves_file_fields() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let collection_response = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "docs",
+                "fields": [
+                    {"name": "title", "kind": "text"},
+                    {"name": "public", "kind": "bool"},
+                    {"name": "attachment", "type": "file", "maxSelect": 1},
+                    {"name": "documents", "type": "file", "maxSelect": 3}
+                ],
+                "viewRule": "public = true"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(collection_response.status, 200);
+
+    let created = app.handle(multipart_request(
+        "POST",
+        "/api/collections/docs/records",
+        "rb-boundary",
+        vec![
+            multipart_field("id", "doc_1"),
+            multipart_field("title", "Rusty files"),
+            multipart_field("public", "true"),
+            multipart_file("attachment", "hello.txt", "text/plain", b"hello file"),
+            multipart_file("documents", "one.txt", "text/plain", b"one"),
+            multipart_file("documents", "two.txt", "text/plain", b"two"),
+        ],
+    ));
+    assert_eq!(created.status, 200);
+    assert_eq!(created.body["id"], "doc_1");
+    assert_eq!(created.body["title"], "Rusty files");
+    let attachment = created.body["attachment"].as_str().unwrap().to_string();
+    assert!(attachment.starts_with("hello_"));
+    assert!(attachment.ends_with(".txt"));
+    assert_eq!(created.body["documents"].as_array().unwrap().len(), 2);
+
+    let file = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/docs/doc_1/{attachment}"),
+    ));
+    assert_eq!(file.status, 200);
+    assert_eq!(file.content_type, "text/plain");
+    assert_eq!(file.raw_body, b"hello file");
+
+    let replaced = app.handle(multipart_request(
+        "PATCH",
+        "/api/collections/docs/records/doc_1",
+        "rb-boundary-2",
+        vec![multipart_file(
+            "attachment",
+            "updated.md",
+            "text/markdown",
+            b"# updated",
+        )],
+    ));
+    assert_eq!(replaced.status, 200);
+    let updated_attachment = replaced.body["attachment"].as_str().unwrap().to_string();
+    assert_ne!(updated_attachment, attachment);
+    assert!(updated_attachment.starts_with("updated_"));
+    assert_eq!(replaced.body["documents"].as_array().unwrap().len(), 2);
+
+    let old_file = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/docs/doc_1/{attachment}"),
+    ));
+    assert_eq!(old_file.status, 404);
+
+    let updated_file = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/docs/doc_1/{updated_attachment}"),
+    ));
+    assert_eq!(updated_file.status, 200);
+    assert_eq!(updated_file.content_type, "text/markdown");
+    assert_eq!(updated_file.raw_body, b"# updated");
+
+    let private = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/docs/records/doc_1",
+            json!({"public": false}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(private.status, 200);
+
+    let blocked = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/docs/doc_1/{updated_attachment}"),
+    ));
+    assert_eq!(blocked.status, 404);
+}
+
+#[test]
 fn updates_collections_and_renames_record_tables() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
@@ -1782,6 +1882,75 @@ fn updates_and_deletes_records() {
     store.delete_record("posts", "post_1").unwrap();
     let list = store.list_records("posts", ListOptions::default()).unwrap();
     assert_eq!(list.total_items, 0);
+}
+
+struct MultipartTestPart {
+    name: &'static str,
+    filename: Option<&'static str>,
+    content_type: Option<&'static str>,
+    data: Vec<u8>,
+}
+
+fn multipart_field(name: &'static str, value: &'static str) -> MultipartTestPart {
+    MultipartTestPart {
+        name,
+        filename: None,
+        content_type: None,
+        data: value.as_bytes().to_vec(),
+    }
+}
+
+fn multipart_file(
+    name: &'static str,
+    filename: &'static str,
+    content_type: &'static str,
+    data: &'static [u8],
+) -> MultipartTestPart {
+    MultipartTestPart {
+        name,
+        filename: Some(filename),
+        content_type: Some(content_type),
+        data: data.to_vec(),
+    }
+}
+
+fn multipart_request(
+    method: &'static str,
+    path: &'static str,
+    boundary: &'static str,
+    parts: Vec<MultipartTestPart>,
+) -> HttpRequest {
+    let mut body = Vec::new();
+    for part in parts {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        if let Some(filename) = part.filename {
+            body.extend_from_slice(
+                format!(
+                    "Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\n",
+                    part.name, filename
+                )
+                .as_bytes(),
+            );
+        } else {
+            body.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{}\"\r\n", part.name).as_bytes(),
+            );
+        }
+        if let Some(content_type) = part.content_type {
+            body.extend_from_slice(format!("Content-Type: {content_type}\r\n").as_bytes());
+        }
+        body.extend_from_slice(b"\r\n");
+        body.extend_from_slice(&part.data);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let mut request = HttpRequest::new(method, path).with_header(
+        "content-type",
+        format!("multipart/form-data; boundary={boundary}"),
+    );
+    request.body = body;
+    request
 }
 
 fn posts_collection() -> CollectionConfig {

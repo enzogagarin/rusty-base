@@ -212,6 +212,10 @@ Exit criteria:
   flows backed by short-lived opaque action tokens.
 - Added password-reset token confirmation that updates the auth record password
   hash and invalidates existing auth tokens for the record.
+- Added the first file-field MVP: PocketBase-style `file` fields,
+  multipart record create/update uploads, SQLite-backed file blob storage,
+  filename sanitization/suffixing, and `/api/files/:collection/:record/:file`
+  downloads gated by the target record `viewRule`.
 
 ## Next Sprint
 
@@ -219,7 +223,7 @@ Exit criteria:
 2. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 3. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.
-4. Expand PocketBase-compatible relation-edge and uploaded-file modifier
-   fixtures.
+4. Expand PocketBase-compatible uploaded-file modifiers (`field+`, `+field`,
+   `field-`), thumbnails, and protected-file fixtures.
 5. Add auth route coverage beyond password/refresh/reset: email change, OTP,
    and OAuth placeholders where useful.

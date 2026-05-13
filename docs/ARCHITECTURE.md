@@ -54,6 +54,8 @@ Responsibility:
 - provide the first PocketBase-style HTTP shell;
 - store collection metadata in SQLite;
 - store record data in per-collection SQLite tables;
+- store the first uploaded file blobs in SQLite for the current MVP and serve
+  them through `/api/files/:collection/:record/:filename`;
 - support auth collections with Argon2 password hashes and expiring bearer
   tokens;
 - expose a first public auth-methods summary for auth collections;
@@ -82,7 +84,8 @@ Non-responsibility:
 - its server-side `auth-logout` route is a Rusty Base extension rather than a
   PocketBase-compatible route;
 - it does not implement OAuth providers or full auth settings yet;
-- it does not own files, realtime, admin UI, or migration compatibility yet.
+- it does not own thumbnails, protected file tokens, S3/local filesystem
+  adapters, realtime, admin UI, or migration compatibility yet.
 
 Current integration shape:
 
