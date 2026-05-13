@@ -7591,11 +7591,22 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
                 field.name
             )));
         }
-        if field.kind != CollectionFieldKind::Text
-            && field.kind != CollectionFieldKind::Email
-            && (field.min.is_some()
-                || field.max.is_some()
-                || field.pattern.is_some()
+        let is_text_like = matches!(
+            field.kind,
+            CollectionFieldKind::Text | CollectionFieldKind::Email
+        );
+        if !matches!(
+            field.kind,
+            CollectionFieldKind::Text | CollectionFieldKind::Email | CollectionFieldKind::Number
+        ) && (field.min.is_some() || field.max.is_some())
+        {
+            return Err(ServerError::BadRequest(format!(
+                "field '{}' declares min/max options but is not a text-like or number field",
+                field.name
+            )));
+        }
+        if !is_text_like
+            && (field.pattern.is_some()
                 || field.autogenerate_pattern.is_some()
                 || field.primary_key)
         {
@@ -7605,7 +7616,12 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
             )));
         }
         if let (Some(min), Some(max)) = (field.min, field.max) {
-            if max > 0 && min > max {
+            let invalid_range = if field.kind == CollectionFieldKind::Number {
+                min > max
+            } else {
+                max > 0 && min > max
+            };
+            if invalid_range {
                 return Err(ServerError::BadRequest(format!(
                     "field '{}' min cannot be greater than max",
                     field.name
@@ -8466,14 +8482,7 @@ fn validate_record_field_options(
                 validate_text_field_value(field, value)?;
             }
             CollectionFieldKind::Number => {
-                if !value.is_number() {
-                    return Err(validation_error(
-                        "Failed to validate record.",
-                        &field.name,
-                        "validation_invalid_number",
-                        format!("Field '{}' must be a number.", field.name),
-                    ));
-                }
+                validate_number_field_value(field, value)?;
             }
             CollectionFieldKind::Bool => {
                 if !value.is_boolean() {
@@ -8508,6 +8517,47 @@ fn validate_record_field_options(
             CollectionFieldKind::Relation => validate_relation_field_value(field, value)?,
             CollectionFieldKind::Json | CollectionFieldKind::File => {}
         }
+    }
+
+    Ok(())
+}
+
+fn validate_number_field_value(
+    field: &CollectionField,
+    value: &JsonValue,
+) -> Result<(), ServerError> {
+    let Some(number) = value.as_f64() else {
+        return Err(validation_error(
+            "Failed to validate record.",
+            &field.name,
+            "validation_invalid_number",
+            format!("Field '{}' must be a number.", field.name),
+        ));
+    };
+
+    if field.min.is_some_and(|min| number < min as f64) {
+        return Err(validation_error(
+            "Failed to validate record.",
+            &field.name,
+            "validation_min_number_constraint",
+            format!(
+                "Field '{}' must be greater than or equal to {}.",
+                field.name,
+                field.min.unwrap_or_default()
+            ),
+        ));
+    }
+    if field.max.is_some_and(|max| number > max as f64) {
+        return Err(validation_error(
+            "Failed to validate record.",
+            &field.name,
+            "validation_max_number_constraint",
+            format!(
+                "Field '{}' must be less than or equal to {}.",
+                field.name,
+                field.max.unwrap_or_default()
+            ),
+        ));
     }
 
     Ok(())

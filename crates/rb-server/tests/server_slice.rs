@@ -3315,6 +3315,12 @@ fn persists_pocketbase_style_field_options() {
                         "autogeneratePattern": "[A-Z]{4}"
                     },
                     {
+                        "name": "score",
+                        "type": "number",
+                        "min": 1,
+                        "max": 10
+                    },
+                    {
                         "name": "published",
                         "kind": "bool",
                         "required": true
@@ -3336,8 +3342,11 @@ fn persists_pocketbase_style_field_options() {
     assert_eq!(created.body["fields"][0]["pattern"], "^[A-Z].+");
     assert_eq!(created.body["fields"][0]["autogeneratePattern"], "[A-Z]{4}");
     assert!(created.body["fields"][0].get("kind").is_none());
-    assert_eq!(created.body["fields"][1]["required"], true);
-    assert!(created.body["fields"][1].get("min").is_none());
+    assert_eq!(created.body["fields"][1]["type"], "number");
+    assert_eq!(created.body["fields"][1]["min"], 1);
+    assert_eq!(created.body["fields"][1]["max"], 10);
+    assert_eq!(created.body["fields"][2]["required"], true);
+    assert!(created.body["fields"][2].get("min").is_none());
 
     let patched = app.handle(
         HttpRequest::json(
@@ -3376,6 +3385,32 @@ fn persists_pocketbase_style_field_options() {
         .unwrap(),
     );
     assert_eq!(invalid_range.status, 400);
+
+    let invalid_number_range = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "bad_number_ranges",
+                "fields": [{"name": "score", "type": "number", "min": 10, "max": 2}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_number_range.status, 400);
+
+    let invalid_min_kind = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "bad_min_kind",
+                "fields": [{"name": "published", "type": "bool", "min": 1}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_min_kind.status, 400);
 
     let invalid_kind = app.handle(
         HttpRequest::json(
@@ -3541,7 +3576,7 @@ fn enforces_non_text_field_option_shapes_on_records() {
                 "name": "posts",
                 "fields": [
                     {"name": "published", "type": "bool", "required": true},
-                    {"name": "score", "type": "number"},
+                    {"name": "score", "type": "number", "min": 1, "max": 20},
                     {"name": "contact", "type": "email"},
                     {"name": "tags", "type": "relation", "collection": "tags", "maxSelect": 1},
                     {"name": "scopes", "type": "array"},
@@ -3597,6 +3632,34 @@ fn enforces_non_text_field_option_shapes_on_records() {
     assert_eq!(
         invalid_number.body["data"]["score"]["code"],
         "validation_invalid_number"
+    );
+
+    let too_small_number = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": true, "score": 0}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(too_small_number.status, 400);
+    assert_eq!(
+        too_small_number.body["data"]["score"]["code"],
+        "validation_min_number_constraint"
+    );
+
+    let too_large_number = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": true, "score": 21}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(too_large_number.status, 400);
+    assert_eq!(
+        too_large_number.body["data"]["score"]["code"],
+        "validation_max_number_constraint"
     );
 
     let invalid_array = app.handle(
@@ -3695,6 +3758,20 @@ fn enforces_non_text_field_option_shapes_on_records() {
     assert_eq!(
         invalid_relation_patch.body["data"]["tags"]["code"],
         "validation_invalid_relation"
+    );
+
+    let invalid_number_patch = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1",
+            json!({"score": 30}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_number_patch.status, 400);
+    assert_eq!(
+        invalid_number_patch.body["data"]["score"]["code"],
+        "validation_max_number_constraint"
     );
 
     let valid_patch = app.handle(
