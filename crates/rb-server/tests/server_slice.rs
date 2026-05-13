@@ -379,6 +379,81 @@ fn auth_responses_support_expand_and_response_fields() {
 }
 
 #[test]
+fn lists_auth_methods_and_projects_auth_method_fields() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [
+                    {"name": "email", "type": "email"},
+                    {"name": "username", "kind": "text"},
+                    {"name": "name", "kind": "text"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(users.status, 200);
+    assert_eq!(users.body["fields"][0]["kind"], "email");
+
+    let methods = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/users/auth-methods",
+    ));
+    assert_eq!(methods.status, 200);
+    assert_eq!(methods.body["password"]["enabled"], true);
+    assert_eq!(
+        methods.body["password"]["identityFields"],
+        json!(["email", "username"])
+    );
+    assert_eq!(methods.body["oauth2"]["enabled"], false);
+    assert_eq!(methods.body["oauth2"]["providers"], json!([]));
+    assert_eq!(methods.body["mfa"]["enabled"], false);
+    assert_eq!(methods.body["otp"]["duration"], 0);
+
+    let projected = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/users/auth-methods?fields=password.identityFields,otp.enabled",
+    ));
+    assert_eq!(projected.status, 200);
+    assert_eq!(
+        projected.body["password"]["identityFields"],
+        json!(["email", "username"])
+    );
+    assert_eq!(projected.body["otp"]["enabled"], false);
+    assert!(projected.body.get("oauth2").is_none());
+    assert!(projected.body["otp"].get("duration").is_none());
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [{"name": "title", "kind": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(posts.status, 200);
+
+    let not_auth = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts/auth-methods",
+    ));
+    assert_eq!(not_auth.status, 400);
+    assert!(not_auth.body["message"]
+        .as_str()
+        .unwrap()
+        .contains("not an auth collection"));
+}
+
+#[test]
 fn returns_validation_data_for_auth_and_record_forms() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 

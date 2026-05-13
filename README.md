@@ -306,6 +306,8 @@ The first server slice supports:
   responses;
 - first `?fields=...` response projection support for records and expanded
   relations, including `*` and nested paths such as `expand.author.name`;
+- `GET /api/collections/:collection/auth-methods` with the current
+  password-auth method summary and response `fields` projection;
 - `auth-with-password` and `auth-refresh` response `expand`/`fields` support,
   including response-level paths such as `record.expand.profile.bio`;
 - relation expand respects target collection view rules and omits hidden related
@@ -316,6 +318,8 @@ The first server slice supports:
   compiled through
   `rb-filter-engine`;
 - auth collections with Argon2 password hashing;
+- PocketBase-style `email` collection field input, mapped to text-compatible
+  filtering for now;
 - `auth-with-password` login with opaque bearer tokens and expiration metadata;
 - `auth-refresh` token rotation for authenticated auth records;
 - `auth-logout` public bearer-token revocation;

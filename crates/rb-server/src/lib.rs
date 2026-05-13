@@ -208,6 +208,7 @@ impl CollectionField {
 #[serde(rename_all = "lowercase")]
 pub enum CollectionFieldKind {
     Text,
+    Email,
     Number,
     Bool,
     #[serde(rename = "datetime")]
@@ -221,6 +222,7 @@ impl From<CollectionFieldKind> for FieldKind {
     fn from(value: CollectionFieldKind) -> Self {
         match value {
             CollectionFieldKind::Text => Self::Text,
+            CollectionFieldKind::Email => Self::Text,
             CollectionFieldKind::Number => Self::Number,
             CollectionFieldKind::Bool => Self::Bool,
             CollectionFieldKind::DateTime => Self::DateTime,
@@ -1383,6 +1385,13 @@ impl RustyBaseApp {
                 self.store.truncate_collection(collection)?;
                 Ok(HttpResponse::json(204, JsonValue::Null))
             }
+            ("GET", ["api", "collections", collection, "auth-methods"]) => {
+                let collection = self.store.get_collection(collection)?;
+                let mut payload = auth_methods_payload(&collection)?;
+                let fields = field_options_from_query(&query)?;
+                project_json_response(&mut payload, &fields)?;
+                Ok(HttpResponse::json(200, payload))
+            }
             ("POST", ["api", "collections", collection, "auth-with-password"]) => {
                 let auth =
                     AuthWithPasswordRequest::from_json(serde_json::from_slice(&request.body)?)?;
@@ -1965,6 +1974,45 @@ fn auth_response_payload(
     let mut payload = json!(response);
     project_json_response(&mut payload, fields)?;
     Ok(payload)
+}
+
+fn auth_methods_payload(collection: &CollectionConfig) -> Result<JsonValue, ServerError> {
+    if collection.collection_type != CollectionType::Auth {
+        return Err(ServerError::BadRequest(format!(
+            "collection '{}' is not an auth collection",
+            collection.name
+        )));
+    }
+
+    let identity_fields = auth_identity_fields(collection);
+
+    Ok(json!({
+        "password": {
+            "enabled": true,
+            "identityFields": identity_fields,
+        },
+        "oauth2": {
+            "enabled": false,
+            "providers": [],
+        },
+        "mfa": {
+            "enabled": false,
+            "duration": 0,
+        },
+        "otp": {
+            "enabled": false,
+            "duration": 0,
+        }
+    }))
+}
+
+fn auth_identity_fields(collection: &CollectionConfig) -> Vec<String> {
+    collection
+        .fields
+        .iter()
+        .filter(|field| field.name == "email" || field.name == "username")
+        .map(|field| field.name.clone())
+        .collect()
 }
 
 fn project_record_response(record: &mut JsonValue, fields: &[String]) -> Result<(), ServerError> {

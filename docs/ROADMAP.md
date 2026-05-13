@@ -204,6 +204,10 @@ Exit criteria:
   for `auth-with-password` and `auth-refresh`.
 - Added relation expand coverage for target collection `viewRule` filtering so
   hidden related records are omitted from the `expand` payload.
+- Added `GET /api/collections/:collection/auth-methods` with the current
+  password-auth summary and response `fields` projection.
+- Added PocketBase-style `email` collection field input, currently mapped to
+  text-compatible filter behavior.
 
 ## Next Sprint
 
@@ -213,5 +217,5 @@ Exit criteria:
    examples.
 4. Expand PocketBase-compatible relation-edge and uploaded-file modifier
    fixtures.
-5. Add auth route coverage beyond password/refresh and relation expand
-   compatibility fixtures around max-select and malformed relation values.
+5. Add auth route coverage beyond password/refresh: verification, password
+   reset, email change, OTP, and OAuth placeholders where useful.

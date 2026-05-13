@@ -56,6 +56,7 @@ Responsibility:
 - store record data in per-collection SQLite tables;
 - support auth collections with Argon2 password hashes and expiring bearer
   tokens;
+- expose a first public auth-methods summary for auth collections;
 - rotate valid auth tokens through `auth-refresh`;
 - revoke valid bearer tokens through `auth-logout`;
 - return PocketBase-like API error bodies with `code`, `message`, and `data`;
