@@ -265,6 +265,8 @@ Exit criteria:
 - Added first common/text field option metadata parity for `required`,
   `hidden`, `system`, `presentable`, `primaryKey`, `min`, `max`, `pattern`,
   and `autogeneratePattern`, including import/export preservation.
+- Added record create/update enforcement for `required` and text `min`/`max`/
+  common regex-like `pattern` constraints against the final record state.
 
 ## Next Sprint
 

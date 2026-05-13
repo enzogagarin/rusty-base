@@ -3392,6 +3392,122 @@ fn persists_pocketbase_style_field_options() {
 }
 
 #[test]
+fn enforces_required_and_text_field_options_on_records() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let collection = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {
+                        "name": "title",
+                        "type": "text",
+                        "required": true,
+                        "min": 3,
+                        "max": 8,
+                        "pattern": "^[A-Z].+"
+                    },
+                    {"name": "body", "type": "text"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(collection.status, 200);
+
+    let missing = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"body": "missing title"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(missing.status, 400);
+    assert_eq!(missing.body["data"]["title"]["code"], "validation_required");
+
+    let too_short = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Hi"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(too_short.status, 400);
+    assert_eq!(
+        too_short.body["data"]["title"]["code"],
+        "validation_min_text_constraint"
+    );
+
+    let too_long = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "LongTitle"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(too_long.status, 400);
+    assert_eq!(
+        too_long.body["data"]["title"]["code"],
+        "validation_max_text_constraint"
+    );
+
+    let pattern = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "rusty"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(pattern.status, 400);
+    assert_eq!(
+        pattern.body["data"]["title"]["code"],
+        "validation_pattern_constraint"
+    );
+
+    let created = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"id": "post_1", "title": "Rusty", "body": "first"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created.status, 200);
+
+    let body_only = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1",
+            json!({"body": "keeps existing required title"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(body_only.status, 200);
+    assert_eq!(body_only.body["title"], "Rusty");
+
+    let cleared_required = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1",
+            json!({"title": ""}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(cleared_required.status, 400);
+    assert_eq!(
+        cleared_required.body["data"]["title"]["code"],
+        "validation_required"
+    );
+}
+
+#[test]
 fn truncates_and_deletes_collections() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 

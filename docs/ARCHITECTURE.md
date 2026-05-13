@@ -103,6 +103,8 @@ Responsibility:
 - preserve first common/text field option metadata used by the admin UI,
   including visibility, required/presentable, text bounds, pattern, and
   autogeneration settings;
+- enforce required fields and text bounds/pattern constraints for record
+  create/update against the final stored record shape;
 - list records with PocketBase-style filtering, pagination, `skipTotal`,
   sorting, expand, and response projection;
 - execute JSON `/api/batch` record create/update/upsert/delete requests inside

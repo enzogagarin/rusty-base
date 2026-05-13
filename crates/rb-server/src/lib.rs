@@ -2030,6 +2030,7 @@ impl Store {
         let file_changes = prepare_file_changes(&collection, object, uploads, None)?;
         validate_record_fields(&collection, object)?;
         prepare_auth_password(&collection, object, true)?;
+        validate_record_field_options(&collection, object)?;
 
         let id = object
             .remove("id")
@@ -2264,6 +2265,7 @@ impl Store {
                 existing_object.insert(key.clone(), value.clone());
             }
         }
+        validate_record_field_options(&collection, existing_object)?;
 
         let now = now_timestamp();
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
@@ -8381,6 +8383,178 @@ fn validate_record_fields(
     }
 
     Ok(())
+}
+
+fn validate_record_field_options(
+    collection: &CollectionConfig,
+    object: &Map<String, JsonValue>,
+) -> Result<(), ServerError> {
+    for field in &collection.fields {
+        let value = object.get(&field.name);
+        if field.required && value.is_none_or(is_empty_record_value) {
+            return Err(validation_error(
+                "Failed to validate record.",
+                &field.name,
+                "validation_required",
+                format!("Field '{}' is required.", field.name),
+            ));
+        }
+
+        let Some(value) = value else {
+            continue;
+        };
+        if is_empty_record_value(value) {
+            continue;
+        }
+
+        if matches!(
+            field.kind,
+            CollectionFieldKind::Text | CollectionFieldKind::Email
+        ) {
+            let Some(text) = value.as_str() else {
+                return Err(validation_error(
+                    "Failed to validate record.",
+                    &field.name,
+                    "validation_invalid_string",
+                    format!("Field '{}' must be a string.", field.name),
+                ));
+            };
+
+            if field
+                .min
+                .is_some_and(|min| text.chars().count() < min as usize)
+            {
+                return Err(validation_error(
+                    "Failed to validate record.",
+                    &field.name,
+                    "validation_min_text_constraint",
+                    format!(
+                        "Field '{}' must be at least {} characters.",
+                        field.name,
+                        field.min.unwrap_or_default()
+                    ),
+                ));
+            }
+            if field
+                .max
+                .is_some_and(|max| max > 0 && text.chars().count() > max as usize)
+            {
+                return Err(validation_error(
+                    "Failed to validate record.",
+                    &field.name,
+                    "validation_max_text_constraint",
+                    format!(
+                        "Field '{}' must be at most {} characters.",
+                        field.name,
+                        field.max.unwrap_or_default()
+                    ),
+                ));
+            }
+            if field
+                .pattern
+                .as_deref()
+                .filter(|pattern| !pattern.is_empty())
+                .is_some_and(|pattern| !text_matches_pattern(text, pattern))
+            {
+                return Err(validation_error(
+                    "Failed to validate record.",
+                    &field.name,
+                    "validation_pattern_constraint",
+                    format!(
+                        "Field '{}' does not match the required pattern.",
+                        field.name
+                    ),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn is_empty_record_value(value: &JsonValue) -> bool {
+    match value {
+        JsonValue::Null => true,
+        JsonValue::String(value) => value.is_empty(),
+        JsonValue::Array(values) => values.is_empty(),
+        _ => false,
+    }
+}
+
+fn text_matches_pattern(value: &str, pattern: &str) -> bool {
+    if pattern.is_empty() {
+        return true;
+    }
+
+    if let Some(inner) = pattern
+        .strip_prefix("^[")
+        .and_then(|rest| rest.split_once(']').map(|(class, suffix)| (class, suffix)))
+    {
+        let (class, suffix) = inner;
+        let mut chars = value.chars();
+        let Some(first) = chars.next() else {
+            return false;
+        };
+        if !ascii_class_matches(class, first) {
+            return false;
+        }
+
+        return match suffix {
+            ".+" | ".+$" => chars.next().is_some(),
+            ".*" | ".*$" => true,
+            "+" | "+$" => value.chars().all(|ch| ascii_class_matches(class, ch)),
+            "*" | "*$" => value.chars().all(|ch| ascii_class_matches(class, ch)),
+            "$" | "" => value.chars().count() == 1,
+            _ => false,
+        };
+    }
+
+    let anchored_start = pattern.strip_prefix('^');
+    let anchored = anchored_start.unwrap_or(pattern);
+    let anchored_end = anchored.strip_suffix('$');
+    let literal = anchored_end.unwrap_or(anchored);
+    if literal_contains_regex_meta(literal) {
+        return false;
+    }
+
+    match (anchored_start.is_some(), anchored_end.is_some()) {
+        (true, true) => value == literal,
+        (true, false) => value.starts_with(literal),
+        (false, true) => value.ends_with(literal),
+        (false, false) => value.contains(literal),
+    }
+}
+
+fn ascii_class_matches(class: &str, ch: char) -> bool {
+    if !ch.is_ascii() {
+        return false;
+    }
+    let chars = class.chars().collect::<Vec<_>>();
+    let mut index = 0;
+    while index < chars.len() {
+        if index + 2 < chars.len() && chars[index + 1] == '-' {
+            if chars[index] <= ch && ch <= chars[index + 2] {
+                return true;
+            }
+            index += 3;
+        } else {
+            if chars[index] == ch {
+                return true;
+            }
+            index += 1;
+        }
+    }
+
+    false
+}
+
+fn literal_contains_regex_meta(value: &str) -> bool {
+    value.chars().any(|ch| {
+        matches!(
+            ch,
+            '[' | ']' | '(' | ')' | '{' | '}' | '+' | '*' | '?' | '|' | '\\' | '.'
+        )
+    })
 }
 
 fn prepare_auth_password(

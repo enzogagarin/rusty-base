@@ -303,6 +303,9 @@ The first server slice supports:
 - first common/text field option metadata parity for `required`, `hidden`,
   `system`, `presentable`, `primaryKey`, `min`, `max`, `pattern`, and
   `autogeneratePattern`;
+- record create/update enforcement for `required` and text `min`/`max`/common
+  regex-like `pattern` constraints, evaluated against the final record state on
+  updates;
 - `GET /api/collections/meta/scaffolds` for PocketBase-style collection type
   scaffolds;
 - `GET /api/collections/meta/export` as a Rusty Base import-ready metadata
