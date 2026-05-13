@@ -780,6 +780,314 @@ fn truncates_and_deletes_collections() {
 }
 
 #[test]
+fn imports_collections_and_optionally_deletes_missing_metadata() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "title", "kind": "text"},
+                    {"name": "legacy", "kind": "text"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(posts.status, 200);
+
+    let comments = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "comments",
+                "fields": [{"name": "body", "kind": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(comments.status, 200);
+
+    let created = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Rusty Base", "legacy": "keep for now"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created.status, 200);
+
+    let merge_import = app.handle(
+        HttpRequest::json(
+            "PUT",
+            "/api/collections/import",
+            json!({
+                "collections": [{
+                    "name": "posts",
+                    "schema": [
+                        {"name": "title", "type": "text"},
+                        {"name": "tags", "type": "array"}
+                    ],
+                    "listRule": "title ~ 'Rusty'"
+                }]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(merge_import.status, 204);
+
+    let comments_after_merge = app.handle(HttpRequest::new("GET", "/api/collections/comments"));
+    assert_eq!(comments_after_merge.status, 200);
+
+    let posts_after_merge = app.handle(HttpRequest::new("GET", "/api/collections/posts"));
+    assert_eq!(posts_after_merge.status, 200);
+    assert_eq!(
+        posts_after_merge.body["fields"].as_array().unwrap().len(),
+        3
+    );
+    assert_eq!(posts_after_merge.body["listRule"], "title ~ 'Rusty'");
+
+    let list_after_merge = app.handle(HttpRequest::new("GET", "/api/collections/posts/records"));
+    assert_eq!(list_after_merge.status, 200);
+    assert_eq!(list_after_merge.body["items"][0]["legacy"], "keep for now");
+
+    let replace_import = app.handle(
+        HttpRequest::json(
+            "PUT",
+            "/api/collections/import",
+            json!({
+                "deleteMissing": true,
+                "collections": [
+                    {
+                        "name": "posts",
+                        "schema": [
+                            {"name": "title", "type": "text"},
+                            {"name": "tags", "type": "array"}
+                        ],
+                        "listRule": "title ~ 'Rusty'"
+                    },
+                    {
+                        "name": "authors",
+                        "schema": [{"name": "name", "type": "text"}]
+                    }
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(replace_import.status, 204);
+
+    let comments_after_replace = app.handle(HttpRequest::new("GET", "/api/collections/comments"));
+    assert_eq!(comments_after_replace.status, 404);
+
+    let posts_after_replace = app.handle(HttpRequest::new("GET", "/api/collections/posts"));
+    assert_eq!(posts_after_replace.status, 200);
+    assert_eq!(
+        posts_after_replace.body["fields"].as_array().unwrap().len(),
+        2
+    );
+
+    let list_after_replace = app.handle(HttpRequest::new("GET", "/api/collections/posts/records"));
+    assert_eq!(list_after_replace.status, 200);
+    assert_eq!(list_after_replace.body["totalItems"], 1);
+    assert_eq!(list_after_replace.body["items"][0]["title"], "Rusty Base");
+    assert!(list_after_replace.body["items"][0].get("legacy").is_none());
+
+    let new_author = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/authors/records",
+            json!({"name": "Ada"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(new_author.status, 200);
+    assert_eq!(new_author.body["name"], "Ada");
+}
+
+#[test]
+fn returns_collection_scaffolds_and_import_ready_export_payload() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let scaffolds = app.handle(HttpRequest::new("GET", "/api/collections/meta/scaffolds"));
+    assert_eq!(scaffolds.status, 200);
+    assert_eq!(scaffolds.body["base"]["type"], "base");
+    assert_eq!(scaffolds.body["auth"]["type"], "auth");
+    assert_eq!(scaffolds.body["view"]["type"], "view");
+    assert_eq!(scaffolds.body["base"]["fields"][0]["name"], "id");
+    assert_eq!(scaffolds.body["base"]["fields"][0]["type"], "text");
+    assert_eq!(
+        scaffolds.body["auth"]["passwordAuth"]["identityFields"][0],
+        "email"
+    );
+    assert_eq!(scaffolds.body["view"]["viewQuery"], "");
+
+    let created = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "title", "kind": "text"},
+                    {"name": "published", "kind": "bool"}
+                ],
+                "listRule": "published = true"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created.status, 200);
+
+    let exported = app.handle(HttpRequest::new("GET", "/api/collections/meta/export"));
+    assert_eq!(exported.status, 200);
+    assert_eq!(exported.body["collections"][0]["name"], "posts");
+    assert_eq!(
+        exported.body["collections"][0]["schema"][0]["name"],
+        "title"
+    );
+    assert_eq!(exported.body["collections"][0]["schema"][0]["type"], "text");
+    assert!(exported.body["collections"][0]["schema"][0]
+        .get("kind")
+        .is_none());
+    assert_eq!(
+        exported.body["collections"][0]["listRule"],
+        "published = true"
+    );
+
+    let fresh = RustyBaseApp::new(Store::open_in_memory().unwrap());
+    let imported = fresh.handle(
+        HttpRequest::json("PUT", "/api/collections/import", exported.body.clone()).unwrap(),
+    );
+    assert_eq!(imported.status, 204);
+
+    let imported_posts = fresh.handle(HttpRequest::new("GET", "/api/collections/posts"));
+    assert_eq!(imported_posts.status, 200);
+    assert_eq!(imported_posts.body["fields"].as_array().unwrap().len(), 2);
+    assert_eq!(imported_posts.body["listRule"], "published = true");
+}
+
+#[test]
+fn expands_single_multi_and_nested_relation_records() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    for collection in [
+        json!({
+            "name": "profiles",
+            "fields": [{"name": "bio", "kind": "text"}]
+        }),
+        json!({
+            "name": "authors",
+            "fields": [
+                {"name": "name", "kind": "text"},
+                {
+                    "name": "profile",
+                    "kind": "relation",
+                    "collectionId": "profiles",
+                    "maxSelect": 1
+                }
+            ]
+        }),
+        json!({
+            "name": "tags",
+            "fields": [{"name": "label", "kind": "text"}]
+        }),
+        json!({
+            "name": "posts",
+            "fields": [
+                {"name": "title", "kind": "text"},
+                {
+                    "name": "author",
+                    "kind": "relation",
+                    "collection": "authors",
+                    "maxSelect": 1
+                },
+                {
+                    "name": "tags",
+                    "kind": "relation",
+                    "collection": "tags",
+                    "maxSelect": 5
+                }
+            ]
+        }),
+    ] {
+        let response =
+            app.handle(HttpRequest::json("POST", "/api/collections", collection).unwrap());
+        assert_eq!(response.status, 200);
+    }
+
+    for (collection, record) in [
+        ("profiles", json!({"id": "profile_1", "bio": "Rust writer"})),
+        (
+            "authors",
+            json!({"id": "author_1", "name": "Ada", "profile": "profile_1"}),
+        ),
+        ("tags", json!({"id": "tag_rust", "label": "rust"})),
+        ("tags", json!({"id": "tag_sqlite", "label": "sqlite"})),
+        (
+            "posts",
+            json!({
+                "id": "post_1",
+                "title": "Rusty Base",
+                "author": "author_1",
+                "tags": ["tag_rust", "tag_sqlite"]
+            }),
+        ),
+    ] {
+        let response = app.handle(
+            HttpRequest::json(
+                "POST",
+                &format!("/api/collections/{collection}/records"),
+                record,
+            )
+            .unwrap(),
+        );
+        assert_eq!(response.status, 200);
+    }
+
+    let list = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts/records?expand=author.profile,tags",
+    ));
+    assert_eq!(list.status, 200);
+    assert_eq!(list.body["items"][0]["expand"]["author"]["name"], "Ada");
+    assert_eq!(
+        list.body["items"][0]["expand"]["author"]["expand"]["profile"]["bio"],
+        "Rust writer"
+    );
+    assert_eq!(list.body["items"][0]["expand"]["tags"][0]["label"], "rust");
+    assert_eq!(
+        list.body["items"][0]["expand"]["tags"][1]["label"],
+        "sqlite"
+    );
+
+    let record = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts/records/post_1?expand=author,tags",
+    ));
+    assert_eq!(record.status, 200);
+    assert_eq!(record.body["expand"]["author"]["collectionName"], "authors");
+    assert_eq!(record.body["expand"]["tags"][0]["collectionName"], "tags");
+
+    let updated = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1?expand=author",
+            json!({"title": "Rusty Base Expanded"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(updated.status, 200);
+    assert_eq!(updated.body["title"], "Rusty Base Expanded");
+    assert_eq!(updated.body["expand"]["author"]["name"], "Ada");
+}
+
+#[test]
 fn returns_forbidden_when_http_create_rule_denies_request() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 

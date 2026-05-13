@@ -85,7 +85,7 @@ pub struct CollectionConfig {
     pub name: String,
     #[serde(default, rename = "type")]
     pub collection_type: CollectionType,
-    #[serde(default)]
+    #[serde(default, alias = "schema")]
     pub fields: Vec<CollectionField>,
     #[serde(default)]
     pub list_rule: Option<String>,
@@ -163,9 +163,20 @@ pub enum CollectionType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CollectionField {
     pub name: String,
+    #[serde(alias = "type")]
     pub kind: CollectionFieldKind,
+    #[serde(
+        default,
+        alias = "collectionId",
+        alias = "targetCollection",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub collection: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_select: Option<u64>,
 }
 
 impl CollectionField {
@@ -173,7 +184,23 @@ impl CollectionField {
         Self {
             name: name.into(),
             kind,
+            collection: None,
+            max_select: None,
         }
+    }
+
+    pub fn relation(name: impl Into<String>, collection: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind: CollectionFieldKind::Relation,
+            collection: Some(collection.into()),
+            max_select: None,
+        }
+    }
+
+    pub fn with_max_select(mut self, max_select: u64) -> Self {
+        self.max_select = Some(max_select);
+        self
     }
 }
 
@@ -209,6 +236,7 @@ pub struct ListOptions {
     pub page: u64,
     pub per_page: u64,
     pub filter: Option<String>,
+    pub expand: Vec<String>,
     pub context: FilterContext,
 }
 
@@ -218,6 +246,7 @@ impl Default for ListOptions {
             page: 1,
             per_page: 30,
             filter: None,
+            expand: Vec::new(),
             context: FilterContext::default(),
         }
     }
@@ -281,6 +310,27 @@ pub struct CollectionPatch {
     pub update_rule: Option<Option<String>>,
     #[serde(default)]
     pub delete_rule: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionImportRequest {
+    pub collections: Vec<CollectionConfig>,
+    #[serde(default)]
+    pub delete_missing: bool,
+}
+
+impl CollectionImportRequest {
+    fn from_json(value: JsonValue) -> Result<Self, ServerError> {
+        if value.is_array() {
+            return Ok(Self {
+                collections: serde_json::from_value(value)?,
+                delete_missing: false,
+            });
+        }
+
+        Ok(serde_json::from_value(value)?)
+    }
 }
 
 pub struct Store {
@@ -452,6 +502,103 @@ impl Store {
         Ok(collection)
     }
 
+    pub fn import_collections(&self, request: CollectionImportRequest) -> Result<(), ServerError> {
+        let mut incoming_names = HashMap::new();
+        for collection in &request.collections {
+            validate_collection(collection)?;
+            if incoming_names.insert(collection.name.clone(), ()).is_some() {
+                return Err(ServerError::BadRequest(format!(
+                    "duplicate collection '{}'",
+                    collection.name
+                )));
+            }
+        }
+
+        let now = now_timestamp();
+        let mut conn = self.connection()?;
+        let tx = conn.transaction()?;
+        let existing = existing_collections_tx(&tx)?;
+
+        if request.delete_missing {
+            for name in existing.keys() {
+                if incoming_names.contains_key(name) {
+                    continue;
+                }
+
+                let table_sql = quote_identifier(&record_table_name(name)?);
+                tx.execute(&format!("DROP TABLE IF EXISTS {table_sql}"), [])?;
+                tx.execute(
+                    r#"DELETE FROM "_rb_auth_tokens" WHERE collection_name = ?1"#,
+                    params![name],
+                )?;
+                tx.execute(
+                    r#"DELETE FROM "_rb_collections" WHERE name = ?1"#,
+                    params![name],
+                )?;
+            }
+        }
+
+        for imported in request.collections {
+            let collection = if let Some(current) = existing.get(&imported.name) {
+                merge_imported_collection(current, imported, request.delete_missing)
+            } else {
+                imported
+            };
+            validate_collection(&collection)?;
+
+            let table_sql = quote_identifier(&record_table_name(&collection.name)?);
+            tx.execute(
+                &format!(
+                    r#"
+                    CREATE TABLE IF NOT EXISTS {table_sql} (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        data TEXT NOT NULL,
+                        created TEXT NOT NULL,
+                        updated TEXT NOT NULL
+                    )
+                    "#
+                ),
+                [],
+            )?;
+
+            if let Some(current) = existing.get(&collection.name) {
+                if current.collection_type == CollectionType::Auth
+                    && collection.collection_type != CollectionType::Auth
+                {
+                    tx.execute(
+                        r#"DELETE FROM "_rb_auth_tokens" WHERE collection_name = ?1"#,
+                        params![&collection.name],
+                    )?;
+                }
+                if request.delete_missing {
+                    prune_record_fields_tx(&tx, &collection.name, &collection.fields)?;
+                }
+            }
+
+            let schema_json = serde_json::to_string(&collection)?;
+            let affected = tx.execute(
+                r#"
+                UPDATE "_rb_collections"
+                SET schema_json = ?2, updated = ?3
+                WHERE name = ?1
+                "#,
+                params![&collection.name, schema_json, &now],
+            )?;
+            if affected == 0 {
+                tx.execute(
+                    r#"
+                    INSERT INTO "_rb_collections" (name, schema_json, created, updated)
+                    VALUES (?1, ?2, ?3, ?3)
+                    "#,
+                    params![&collection.name, schema_json, &now],
+                )?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn delete_collection(&self, name: &str) -> Result<(), ServerError> {
         validate_collection_name(name)?;
         self.get_collection(name)?;
@@ -599,26 +746,34 @@ impl Store {
             .unwrap_or_default();
         let offset = options.page.saturating_sub(1) * options.per_page;
 
-        let conn = self.connection()?;
-        let count_sql = format!("SELECT COUNT(*) FROM {table_sql}{where_sql}");
-        let total_items: u64 = conn.query_row(
-            &count_sql,
-            params_from_iter(predicate.params.iter()),
-            |row| row.get::<_, u64>(0),
-        )?;
+        let (total_items, mut items) = {
+            let conn = self.connection()?;
+            let count_sql = format!("SELECT COUNT(*) FROM {table_sql}{where_sql}");
+            let total_items: u64 = conn.query_row(
+                &count_sql,
+                params_from_iter(predicate.params.iter()),
+                |row| row.get::<_, u64>(0),
+            )?;
 
-        let list_sql = format!(
-            "SELECT id, data, created, updated FROM {table_sql}{where_sql} ORDER BY created DESC, id ASC LIMIT ? OFFSET ?"
-        );
-        let mut list_params = predicate.params;
-        list_params.push(SqlValue::Integer(options.per_page as i64));
-        list_params.push(SqlValue::Integer(offset as i64));
+            let list_sql = format!(
+                "SELECT id, data, created, updated FROM {table_sql}{where_sql} ORDER BY created DESC, id ASC LIMIT ? OFFSET ?"
+            );
+            let mut list_params = predicate.params;
+            list_params.push(SqlValue::Integer(options.per_page as i64));
+            list_params.push(SqlValue::Integer(offset as i64));
 
-        let mut stmt = conn.prepare(&list_sql)?;
-        let rows = stmt.query_map(params_from_iter(list_params.iter()), |row| {
-            row_to_record(collection_name, row)
-        })?;
-        let items = rows.collect::<Result<Vec<_>, _>>()?;
+            let mut stmt = conn.prepare(&list_sql)?;
+            let rows = stmt.query_map(params_from_iter(list_params.iter()), |row| {
+                row_to_record(collection_name, row)
+            })?;
+            let items = rows.collect::<Result<Vec<_>, _>>()?;
+            (total_items, items)
+        };
+
+        if !options.expand.is_empty() {
+            self.expand_records(&collection, &mut items, &options.expand, &options.context)?;
+        }
+
         let total_pages = if total_items == 0 {
             0
         } else {
@@ -632,6 +787,21 @@ impl Store {
             total_pages,
             items,
         })
+    }
+
+    pub fn expand_record_response(
+        &self,
+        collection_name: &str,
+        record: &mut JsonValue,
+        expands: &[String],
+        context: &FilterContext,
+    ) -> Result<(), ServerError> {
+        if expands.is_empty() {
+            return Ok(());
+        }
+
+        let collection = self.get_collection(collection_name)?;
+        self.expand_record_with_collection(&collection, record, expands, context)
     }
 
     pub fn update_record(
@@ -877,6 +1047,136 @@ impl Store {
         Ok(())
     }
 
+    fn expand_records(
+        &self,
+        collection: &CollectionConfig,
+        records: &mut [JsonValue],
+        expands: &[String],
+        context: &FilterContext,
+    ) -> Result<(), ServerError> {
+        for record in records {
+            self.expand_record_with_collection(collection, record, expands, context)?;
+        }
+        Ok(())
+    }
+
+    fn expand_record_with_collection(
+        &self,
+        collection: &CollectionConfig,
+        record: &mut JsonValue,
+        expands: &[String],
+        context: &FilterContext,
+    ) -> Result<(), ServerError> {
+        if expands.is_empty() {
+            return Ok(());
+        }
+
+        let grouped = group_expand_paths(expands);
+        let record_object = record.as_object().ok_or_else(|| {
+            ServerError::BadRequest("record response must be a JSON object".to_string())
+        })?;
+        let mut requested = Vec::new();
+
+        for (field_name, nested_expands) in grouped {
+            let field = collection
+                .fields
+                .iter()
+                .find(|field| field.name == field_name)
+                .ok_or_else(|| {
+                    ServerError::BadRequest(format!(
+                        "expand field '{field_name}' does not exist on collection '{}'",
+                        collection.name
+                    ))
+                })?;
+            if field.kind != CollectionFieldKind::Relation {
+                return Err(ServerError::BadRequest(format!(
+                    "expand field '{field_name}' is not a relation field"
+                )));
+            }
+
+            let target_collection = field.collection.clone().ok_or_else(|| {
+                ServerError::BadRequest(format!(
+                    "relation field '{field_name}' does not declare a target collection"
+                ))
+            })?;
+
+            if let Some(value) = record_object.get(&field_name).cloned() {
+                requested.push((field_name, target_collection, nested_expands, value));
+            }
+        }
+
+        let mut expanded = Map::new();
+        for (field_name, target_collection, nested_expands, value) in requested {
+            if let Some(expanded_value) =
+                self.expand_relation_value(&target_collection, &value, &nested_expands, context)?
+            {
+                expanded.insert(field_name, expanded_value);
+            }
+        }
+
+        if !expanded.is_empty() {
+            let record_object = record.as_object_mut().ok_or_else(|| {
+                ServerError::BadRequest("record response must be a JSON object".to_string())
+            })?;
+            record_object.insert("expand".to_string(), JsonValue::Object(expanded));
+        }
+
+        Ok(())
+    }
+
+    fn expand_relation_value(
+        &self,
+        target_collection: &str,
+        value: &JsonValue,
+        nested_expands: &[String],
+        context: &FilterContext,
+    ) -> Result<Option<JsonValue>, ServerError> {
+        if let Some(id) = value.as_str() {
+            return Ok(self
+                .expanded_related_record(target_collection, id, nested_expands, context)?
+                .map(JsonValue::Object));
+        }
+
+        let Some(ids) = value.as_array() else {
+            return Ok(None);
+        };
+
+        let mut records = Vec::new();
+        for id in ids.iter().filter_map(JsonValue::as_str) {
+            if let Some(record) =
+                self.expanded_related_record(target_collection, id, nested_expands, context)?
+            {
+                records.push(JsonValue::Object(record));
+            }
+        }
+
+        Ok(Some(JsonValue::Array(records)))
+    }
+
+    fn expanded_related_record(
+        &self,
+        target_collection: &str,
+        id: &str,
+        nested_expands: &[String],
+        context: &FilterContext,
+    ) -> Result<Option<Map<String, JsonValue>>, ServerError> {
+        let mut record = match self.get_record(target_collection, id, context.clone()) {
+            Ok(record) => record,
+            Err(ServerError::Forbidden(_) | ServerError::NotFound(_)) => return Ok(None),
+            Err(err) => return Err(err),
+        };
+
+        if !nested_expands.is_empty() {
+            let target = self.get_collection(target_collection)?;
+            self.expand_record_with_collection(&target, &mut record, nested_expands, context)?;
+        }
+
+        let record = record.as_object().cloned().ok_or_else(|| {
+            ServerError::BadRequest("record response must be a JSON object".to_string())
+        })?;
+        Ok(Some(record))
+    }
+
     fn valid_token_subject(&self, token: &str) -> Result<(String, String), ServerError> {
         let conn = self.connection()?;
         let token_row = conn
@@ -1045,6 +1345,22 @@ impl RustyBaseApp {
                 let collection = self.store.create_collection(collection)?;
                 Ok(HttpResponse::json(200, json!(collection)))
             }
+            ("PUT", ["api", "collections", "import"]) => {
+                let request =
+                    CollectionImportRequest::from_json(serde_json::from_slice(&request.body)?)?;
+                self.store.import_collections(request)?;
+                Ok(HttpResponse::json(204, JsonValue::Null))
+            }
+            ("GET", ["api", "collections", "meta", "scaffolds"]) => {
+                Ok(HttpResponse::json(200, collection_scaffolds()))
+            }
+            ("GET", ["api", "collections", "meta", "export"]) => {
+                let collections = self.store.list_collections()?;
+                Ok(HttpResponse::json(
+                    200,
+                    collection_export_payload(collections),
+                ))
+            }
             ("GET", ["api", "collections", collection]) => {
                 let collection = self.store.get_collection(collection)?;
                 Ok(HttpResponse::json(200, json!(collection)))
@@ -1090,29 +1406,35 @@ impl RustyBaseApp {
             }
             ("POST", ["api", "collections", collection, "records"]) => {
                 let data: JsonValue = serde_json::from_slice(&request.body)?;
-                let record = self.store.create_record_with_context(
-                    collection,
-                    data,
-                    self.request_context(&request, &query)?,
-                )?;
+                let context = self.request_context(&request, &query)?;
+                let mut record =
+                    self.store
+                        .create_record_with_context(collection, data, context.clone())?;
+                let expands = expand_options_from_query(&query)?;
+                self.store
+                    .expand_record_response(collection, &mut record, &expands, &context)?;
                 Ok(HttpResponse::json(200, record))
             }
             ("GET", ["api", "collections", collection, "records", id]) => {
-                let record = self.store.get_record(
-                    collection,
-                    id,
-                    self.request_context(&request, &query)?,
-                )?;
+                let context = self.request_context(&request, &query)?;
+                let mut record = self.store.get_record(collection, id, context.clone())?;
+                let expands = expand_options_from_query(&query)?;
+                self.store
+                    .expand_record_response(collection, &mut record, &expands, &context)?;
                 Ok(HttpResponse::json(200, record))
             }
             ("PATCH", ["api", "collections", collection, "records", id]) => {
                 let patch: JsonValue = serde_json::from_slice(&request.body)?;
-                let record = self.store.update_record_with_context(
+                let context = self.request_context(&request, &query)?;
+                let mut record = self.store.update_record_with_context(
                     collection,
                     id,
                     patch,
-                    self.request_context(&request, &query)?,
+                    context.clone(),
                 )?;
+                let expands = expand_options_from_query(&query)?;
+                self.store
+                    .expand_record_response(collection, &mut record, &expands, &context)?;
                 Ok(HttpResponse::json(200, record))
             }
             ("DELETE", ["api", "collections", collection, "records", id]) => {
@@ -1499,8 +1821,58 @@ fn list_options_from_query(
         page,
         per_page,
         filter: query.get("filter").cloned(),
+        expand: expand_options_from_query(query)?,
         context,
     })
+}
+
+fn expand_options_from_query(query: &HashMap<String, String>) -> Result<Vec<String>, ServerError> {
+    let Some(expand) = query.get("expand") else {
+        return Ok(Vec::new());
+    };
+
+    let mut expands = Vec::new();
+    for path in expand
+        .split(',')
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    {
+        validate_expand_path(path)?;
+        if !expands.iter().any(|existing| existing == path) {
+            expands.push(path.to_string());
+        }
+    }
+
+    Ok(expands)
+}
+
+fn validate_expand_path(path: &str) -> Result<(), ServerError> {
+    let parts = path.split('.').collect::<Vec<_>>();
+    if parts.len() > 6 {
+        return Err(ServerError::BadRequest(format!(
+            "expand path '{path}' exceeds the 6-level limit"
+        )));
+    }
+    if parts.iter().any(|part| !is_safe_identifier_part(part)) {
+        return Err(ServerError::BadRequest(format!(
+            "invalid expand path '{path}'"
+        )));
+    }
+
+    Ok(())
+}
+
+fn group_expand_paths(expands: &[String]) -> HashMap<String, Vec<String>> {
+    let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
+    for expand in expands {
+        let (field, nested) = expand.split_once('.').unwrap_or((expand, ""));
+        let nested_expands = grouped.entry(field.to_string()).or_default();
+        if !nested.is_empty() && !nested_expands.iter().any(|existing| existing == nested) {
+            nested_expands.push(nested.to_string());
+        }
+    }
+
+    grouped
 }
 
 fn parse_u64_query(
@@ -1748,6 +2120,273 @@ fn apply_collection_patch(collection: &mut CollectionConfig, patch: CollectionPa
     }
 }
 
+fn collection_scaffolds() -> JsonValue {
+    json!({
+        "base": scaffold_collection("base", vec![scaffold_id_field()], json!({})),
+        "auth": scaffold_collection(
+            "auth",
+            vec![
+                scaffold_id_field(),
+                json!({
+                    "id": "password901924565",
+                    "name": "password",
+                    "type": "password",
+                    "required": true,
+                    "system": true,
+                    "hidden": true,
+                    "min": 8,
+                    "max": 0,
+                    "pattern": "",
+                    "cost": 0
+                }),
+                json!({
+                    "id": "text2504183744",
+                    "name": "tokenKey",
+                    "type": "text",
+                    "required": true,
+                    "system": true,
+                    "hidden": true,
+                    "primaryKey": false,
+                    "min": 30,
+                    "max": 60,
+                    "pattern": "",
+                    "autogeneratePattern": "[a-zA-Z0-9]{50}",
+                    "presentable": false
+                }),
+                json!({
+                    "id": "email3885137012",
+                    "name": "email",
+                    "type": "email",
+                    "required": true,
+                    "system": true,
+                    "hidden": false,
+                    "onlyDomains": null,
+                    "exceptDomains": null,
+                    "presentable": false
+                }),
+                scaffold_bool_field("bool1547992806", "emailVisibility", true),
+                scaffold_bool_field("bool256245529", "verified", true)
+            ],
+            json!({
+                "authRule": "",
+                "manageRule": null,
+                "passwordAuth": {
+                    "enabled": true,
+                    "identityFields": ["email"]
+                },
+                "authToken": { "duration": 604800 },
+                "passwordResetToken": { "duration": 1800 },
+                "emailChangeToken": { "duration": 1800 },
+                "verificationToken": { "duration": 259200 },
+                "fileToken": { "duration": 180 },
+                "oauth2": {
+                    "enabled": false,
+                    "mappedFields": {
+                        "id": "",
+                        "name": "",
+                        "username": "",
+                        "avatarURL": ""
+                    },
+                    "providers": []
+                },
+                "mfa": {
+                    "enabled": false,
+                    "duration": 1800,
+                    "rule": ""
+                },
+                "otp": {
+                    "enabled": false,
+                    "duration": 180,
+                    "length": 8
+                }
+            })
+        ),
+        "view": scaffold_collection("view", Vec::new(), json!({ "viewQuery": "" }))
+    })
+}
+
+fn scaffold_collection(
+    collection_type: &str,
+    fields: Vec<JsonValue>,
+    extra: JsonValue,
+) -> JsonValue {
+    let mut collection = Map::new();
+    collection.insert("id".to_string(), JsonValue::String(String::new()));
+    collection.insert("name".to_string(), JsonValue::String(String::new()));
+    collection.insert(
+        "type".to_string(),
+        JsonValue::String(collection_type.to_string()),
+    );
+    collection.insert("fields".to_string(), JsonValue::Array(fields));
+    collection.insert("indexes".to_string(), JsonValue::Array(Vec::new()));
+    collection.insert("listRule".to_string(), JsonValue::Null);
+    collection.insert("viewRule".to_string(), JsonValue::Null);
+    collection.insert("createRule".to_string(), JsonValue::Null);
+    collection.insert("updateRule".to_string(), JsonValue::Null);
+    collection.insert("deleteRule".to_string(), JsonValue::Null);
+    collection.insert("created".to_string(), JsonValue::String(String::new()));
+    collection.insert("updated".to_string(), JsonValue::String(String::new()));
+    collection.insert("system".to_string(), JsonValue::Bool(false));
+
+    if let JsonValue::Object(extra) = extra {
+        collection.extend(extra);
+    }
+
+    JsonValue::Object(collection)
+}
+
+fn scaffold_id_field() -> JsonValue {
+    json!({
+        "id": "text3208210256",
+        "name": "id",
+        "type": "text",
+        "required": true,
+        "system": true,
+        "hidden": false,
+        "primaryKey": true,
+        "min": 15,
+        "max": 15,
+        "pattern": "^[a-z0-9]+$",
+        "autogeneratePattern": "[a-z0-9]{15}",
+        "presentable": false
+    })
+}
+
+fn scaffold_bool_field(id: &str, name: &str, system: bool) -> JsonValue {
+    json!({
+        "id": id,
+        "name": name,
+        "type": "bool",
+        "required": false,
+        "system": system,
+        "hidden": false,
+        "presentable": false
+    })
+}
+
+fn collection_export_payload(collections: Vec<CollectionConfig>) -> JsonValue {
+    json!({
+        "collections": collections
+            .into_iter()
+            .map(collection_export_value)
+            .collect::<Vec<_>>()
+    })
+}
+
+fn collection_export_value(collection: CollectionConfig) -> JsonValue {
+    json!({
+        "name": collection.name,
+        "type": collection.collection_type,
+        "schema": collection.fields
+            .into_iter()
+            .map(collection_field_export_value)
+            .collect::<Vec<_>>(),
+        "listRule": collection.list_rule,
+        "viewRule": collection.view_rule,
+        "createRule": collection.create_rule,
+        "updateRule": collection.update_rule,
+        "deleteRule": collection.delete_rule
+    })
+}
+
+fn collection_field_export_value(field: CollectionField) -> JsonValue {
+    let mut value = Map::new();
+    value.insert("name".to_string(), JsonValue::String(field.name));
+    value.insert("type".to_string(), json!(field.kind));
+    if let Some(collection) = field.collection {
+        value.insert("collection".to_string(), JsonValue::String(collection));
+    }
+    if let Some(max_select) = field.max_select {
+        value.insert("maxSelect".to_string(), json!(max_select));
+    }
+
+    JsonValue::Object(value)
+}
+
+fn existing_collections_tx(
+    tx: &rusqlite::Transaction<'_>,
+) -> Result<HashMap<String, CollectionConfig>, ServerError> {
+    let mut stmt = tx.prepare(r#"SELECT name, schema_json FROM "_rb_collections""#)?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut collections = HashMap::new();
+
+    for row in rows {
+        let (name, schema_json) = row?;
+        collections.insert(name, serde_json::from_str(&schema_json)?);
+    }
+
+    Ok(collections)
+}
+
+fn merge_imported_collection(
+    current: &CollectionConfig,
+    mut imported: CollectionConfig,
+    delete_missing: bool,
+) -> CollectionConfig {
+    if delete_missing {
+        return imported;
+    }
+
+    let mut imported_fields = HashMap::new();
+    for field in &imported.fields {
+        imported_fields.insert(field.name.clone(), ());
+    }
+
+    for field in &current.fields {
+        if !imported_fields.contains_key(&field.name) {
+            imported.fields.push(field.clone());
+        }
+    }
+
+    imported
+}
+
+fn prune_record_fields_tx(
+    tx: &rusqlite::Transaction<'_>,
+    collection_name: &str,
+    fields: &[CollectionField],
+) -> Result<(), ServerError> {
+    let table_sql = quote_identifier(&record_table_name(collection_name)?);
+    let updates = {
+        let mut stmt = tx.prepare(&format!("SELECT id, data FROM {table_sql}"))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut updates = Vec::new();
+
+        for row in rows {
+            let (id, data) = row?;
+            let mut data = serde_json::from_str::<JsonValue>(&data)?;
+            let Some(object) = data.as_object_mut() else {
+                continue;
+            };
+
+            let original_len = object.len();
+            object.retain(|key, _| {
+                is_system_record_key(key) || fields.iter().any(|field| field.name == *key)
+            });
+
+            if object.len() != original_len {
+                updates.push((id, serde_json::to_string(&data)?));
+            }
+        }
+
+        updates
+    };
+
+    let now = now_timestamp();
+    for (id, data) in updates {
+        tx.execute(
+            &format!("UPDATE {table_sql} SET data = ?1, updated = ?2 WHERE id = ?3"),
+            params![data, &now, id],
+        )?;
+    }
+
+    Ok(())
+}
+
 fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError> {
     validate_collection_name(&collection.name)?;
     let mut seen = HashMap::new();
@@ -1776,6 +2415,15 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
                 "duplicate field '{}'",
                 field.name
             )));
+        }
+        if let Some(target) = &field.collection {
+            validate_collection_name(target)?;
+            if field.kind != CollectionFieldKind::Relation {
+                return Err(ServerError::BadRequest(format!(
+                    "field '{}' declares a target collection but is not a relation",
+                    field.name
+                )));
+            }
         }
     }
 

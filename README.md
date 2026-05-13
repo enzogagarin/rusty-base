@@ -288,6 +288,12 @@ The first server slice supports:
 - SQLite-backed collection metadata;
 - per-collection record tables with JSON record data;
 - `GET/POST /api/collections`;
+- `GET /api/collections/meta/scaffolds` for PocketBase-style collection type
+  scaffolds;
+- `GET /api/collections/meta/export` as a Rusty Base import-ready metadata
+  export helper;
+- `PUT /api/collections/import` for bulk collection metadata import, accepting
+  both `fields`/`kind` and PocketBase-style `schema`/`type` field input;
 - `GET/PATCH /api/collections/:collection`, including safe metadata updates
   and record table renames;
 - `DELETE /api/collections/:collection` and
@@ -296,6 +302,8 @@ The first server slice supports:
 - `GET/PATCH/DELETE /api/collections/:collection/records/:id`;
 - PocketBase-like list response shape with `page`, `perPage`, `totalItems`,
   `totalPages`, and `items`;
+- first `?expand=relation,nested.relation` support for relation record
+  responses;
 - PocketBase-like error response shape with `code`, `message`, and `data`;
 - field-level validation `data` for the first auth and record form failures;
 - list/view/create/update/delete rule predicates and client filter predicates
@@ -332,7 +340,8 @@ Not implemented yet:
 - cross-collection identifiers such as `@collection.*`;
 - full PocketBase auth provider/settings parity beyond the current password-token
   flow;
-- exact PocketBase admin API/import-export compatibility;
+- exact PocketBase admin API/export compatibility;
+- complete relation `expand`, `fields`, and relation permission parity;
 - files, realtime, and admin UI;
 - Go FFI bindings;
 - `cargo-fuzz` corpus and CI fuzz target;

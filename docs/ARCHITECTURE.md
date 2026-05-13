@@ -61,6 +61,12 @@ Responsibility:
 - return PocketBase-like API error bodies with `code`, `message`, and `data`;
 - include field-level validation `data` for initial auth and record form errors;
 - update collection metadata and rename record tables transactionally;
+- expose collection type scaffolds for admin UI style flows;
+- import collection metadata in bulk with optional deletion of missing
+  collections and fields;
+- export import-ready collection metadata through a Rusty Base helper route;
+- expand first-level and nested relation records into the PocketBase-style
+  `expand` response object;
 - translate collection schemas into `rb-filter-engine` field resolvers;
 - apply list/view/create/update/delete filters with request context.
 

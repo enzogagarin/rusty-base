@@ -191,6 +191,13 @@ Exit criteria:
 - Added `GET/PATCH /api/collections/:collection` for collection metadata
   updates, field list changes, rule changes, and safe record table renames.
 - Added collection delete and truncate endpoints.
+- Added `PUT /api/collections/import` for bulk collection metadata import,
+  including `deleteMissing` handling for missing collections and JSON-backed
+  record fields.
+- Added collection metadata scaffolds and a Rusty Base import-ready metadata
+  export helper.
+- Added first relation `expand` support in `rb-server` responses, including
+  single, multi, and nested relation expansion.
 
 ## Next Sprint
 
@@ -198,6 +205,6 @@ Exit criteria:
 2. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 3. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.
-4. Add collection import/export-style bulk metadata operations.
-5. Expand PocketBase-compatible relation-edge and uploaded-file modifier
+4. Expand PocketBase-compatible relation-edge and uploaded-file modifier
    fixtures.
+5. Add `fields` response projection for base records and expanded relations.
