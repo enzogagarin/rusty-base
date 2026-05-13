@@ -298,6 +298,8 @@ The first server slice supports:
 - persisted collection IDs with collection metadata lookup/update/truncate/delete
   by either ID or name, plus `fields` projection on create/view/update
   responses;
+- persisted collection field IDs with PocketBase-style `type` field metadata
+  output while still accepting legacy Rusty Base `kind` input;
 - `GET /api/collections/meta/scaffolds` for PocketBase-style collection type
   scaffolds;
 - `GET /api/collections/meta/export` as a Rusty Base import-ready metadata

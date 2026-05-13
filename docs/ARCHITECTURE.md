@@ -98,6 +98,8 @@ Responsibility:
   and response projection;
 - persist collection IDs and resolve collection management routes by either ID
   or name;
+- persist collection field IDs and return PocketBase-style `type` metadata
+  while preserving `kind` as accepted legacy input;
 - list records with PocketBase-style filtering, pagination, `skipTotal`,
   sorting, expand, and response projection;
 - execute JSON `/api/batch` record create/update/upsert/delete requests inside

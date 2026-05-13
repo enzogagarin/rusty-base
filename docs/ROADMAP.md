@@ -259,11 +259,14 @@ Exit criteria:
 - Added persisted collection IDs, collection metadata lookup/update/truncate/
   delete by ID or name, collection `id` filtering/sorting, and `fields`
   projection on collection create/view/update responses.
+- Added persisted collection field IDs, PocketBase-style `type` field metadata
+  responses, export/import field ID preservation, and backwards-compatible
+  `kind` input parsing.
 
 ## Next Sprint
 
 1. Expand superuser/admin API parity around settings test helper routes and
-   deeper collection management edge cases.
+   deeper collection field option edge cases.
 2. Expand OAuth2 provider presets and harden callback validation around
    redirect URLs and provider-specific response edge cases.
 3. Expand compatibility fixtures around placeholder-like wildcard cases.

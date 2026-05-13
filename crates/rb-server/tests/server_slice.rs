@@ -1009,7 +1009,8 @@ fn lists_auth_methods_and_projects_auth_method_fields() {
         .unwrap(),
     );
     assert_eq!(users.status, 200);
-    assert_eq!(users.body["fields"][0]["kind"], "email");
+    assert_eq!(users.body["fields"][0]["type"], "email");
+    assert!(users.body["fields"][0].get("kind").is_none());
 
     let methods = app.handle(HttpRequest::new(
         "GET",
@@ -3126,6 +3127,12 @@ fn updates_collections_and_renames_record_tables() {
         .unwrap(),
     );
     assert_eq!(collection_response.status, 200);
+    assert_eq!(collection_response.body["fields"][0]["type"], "text");
+    assert!(collection_response.body["fields"][0].get("kind").is_none());
+    let title_field_id = collection_response.body["fields"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let created = app.handle(
         HttpRequest::json(
@@ -3159,6 +3166,12 @@ fn updates_collections_and_renames_record_tables() {
     assert_eq!(patched.status, 200);
     assert_eq!(patched.body["name"], "articles");
     assert_eq!(patched.body["fields"].as_array().unwrap().len(), 2);
+    assert_eq!(patched.body["fields"][0]["id"], title_field_id);
+    assert_eq!(patched.body["fields"][0]["type"], "text");
+    assert!(patched.body["fields"][1]["id"]
+        .as_str()
+        .unwrap()
+        .starts_with("array"));
 
     let old_collection = app.handle(HttpRequest::new("GET", "/api/collections/posts"));
     assert_eq!(old_collection.status, 404);
@@ -3497,6 +3510,11 @@ fn returns_collection_scaffolds_and_import_ready_export_payload() {
         "title"
     );
     assert_eq!(exported.body["collections"][0]["schema"][0]["type"], "text");
+    let exported_title_field_id = exported.body["collections"][0]["schema"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(exported_title_field_id.starts_with("text"));
     assert!(exported.body["collections"][0]["schema"][0]
         .get("kind")
         .is_none());
@@ -3514,6 +3532,10 @@ fn returns_collection_scaffolds_and_import_ready_export_payload() {
     let imported_posts = fresh.handle(HttpRequest::new("GET", "/api/collections/posts"));
     assert_eq!(imported_posts.status, 200);
     assert_eq!(imported_posts.body["fields"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        imported_posts.body["fields"][0]["id"],
+        exported_title_field_id
+    );
     assert_eq!(imported_posts.body["listRule"], "published = true");
 }
 

@@ -336,8 +336,10 @@ impl Default for OtpConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollectionField {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub name: String,
-    #[serde(alias = "type")]
+    #[serde(alias = "kind", rename = "type")]
     pub kind: CollectionFieldKind,
     #[serde(
         default,
@@ -361,6 +363,7 @@ pub struct CollectionField {
 impl CollectionField {
     pub fn new(name: impl Into<String>, kind: CollectionFieldKind) -> Self {
         Self {
+            id: None,
             name: name.into(),
             kind,
             collection: None,
@@ -374,6 +377,7 @@ impl CollectionField {
 
     pub fn relation(name: impl Into<String>, collection: impl Into<String>) -> Self {
         Self {
+            id: None,
             name: name.into(),
             kind: CollectionFieldKind::Relation,
             collection: Some(collection.into()),
@@ -6925,7 +6929,8 @@ fn apply_collection_patch(collection: &mut CollectionConfig, patch: CollectionPa
     if let Some(name) = patch.name {
         collection.name = name;
     }
-    if let Some(fields) = patch.fields {
+    if let Some(mut fields) = patch.fields {
+        preserve_collection_field_ids(&collection.fields, &mut fields);
         collection.fields = fields;
     }
     if let Some(rule) = patch.list_rule {
@@ -6980,6 +6985,7 @@ fn apply_collection_patch(collection: &mut CollectionConfig, patch: CollectionPa
 
 fn normalize_collection(collection: &mut CollectionConfig) {
     normalize_collection_id(collection);
+    normalize_collection_fields(&mut collection.fields);
 
     if collection.collection_type != CollectionType::Auth {
         collection.auth_rule = None;
@@ -7034,6 +7040,36 @@ fn normalize_collection(collection: &mut CollectionConfig) {
     }
     if otp_missing && !otp.enabled {
         otp.enabled = default_identity_fields.iter().any(|field| field == "email");
+    }
+}
+
+fn normalize_collection_fields(fields: &mut [CollectionField]) {
+    for field in fields {
+        field.id = field
+            .id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+            .or_else(|| Some(generate_field_id(field.kind)));
+    }
+}
+
+fn preserve_collection_field_ids(current: &[CollectionField], incoming: &mut [CollectionField]) {
+    for field in incoming {
+        if field
+            .id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .is_some()
+        {
+            continue;
+        }
+
+        if let Some(existing) = current.iter().find(|existing| existing.name == field.name) {
+            field.id = existing.id.clone();
+        }
     }
 }
 
@@ -7247,6 +7283,9 @@ fn insert_optional_json<T: Serialize>(
 
 fn collection_field_export_value(field: CollectionField) -> JsonValue {
     let mut value = Map::new();
+    if let Some(id) = field.id {
+        value.insert("id".to_string(), JsonValue::String(id));
+    }
     value.insert("name".to_string(), JsonValue::String(field.name));
     value.insert("type".to_string(), json!(field.kind));
     if let Some(collection) = field.collection {
@@ -7302,6 +7341,7 @@ fn merge_imported_collection(
     {
         imported.id = current.id.clone();
     }
+    preserve_collection_field_ids(&current.fields, &mut imported.fields);
 
     if delete_missing {
         return imported;
@@ -7371,6 +7411,7 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
         validate_collection_id(id)?;
     }
     let mut seen = HashMap::new();
+    let mut seen_ids = HashMap::new();
 
     if collection.collection_type == CollectionType::Auth
         && collection
@@ -7384,6 +7425,14 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
     }
 
     for field in &collection.fields {
+        if let Some(id) = field.id.as_deref() {
+            validate_field_id(id)?;
+            if seen_ids.insert(id.to_string(), ()).is_some() {
+                return Err(ServerError::BadRequest(format!(
+                    "duplicate field id '{id}'"
+                )));
+            }
+        }
         validate_field_name(&field.name)?;
         if is_system_record_key(&field.name) {
             return Err(ServerError::BadRequest(format!(
@@ -7571,6 +7620,19 @@ fn validate_collection_id(id: &str) -> Result<(), ServerError> {
         Err(ServerError::BadRequest(format!(
             "unsafe collection id '{id}'"
         )))
+    }
+}
+
+fn validate_field_id(id: &str) -> Result<(), ServerError> {
+    if !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    {
+        Ok(())
+    } else {
+        Err(ServerError::BadRequest(format!("unsafe field id '{id}'")))
     }
 }
 
@@ -8481,6 +8543,24 @@ fn generate_id() -> String {
 
 fn generate_collection_id() -> String {
     format!("_rbc_{}", generate_id())
+}
+
+fn generate_field_id(kind: CollectionFieldKind) -> String {
+    format!("{}{}", field_kind_id_prefix(kind), generate_id())
+}
+
+fn field_kind_id_prefix(kind: CollectionFieldKind) -> &'static str {
+    match kind {
+        CollectionFieldKind::Text => "text",
+        CollectionFieldKind::Email => "email",
+        CollectionFieldKind::File => "file",
+        CollectionFieldKind::Number => "number",
+        CollectionFieldKind::Bool => "bool",
+        CollectionFieldKind::DateTime => "datetime",
+        CollectionFieldKind::Array => "array",
+        CollectionFieldKind::Json => "json",
+        CollectionFieldKind::Relation => "relation",
+    }
 }
 
 fn generate_token() -> String {
