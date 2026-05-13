@@ -109,6 +109,8 @@ pub struct CollectionConfig {
     #[serde(default, alias = "schema")]
     pub fields: Vec<CollectionField>,
     #[serde(default)]
+    pub indexes: Vec<String>,
+    #[serde(default)]
     pub list_rule: Option<String>,
     #[serde(default)]
     pub view_rule: Option<String>,
@@ -149,6 +151,7 @@ impl CollectionConfig {
             name: name.into(),
             collection_type: CollectionType::Base,
             fields: fields.into_iter().collect(),
+            indexes: Vec::new(),
             list_rule: None,
             view_rule: None,
             create_rule: None,
@@ -1376,6 +1379,8 @@ pub struct CollectionPatch {
     pub name: Option<String>,
     #[serde(default)]
     pub fields: Option<Vec<CollectionField>>,
+    #[serde(default)]
+    pub indexes: Option<Vec<String>>,
     #[serde(default)]
     pub list_rule: Option<Option<String>>,
     #[serde(default)]
@@ -7213,6 +7218,9 @@ fn apply_collection_patch(collection: &mut CollectionConfig, patch: CollectionPa
         preserve_collection_field_ids(&collection.fields, &mut fields);
         collection.fields = fields;
     }
+    if let Some(indexes) = patch.indexes {
+        collection.indexes = indexes;
+    }
     if let Some(rule) = patch.list_rule {
         collection.list_rule = rule;
     }
@@ -7268,6 +7276,7 @@ fn normalize_collection(collection: &mut CollectionConfig) {
         .fields
         .retain(|field| !is_response_only_collection_field(field));
     normalize_collection_id(collection);
+    normalize_collection_indexes(&mut collection.indexes);
     normalize_collection_fields(&mut collection.fields);
 
     if collection.collection_type != CollectionType::Auth {
@@ -7374,6 +7383,14 @@ fn normalize_collection_id(collection: &mut CollectionConfig) {
         .filter(|id| !id.is_empty())
         .map(str::to_string)
         .or_else(|| Some(generate_collection_id()));
+}
+
+fn normalize_collection_indexes(indexes: &mut Vec<String>) {
+    for index in indexes.iter_mut() {
+        *index = index.trim().to_string();
+    }
+    indexes.retain(|index| !index.is_empty());
+    dedupe_strings(indexes);
 }
 
 fn collection_scaffolds() -> JsonValue {
@@ -7575,6 +7592,7 @@ fn collection_export_value(collection: CollectionConfig) -> JsonValue {
             .into_iter()
             .map(collection_field_export_value)
             .collect::<Vec<_>>(),
+        "indexes": collection.indexes,
         "listRule": collection.list_rule,
         "viewRule": collection.view_rule,
         "createRule": collection.create_rule,
@@ -7776,6 +7794,9 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
     validate_collection_name(&collection.name)?;
     if let Some(id) = collection.id.as_deref() {
         validate_collection_id(id)?;
+    }
+    for index in &collection.indexes {
+        validate_collection_index(index)?;
     }
     let mut seen = HashMap::new();
     let mut seen_ids = HashMap::new();
@@ -8108,6 +8129,16 @@ fn validate_collection_id(id: &str) -> Result<(), ServerError> {
         Err(ServerError::BadRequest(format!(
             "unsafe collection id '{id}'"
         )))
+    }
+}
+
+fn validate_collection_index(index: &str) -> Result<(), ServerError> {
+    if !index.is_empty() && index.len() <= 2048 && !index.chars().any(char::is_control) {
+        Ok(())
+    } else {
+        Err(ServerError::BadRequest(
+            "collection indexes must be non-empty strings without control characters".to_string(),
+        ))
     }
 }
 

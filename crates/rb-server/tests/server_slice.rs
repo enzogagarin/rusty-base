@@ -3218,6 +3218,10 @@ fn updates_collections_and_renames_record_tables() {
                     {"name": "title", "kind": "text"},
                     {"name": "tags", "kind": "array"}
                 ],
+                "indexes": [
+                    " CREATE INDEX idx_articles_title ON articles (title) ",
+                    "CREATE INDEX idx_articles_title ON articles (title)"
+                ],
                 "listRule": "title ~ 'Rusty'"
             }),
         )
@@ -3229,6 +3233,10 @@ fn updates_collections_and_renames_record_tables() {
     let patched_title = collection_field(&patched.body, "title");
     assert_eq!(patched_title["id"], title_field_id);
     assert_eq!(patched_title["type"], "text");
+    assert_eq!(
+        patched.body["indexes"],
+        json!(["CREATE INDEX idx_articles_title ON articles (title)"])
+    );
     assert!(collection_field(&patched.body, "tags")["id"]
         .as_str()
         .unwrap()
@@ -4833,16 +4841,25 @@ fn returns_collection_scaffolds_and_import_ready_export_payload() {
                     {"name": "title", "kind": "text"},
                     {"name": "published", "kind": "bool"}
                 ],
+                "indexes": ["CREATE INDEX idx_posts_title ON posts (title)"],
                 "listRule": "published = true"
             }),
         )
         .unwrap(),
     );
     assert_eq!(created.status, 200);
+    assert_eq!(
+        created.body["indexes"],
+        json!(["CREATE INDEX idx_posts_title ON posts (title)"])
+    );
 
     let exported = app.handle(HttpRequest::new("GET", "/api/collections/meta/export"));
     assert_eq!(exported.status, 200);
     assert_eq!(exported.body["collections"][0]["name"], "posts");
+    assert_eq!(
+        exported.body["collections"][0]["indexes"],
+        json!(["CREATE INDEX idx_posts_title ON posts (title)"])
+    );
     assert_eq!(
         exported.body["collections"][0]["schema"][0]["name"],
         "title"
@@ -4874,7 +4891,25 @@ fn returns_collection_scaffolds_and_import_ready_export_payload() {
         collection_field(&imported_posts.body, "title")["id"],
         exported_title_field_id
     );
+    assert_eq!(
+        imported_posts.body["indexes"],
+        json!(["CREATE INDEX idx_posts_title ON posts (title)"])
+    );
     assert_eq!(imported_posts.body["listRule"], "published = true");
+
+    let invalid_index = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "bad_indexes",
+                "indexes": ["CREATE INDEX bad\u{0000}idx ON bad_indexes (title)"],
+                "fields": [{"name": "title", "type": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_index.status, 400);
 }
 
 #[test]

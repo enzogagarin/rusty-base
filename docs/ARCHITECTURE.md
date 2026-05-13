@@ -132,6 +132,8 @@ Responsibility:
 - import collection metadata in bulk with optional deletion of missing
   collections and fields;
 - export import-ready collection metadata through a Rusty Base helper route;
+- persist, patch, import, and export collection `indexes` metadata for admin UI
+  compatibility without executing raw index SQL yet;
 - expand first-level and nested relation records into the PocketBase-style
   `expand` response object;
 - project record, auth, and expanded relation responses with first-pass

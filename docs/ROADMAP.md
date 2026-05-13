@@ -288,17 +288,22 @@ Exit criteria:
 - Added PocketBase-style response-only collection system fields (`id`,
   `created`, `updated`) for admin UI compatibility, represented as text and
   autodate metadata without persisting them into user schemas.
+- Added collection `indexes` metadata persistence across create/patch/import/
+  export responses for admin UI compatibility, while deferring safe SQLite index
+  execution to a storage-specific pass.
 
 ## Next Sprint
 
 1. Expand remaining field-type parity beyond the currently supported
    bool/number/text/email/url/editor/date/autodate/geoPoint/select/json/
    relation/file subset.
-2. Expand OAuth2 provider presets and harden callback validation around
+2. Design safe SQLite index execution for JSON-backed record tables instead of
+   running raw PocketBase index SQL strings directly.
+3. Expand OAuth2 provider presets and harden callback validation around
    redirect URLs and provider-specific response edge cases.
-3. Expand compatibility fixtures around placeholder-like wildcard cases.
-4. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
-5. Add relation compatibility fixtures copied from PocketBase-style access-rule
+4. Expand compatibility fixtures around placeholder-like wildcard cases.
+5. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
+6. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.
-6. Add file option parity and uploaded/protected-file compatibility fixtures
+7. Add file option parity and uploaded/protected-file compatibility fixtures
    around edge cases.

@@ -326,6 +326,9 @@ The first server slice supports:
   export helper;
 - `PUT /api/collections/import` for bulk collection metadata import, accepting
   both `fields`/`kind` and PocketBase-style `schema`/`type` field input;
+- collection `indexes` metadata is persisted, patched, imported, and exported
+  for admin UI compatibility; executing those indexes against the JSON-backed
+  record tables is intentionally left for a dedicated storage pass;
 - `GET/PATCH /api/collections/:collection`, including safe metadata updates
   and record table renames;
 - `DELETE /api/collections/:collection` and
