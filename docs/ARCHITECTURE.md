@@ -94,6 +94,8 @@ Responsibility:
 - update collection metadata and rename record tables transactionally;
 - list collection metadata with PocketBase-style pagination, sorting, filtering,
   and response projection;
+- list records with PocketBase-style filtering, pagination, sorting, expand, and
+  response projection;
 - expose collection type scaffolds for admin UI style flows;
 - import collection metadata in bulk with optional deletion of missing
   collections and fields;

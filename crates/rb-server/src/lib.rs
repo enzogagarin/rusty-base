@@ -420,6 +420,7 @@ pub struct ListOptions {
     pub page: u64,
     pub per_page: u64,
     pub filter: Option<String>,
+    pub sort: Option<String>,
     pub expand: Vec<String>,
     pub fields: Vec<String>,
     pub context: FilterContext,
@@ -431,6 +432,7 @@ impl Default for ListOptions {
             page: 1,
             per_page: 30,
             filter: None,
+            sort: None,
             expand: Vec::new(),
             fields: Vec::new(),
             context: FilterContext::default(),
@@ -1628,6 +1630,7 @@ impl Store {
         let collection = self.get_collection(collection_name)?;
         let resolver = RecordResolver::new(&collection);
         let predicate = compile_list_predicate(&collection, &resolver, &options)?;
+        let order_sql = record_sort_sql(&resolver, options.sort.as_deref())?;
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
         let where_sql = predicate
             .sql
@@ -1646,7 +1649,7 @@ impl Store {
             )?;
 
             let list_sql = format!(
-                "SELECT id, data, created, updated FROM {table_sql}{where_sql} ORDER BY created DESC, id ASC LIMIT ? OFFSET ?"
+                "SELECT id, data, created, updated FROM {table_sql}{where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?"
             );
             let mut list_params = predicate.params;
             list_params.push(SqlValue::Integer(options.per_page as i64));
@@ -4061,6 +4064,42 @@ fn collection_sort_sql(sort: Option<&str>) -> Result<String, ServerError> {
     }
 }
 
+fn record_sort_sql(
+    resolver: &RecordResolver<'_>,
+    sort: Option<&str>,
+) -> Result<String, ServerError> {
+    let Some(sort) = sort.map(str::trim).filter(|sort| !sort.is_empty()) else {
+        return Ok(r#""created" DESC, "id" ASC"#.to_string());
+    };
+
+    let mut parts = Vec::new();
+    for raw_field in sort
+        .split(',')
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+    {
+        let (direction, field) = if let Some(field) = raw_field.strip_prefix('-') {
+            ("DESC", field.trim())
+        } else if let Some(field) = raw_field.strip_prefix('+') {
+            ("ASC", field.trim())
+        } else {
+            ("ASC", raw_field)
+        };
+        let expression = if field == "@random" {
+            "RANDOM()".to_string()
+        } else {
+            resolver.resolve_field(field)?.sql
+        };
+        parts.push(format!("{expression} {direction}"));
+    }
+
+    if parts.is_empty() {
+        Ok(r#""created" DESC, "id" ASC"#.to_string())
+    } else {
+        Ok(parts.join(", "))
+    }
+}
+
 fn collection_type_sql() -> String {
     r#"json_extract("schema_json", '$.type')"#.to_string()
 }
@@ -4082,6 +4121,7 @@ fn list_options_from_query(
         page,
         per_page,
         filter: query.get("filter").cloned(),
+        sort: query.get("sort").cloned(),
         expand: expand_options_from_query(query)?,
         fields: field_options_from_query(query)?,
         context,

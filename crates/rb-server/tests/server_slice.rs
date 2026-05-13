@@ -1984,6 +1984,47 @@ fn handles_pocketbase_style_records_http_routes() {
     assert_eq!(list.status, 200);
     assert_eq!(list.body["totalItems"], 1);
     assert_eq!(list.body["items"][0]["title"], "Rusty Base");
+
+    let third = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Lower Score", "published": true, "owner": "user_1", "score": 3}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(third.status, 200);
+
+    let sorted_desc = app.handle(
+        HttpRequest::new(
+            "GET",
+            "/api/collections/posts/records?filter=published%20%3D%20true&sort=-score",
+        )
+        .with_header("X-RB-Auth-ID", "user_1"),
+    );
+
+    assert_eq!(sorted_desc.status, 200);
+    assert_eq!(sorted_desc.body["totalItems"], 2);
+    assert_eq!(sorted_desc.body["items"][0]["title"], "Rusty Base");
+    assert_eq!(sorted_desc.body["items"][1]["title"], "Lower Score");
+
+    let sorted_asc = app.handle(
+        HttpRequest::new(
+            "GET",
+            "/api/collections/posts/records?filter=published%20%3D%20true&sort=score",
+        )
+        .with_header("X-RB-Auth-ID", "user_1"),
+    );
+
+    assert_eq!(sorted_asc.status, 200);
+    assert_eq!(sorted_asc.body["items"][0]["title"], "Lower Score");
+    assert_eq!(sorted_asc.body["items"][1]["title"], "Rusty Base");
+
+    let invalid_sort = app.handle(
+        HttpRequest::new("GET", "/api/collections/posts/records?sort=title%3Bdrop")
+            .with_header("X-RB-Auth-ID", "user_1"),
+    );
+    assert_eq!(invalid_sort.status, 400);
 }
 
 #[test]
