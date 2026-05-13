@@ -28,6 +28,16 @@ Responsibility:
 - render a narrow relation-aware SQL predicate for single-value and multi-value
   relation chains.
 
+Module layout:
+
+- `lexer.rs`: tokenization and bounded lexical errors;
+- `parser.rs`: parser limits and AST construction;
+- `ast.rs`: public AST/plan shapes and private parser operands;
+- `schema.rs`: field schemas, relation traversal metadata, and resolver API;
+- `error.rs`: structured filter error kinds and display;
+- `compiler/sqlite.rs`: SQLite SQL compilation, planning, request macros, and
+  relation-aware SQL rendering.
+
 Non-responsibility:
 
 - it does not execute SQL;

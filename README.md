@@ -115,7 +115,13 @@ Target capabilities:
 │   │   └── src/main.rs
 │   ├── rb-filter-engine
 │   │   ├── Cargo.toml
+│   │   ├── src/ast.rs
+│   │   ├── src/compiler/sqlite.rs
+│   │   ├── src/error.rs
+│   │   ├── src/lexer.rs
 │   │   ├── src/lib.rs
+│   │   ├── src/parser.rs
+│   │   ├── src/schema.rs
 │   │   └── tests/filter_engine.rs
 │   └── rb-server
 │       ├── Cargo.toml
