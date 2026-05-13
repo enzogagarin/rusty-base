@@ -438,6 +438,15 @@ impl Default for ListOptions {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectionListOptions {
+    pub page: u64,
+    pub per_page: u64,
+    pub filter: Option<String>,
+    pub sort: Option<String>,
+    pub fields: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordList {
@@ -1137,6 +1146,85 @@ impl Store {
             conn.prepare(r#"SELECT schema_json FROM "_rb_collections" ORDER BY name ASC"#)?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+    }
+
+    pub fn list_collection_page(
+        &self,
+        options: CollectionListOptions,
+    ) -> Result<JsonValue, ServerError> {
+        let resolver = CollectionResolver;
+        let mut where_sql = String::new();
+        let mut params = Vec::new();
+        if let Some(filter) = options
+            .filter
+            .as_deref()
+            .filter(|filter| !filter.trim().is_empty())
+        {
+            let compiled = compile_filter_with_resolver_and_context(
+                filter,
+                &resolver,
+                FilterContext::default(),
+            )?;
+            where_sql = format!(" WHERE ({})", compiled.sql);
+            params.extend(filter_params_to_sqlite(compiled.params)?);
+        }
+
+        let order_sql = collection_sort_sql(options.sort.as_deref())?;
+        let offset = options.page.saturating_sub(1) * options.per_page;
+        let (total_items, items) = {
+            let conn = self.connection()?;
+            let total_items: u64 = conn.query_row(
+                &format!(r#"SELECT COUNT(*) FROM "_rb_collections"{where_sql}"#),
+                params_from_iter(params.iter()),
+                |row| row.get::<_, u64>(0),
+            )?;
+
+            let mut list_params = params;
+            list_params.push(SqlValue::Integer(options.per_page as i64));
+            list_params.push(SqlValue::Integer(offset as i64));
+            let sql = format!(
+                r#"
+                SELECT name, schema_json, created, updated
+                FROM "_rb_collections"
+                {where_sql}
+                ORDER BY {order_sql}
+                LIMIT ? OFFSET ?
+                "#
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params_from_iter(list_params.iter()), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?;
+            let rows = rows.collect::<Result<Vec<_>, _>>()?;
+            let items = rows
+                .into_iter()
+                .map(|(name, schema_json, created, updated)| {
+                    collection_row_to_value(name, schema_json, created, updated)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            (total_items, items)
+        };
+
+        let total_pages = if total_items == 0 {
+            0
+        } else {
+            total_items.div_ceil(options.per_page)
+        };
+
+        let mut payload = json!(RecordList {
+            page: options.page,
+            per_page: options.per_page,
+            total_items,
+            total_pages,
+            items,
+        });
+        project_json_response(&mut payload, &options.fields)?;
+        Ok(payload)
     }
 
     pub fn update_collection(
@@ -3031,8 +3119,10 @@ impl RustyBaseApp {
             }
             ("GET", ["api", "collections"]) => {
                 self.require_superuser_admin(&request)?;
-                let collections = self.store.list_collections()?;
-                Ok(HttpResponse::json(200, json!({"items": collections})))
+                let list = self
+                    .store
+                    .list_collection_page(collection_list_options_from_query(&query)?)?;
+                Ok(HttpResponse::json(200, list))
             }
             ("POST", ["api", "collections"]) => {
                 self.require_superuser_admin(&request)?;
@@ -3808,6 +3898,35 @@ impl FieldResolver for IncomingRecordResolver<'_> {
     }
 }
 
+struct CollectionResolver;
+
+impl FieldResolver for CollectionResolver {
+    fn resolve_field(&self, field: &str) -> Result<ResolvedField, FilterError> {
+        match field {
+            "id" | "name" => Ok(ResolvedField::with_kind(
+                quote_identifier("name"),
+                FieldKind::Text,
+            )),
+            "created" | "updated" => Ok(ResolvedField::with_kind(
+                quote_identifier(field),
+                FieldKind::DateTime,
+            )),
+            "type" => Ok(ResolvedField::with_kind(
+                collection_type_sql(),
+                FieldKind::Text,
+            )),
+            "system" => Ok(ResolvedField::with_kind(
+                collection_system_sql(),
+                FieldKind::Bool,
+            )),
+            _ => Err(FilterError::with_kind(
+                rb_filter_engine::FilterErrorKind::UnknownField,
+                format!("unknown collection field '{field}'"),
+            )),
+        }
+    }
+}
+
 struct CompiledPredicate {
     sql: Option<String>,
     params: Vec<SqlValue>,
@@ -3883,6 +4002,71 @@ fn filter_value_to_sqlite(value: FilterValue) -> Result<SqlValue, ServerError> {
         FilterValue::Bool(value) => SqlValue::Integer(if value { 1 } else { 0 }),
         FilterValue::Null => SqlValue::Null,
     })
+}
+
+fn collection_list_options_from_query(
+    query: &HashMap<String, String>,
+) -> Result<CollectionListOptions, ServerError> {
+    let page = parse_u64_query(query, "page")?.unwrap_or(1).max(1);
+    let per_page = parse_u64_query(query, "perPage")?
+        .unwrap_or(30)
+        .clamp(1, 500);
+
+    Ok(CollectionListOptions {
+        page,
+        per_page,
+        filter: query.get("filter").cloned(),
+        sort: query.get("sort").cloned(),
+        fields: field_options_from_query(query)?,
+    })
+}
+
+fn collection_sort_sql(sort: Option<&str>) -> Result<String, ServerError> {
+    let Some(sort) = sort.map(str::trim).filter(|sort| !sort.is_empty()) else {
+        return Ok(r#""name" ASC"#.to_string());
+    };
+
+    let mut parts = Vec::new();
+    for raw_field in sort
+        .split(',')
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+    {
+        let (direction, field) = if let Some(field) = raw_field.strip_prefix('-') {
+            ("DESC", field.trim())
+        } else if let Some(field) = raw_field.strip_prefix('+') {
+            ("ASC", field.trim())
+        } else {
+            ("ASC", raw_field)
+        };
+        let expression = match field {
+            "@random" => "RANDOM()".to_string(),
+            "id" | "name" => quote_identifier("name"),
+            "created" | "updated" => quote_identifier(field),
+            "type" => collection_type_sql(),
+            "system" => collection_system_sql(),
+            _ => {
+                return Err(ServerError::BadRequest(format!(
+                    "invalid collection sort field '{field}'"
+                )))
+            }
+        };
+        parts.push(format!("{expression} {direction}"));
+    }
+
+    if parts.is_empty() {
+        Ok(r#""name" ASC"#.to_string())
+    } else {
+        Ok(parts.join(", "))
+    }
+}
+
+fn collection_type_sql() -> String {
+    r#"json_extract("schema_json", '$.type')"#.to_string()
+}
+
+fn collection_system_sql() -> String {
+    r#"CASE WHEN "name" LIKE '\_%' ESCAPE '\' THEN TRUE ELSE FALSE END"#.to_string()
 }
 
 fn list_options_from_query(
@@ -5389,6 +5573,25 @@ fn row_to_record(collection_name: &str, row: &rusqlite::Row<'_>) -> rusqlite::Re
         created,
         updated,
     ))
+}
+
+fn collection_row_to_value(
+    name: String,
+    schema_json: String,
+    created: String,
+    updated: String,
+) -> Result<JsonValue, ServerError> {
+    let collection = serde_json::from_str::<CollectionConfig>(&schema_json)?;
+    let mut value = json!(collection);
+    let object = value.as_object_mut().ok_or_else(|| {
+        ServerError::BadRequest("collection response must be a JSON object".to_string())
+    })?;
+    object.insert("id".to_string(), JsonValue::String(name.clone()));
+    object.insert("name".to_string(), JsonValue::String(name.clone()));
+    object.insert("created".to_string(), JsonValue::String(created));
+    object.insert("updated".to_string(), JsonValue::String(updated));
+    object.insert("system".to_string(), JsonValue::Bool(name.starts_with('_')));
+    Ok(value)
 }
 
 fn record_from_parts(

@@ -250,6 +250,8 @@ Exit criteria:
 - Added the first `_superusers` bootstrap/guard path: collection metadata routes
   require a superuser token after bootstrap, `_superusers` records are protected
   after the first superuser exists, and superuser auth bypasses record rules.
+- Added PocketBase-style paginated collection list output with collection
+  metadata filtering, sorting, and response `fields` projection.
 
 ## Next Sprint
 

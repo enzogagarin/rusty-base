@@ -82,6 +82,8 @@ Responsibility:
 - return PocketBase-like API error bodies with `code`, `message`, and `data`;
 - include field-level validation `data` for initial auth and record form errors;
 - update collection metadata and rename record tables transactionally;
+- list collection metadata with PocketBase-style pagination, sorting, filtering,
+  and response projection;
 - expose collection type scaffolds for admin UI style flows;
 - import collection metadata in bulk with optional deletion of missing
   collections and fields;

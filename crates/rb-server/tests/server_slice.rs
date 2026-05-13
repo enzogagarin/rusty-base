@@ -417,6 +417,12 @@ fn superusers_manage_collections_and_bypass_record_rules() {
             .with_header("Authorization", format!("Bearer {superuser_token}")),
     );
     assert_eq!(collection_list.status, 200);
+    assert_eq!(collection_list.body["page"], 1);
+    assert_eq!(collection_list.body["perPage"], 30);
+    assert_eq!(collection_list.body["totalItems"], 1);
+    assert_eq!(collection_list.body["items"][0]["name"], "_superusers");
+    assert_eq!(collection_list.body["items"][0]["type"], "auth");
+    assert_eq!(collection_list.body["items"][0]["system"], true);
 
     let posts = app.handle(
         HttpRequest::json(
@@ -436,6 +442,25 @@ fn superusers_manage_collections_and_bypass_record_rules() {
         .with_header("Authorization", format!("Bearer {superuser_token}")),
     );
     assert_eq!(posts.status, 200);
+
+    let filtered_collections = app.handle(
+        HttpRequest::new(
+            "GET",
+            "/api/collections?page=1&perPage=1&filter=type='base'&sort=-name&fields=page,perPage,totalItems,totalPages,items.name,items.type,items.system",
+        )
+        .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(filtered_collections.status, 200);
+    assert_eq!(filtered_collections.body["page"], 1);
+    assert_eq!(filtered_collections.body["perPage"], 1);
+    assert_eq!(filtered_collections.body["totalItems"], 1);
+    assert_eq!(filtered_collections.body["totalPages"], 1);
+    assert_eq!(filtered_collections.body["items"][0]["name"], "posts");
+    assert_eq!(filtered_collections.body["items"][0]["type"], "base");
+    assert_eq!(filtered_collections.body["items"][0]["system"], false);
+    assert!(filtered_collections.body["items"][0]
+        .get("fields")
+        .is_none());
 
     let denied_create = app.handle(
         HttpRequest::json(
