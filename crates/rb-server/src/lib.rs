@@ -11,7 +11,7 @@ use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, O
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value as JsonValue};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt, io,
     io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
@@ -1389,13 +1389,33 @@ impl RustyBaseApp {
                 let response =
                     self.store
                         .auth_with_password(collection, &auth.identity, &auth.password)?;
-                Ok(HttpResponse::json(200, json!(response)))
+                let expands = expand_options_from_query(&query)?;
+                let fields = field_options_from_query(&query)?;
+                let payload = auth_response_payload(
+                    &self.store,
+                    collection,
+                    response,
+                    &expands,
+                    &fields,
+                    request_context(&request, &query),
+                )?;
+                Ok(HttpResponse::json(200, payload))
             }
             ("POST", ["api", "collections", collection, "auth-refresh"]) => {
                 let token = bearer_token(&request)
                     .ok_or_else(|| ServerError::Forbidden("missing auth token".to_string()))?;
                 let response = self.store.auth_refresh(collection, token)?;
-                Ok(HttpResponse::json(200, json!(response)))
+                let expands = expand_options_from_query(&query)?;
+                let fields = field_options_from_query(&query)?;
+                let payload = auth_response_payload(
+                    &self.store,
+                    collection,
+                    response,
+                    &expands,
+                    &fields,
+                    request_context(&request, &query),
+                )?;
+                Ok(HttpResponse::json(200, payload))
             }
             ("POST", ["api", "collections", collection, "auth-logout"]) => {
                 let token = bearer_token(&request)
@@ -1931,32 +1951,71 @@ fn project_record_responses(
     Ok(())
 }
 
+fn auth_response_payload(
+    store: &Store,
+    collection_name: &str,
+    mut response: AuthResponse,
+    expands: &[String],
+    fields: &[String],
+    context: FilterContext,
+) -> Result<JsonValue, ServerError> {
+    let context = context_with_auth_record_values(context, &response.record);
+    store.expand_record_response(collection_name, &mut response.record, expands, &context)?;
+
+    let mut payload = json!(response);
+    project_json_response(&mut payload, fields)?;
+    Ok(payload)
+}
+
 fn project_record_response(record: &mut JsonValue, fields: &[String]) -> Result<(), ServerError> {
+    project_json_response(record, fields)
+}
+
+fn project_json_response(value: &mut JsonValue, fields: &[String]) -> Result<(), ServerError> {
     if fields.is_empty() {
         return Ok(());
     }
 
-    let source = record.clone();
+    let source = value.clone();
     let mut projected = Map::new();
-    let has_expand_projection = fields
-        .iter()
-        .any(|field| field == "expand" || field.starts_with("expand."));
+    let expand_projection_parents = expand_projection_parents(fields);
 
     for field in fields {
         let parts = field.split('.').collect::<Vec<_>>();
-        project_field_path(&source, &mut projected, &parts, true, has_expand_projection);
+        project_field_path(
+            &source,
+            &mut projected,
+            &parts,
+            &[],
+            &expand_projection_parents,
+        );
     }
 
-    *record = JsonValue::Object(projected);
+    *value = JsonValue::Object(projected);
     Ok(())
+}
+
+fn expand_projection_parents(fields: &[String]) -> HashSet<Vec<String>> {
+    let mut parents = HashSet::new();
+    for field in fields {
+        let mut parent = Vec::new();
+        for part in field.split('.') {
+            if part == "expand" {
+                parents.insert(parent.clone());
+            }
+            parent.push(part.to_string());
+        }
+    }
+
+    parents
 }
 
 fn project_field_path(
     source: &JsonValue,
     target: &mut Map<String, JsonValue>,
     parts: &[&str],
-    at_root: bool,
-    has_expand_projection: bool,
+    current_path: &[String],
+    expand_projection_parents: &HashSet<Vec<String>>,
 ) {
     let Some((head, tail)) = parts.split_first() else {
         return;
@@ -1967,14 +2026,19 @@ fn project_field_path(
 
     if *head == "*" {
         for (key, value) in source_object {
-            if at_root && has_expand_projection && key == "expand" {
+            if key == "expand" && expand_projection_parents.contains(current_path) {
                 continue;
             }
 
+            let child_path = child_projection_path(current_path, key);
             let projected = if tail.is_empty() {
-                Some(value.clone())
+                Some(copy_wildcard_value(
+                    value,
+                    &child_path,
+                    expand_projection_parents,
+                ))
             } else {
-                project_value_path(value, tail, has_expand_projection)
+                project_value_path(value, tail, &child_path, expand_projection_parents)
             };
             if let Some(projected) = projected {
                 merge_projected_value(target, key, projected);
@@ -1986,10 +2050,11 @@ fn project_field_path(
     let Some(value) = source_object.get(*head) else {
         return;
     };
+    let child_path = child_projection_path(current_path, head);
     let projected = if tail.is_empty() {
         Some(value.clone())
     } else {
-        project_value_path(value, tail, has_expand_projection)
+        project_value_path(value, tail, &child_path, expand_projection_parents)
     };
     if let Some(projected) = projected {
         merge_projected_value(target, head, projected);
@@ -1999,7 +2064,8 @@ fn project_field_path(
 fn project_value_path(
     source: &JsonValue,
     parts: &[&str],
-    has_expand_projection: bool,
+    current_path: &[String],
+    expand_projection_parents: &HashSet<Vec<String>>,
 ) -> Option<JsonValue> {
     if parts.is_empty() {
         return Some(source.clone());
@@ -2007,7 +2073,13 @@ fn project_value_path(
 
     if source.is_object() {
         let mut projected = Map::new();
-        project_field_path(source, &mut projected, parts, false, has_expand_projection);
+        project_field_path(
+            source,
+            &mut projected,
+            parts,
+            current_path,
+            expand_projection_parents,
+        );
         return (!projected.is_empty()).then_some(JsonValue::Object(projected));
     }
 
@@ -2015,12 +2087,54 @@ fn project_value_path(
         return Some(JsonValue::Array(
             array
                 .iter()
-                .filter_map(|value| project_value_path(value, parts, has_expand_projection))
+                .filter_map(|value| {
+                    project_value_path(value, parts, current_path, expand_projection_parents)
+                })
                 .collect(),
         ));
     }
 
     None
+}
+
+fn copy_wildcard_value(
+    source: &JsonValue,
+    current_path: &[String],
+    expand_projection_parents: &HashSet<Vec<String>>,
+) -> JsonValue {
+    match source {
+        JsonValue::Object(object) => {
+            let mut copied = Map::new();
+            for (key, value) in object {
+                if key == "expand" && expand_projection_parents.contains(current_path) {
+                    continue;
+                }
+
+                copied.insert(
+                    key.clone(),
+                    copy_wildcard_value(
+                        value,
+                        &child_projection_path(current_path, key),
+                        expand_projection_parents,
+                    ),
+                );
+            }
+            JsonValue::Object(copied)
+        }
+        JsonValue::Array(array) => JsonValue::Array(
+            array
+                .iter()
+                .map(|value| copy_wildcard_value(value, current_path, expand_projection_parents))
+                .collect(),
+        ),
+        _ => source.clone(),
+    }
+}
+
+fn child_projection_path(current_path: &[String], child: &str) -> Vec<String> {
+    let mut path = current_path.to_vec();
+    path.push(child.to_string());
+    path
 }
 
 fn merge_projected_value(target: &mut Map<String, JsonValue>, key: &str, value: JsonValue) {

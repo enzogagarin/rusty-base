@@ -306,6 +306,10 @@ The first server slice supports:
   responses;
 - first `?fields=...` response projection support for records and expanded
   relations, including `*` and nested paths such as `expand.author.name`;
+- `auth-with-password` and `auth-refresh` response `expand`/`fields` support,
+  including response-level paths such as `record.expand.profile.bio`;
+- relation expand respects target collection view rules and omits hidden related
+  records from the `expand` payload;
 - PocketBase-like error response shape with `code`, `message`, and `data`;
 - field-level validation `data` for the first auth and record form failures;
 - list/view/create/update/delete rule predicates and client filter predicates
@@ -343,8 +347,7 @@ Not implemented yet:
 - full PocketBase auth provider/settings parity beyond the current password-token
   flow;
 - exact PocketBase admin API/export compatibility;
-- complete relation `expand`, auth response `fields`, and relation permission
-  parity;
+- complete relation `expand` edge-case parity and relation permission fixtures;
 - files, realtime, and admin UI;
 - Go FFI bindings;
 - `cargo-fuzz` corpus and CI fuzz target;

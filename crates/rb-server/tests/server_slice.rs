@@ -273,6 +273,112 @@ fn hashes_auth_passwords_and_uses_login_tokens_for_rules() {
 }
 
 #[test]
+fn auth_responses_support_expand_and_response_fields() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    for collection in [
+        json!({
+            "name": "profiles",
+            "fields": [
+                {"name": "bio", "kind": "text"},
+                {"name": "owner", "kind": "text"}
+            ],
+            "viewRule": "owner = @request.auth.id"
+        }),
+        json!({
+            "name": "users",
+            "type": "auth",
+            "fields": [
+                {"name": "email", "kind": "text"},
+                {"name": "name", "kind": "text"},
+                {
+                    "name": "profile",
+                    "kind": "relation",
+                    "collection": "profiles",
+                    "maxSelect": 1
+                }
+            ]
+        }),
+    ] {
+        let response =
+            app.handle(HttpRequest::json("POST", "/api/collections", collection).unwrap());
+        assert_eq!(response.status, 200);
+    }
+
+    let profile = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/profiles/records",
+            json!({"id": "profile_1", "bio": "Private profile", "owner": "user_1"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(profile.status, 200);
+
+    let user = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({
+                "id": "user_1",
+                "email": "burak@example.com",
+                "name": "Burak",
+                "profile": "profile_1",
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(user.status, 200);
+
+    let login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password?expand=profile&fields=*,record.expand.profile.bio",
+            json!({"identity": "burak@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(login.status, 200);
+    let token = login.body["token"].as_str().unwrap().to_string();
+    assert!(login.body["expires"]
+        .as_str()
+        .unwrap()
+        .parse::<u128>()
+        .is_ok());
+    assert_eq!(login.body["record"]["id"], "user_1");
+    assert_eq!(login.body["record"]["email"], "burak@example.com");
+    assert_eq!(
+        login.body["record"]["expand"]["profile"]["bio"],
+        "Private profile"
+    );
+    assert!(login.body["record"]["expand"]["profile"]
+        .get("owner")
+        .is_none());
+
+    let refresh = app.handle(
+        HttpRequest::new(
+            "POST",
+            "/api/collections/users/auth-refresh?expand=profile&fields=token,record.email,record.expand.profile.bio",
+        )
+        .with_header("Authorization", format!("Bearer {token}")),
+    );
+    assert_eq!(refresh.status, 200);
+    assert_ne!(refresh.body["token"], token);
+    assert!(refresh.body.get("expires").is_none());
+    assert_eq!(refresh.body["record"]["email"], "burak@example.com");
+    assert!(refresh.body["record"].get("id").is_none());
+    assert_eq!(
+        refresh.body["record"]["expand"]["profile"]["bio"],
+        "Private profile"
+    );
+    assert!(refresh.body["record"]["expand"]["profile"]
+        .get("owner")
+        .is_none());
+}
+
+#[test]
 fn returns_validation_data_for_auth_and_record_forms() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
@@ -1139,6 +1245,83 @@ fn expands_single_multi_and_nested_relation_records() {
     assert_eq!(created_projected.status, 200);
     assert_eq!(created_projected.body["title"], "Only Title");
     assert!(created_projected.body.get("id").is_none());
+}
+
+#[test]
+fn omits_expanded_relations_blocked_by_view_rule() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    for collection in [
+        json!({
+            "name": "tags",
+            "fields": [
+                {"name": "label", "kind": "text"},
+                {"name": "public", "kind": "bool"}
+            ],
+            "viewRule": "public = true"
+        }),
+        json!({
+            "name": "posts",
+            "fields": [
+                {"name": "title", "kind": "text"},
+                {
+                    "name": "primaryTag",
+                    "kind": "relation",
+                    "collection": "tags",
+                    "maxSelect": 1
+                },
+                {
+                    "name": "tags",
+                    "kind": "relation",
+                    "collection": "tags",
+                    "maxSelect": 5
+                }
+            ]
+        }),
+    ] {
+        let response =
+            app.handle(HttpRequest::json("POST", "/api/collections", collection).unwrap());
+        assert_eq!(response.status, 200);
+    }
+
+    for (collection, record) in [
+        (
+            "tags",
+            json!({"id": "tag_public", "label": "rust", "public": true}),
+        ),
+        (
+            "tags",
+            json!({"id": "tag_private", "label": "draft", "public": false}),
+        ),
+        (
+            "posts",
+            json!({
+                "id": "post_1",
+                "title": "Rule-aware expand",
+                "primaryTag": "tag_private",
+                "tags": ["tag_public", "tag_private"]
+            }),
+        ),
+    ] {
+        let response = app.handle(
+            HttpRequest::json(
+                "POST",
+                &format!("/api/collections/{collection}/records"),
+                record,
+            )
+            .unwrap(),
+        );
+        assert_eq!(response.status, 200);
+    }
+
+    let record = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts/records/post_1?expand=primaryTag,tags",
+    ));
+    assert_eq!(record.status, 200);
+    assert!(record.body["expand"].get("primaryTag").is_none());
+    assert_eq!(record.body["expand"]["tags"].as_array().unwrap().len(), 1);
+    assert_eq!(record.body["expand"]["tags"][0]["id"], "tag_public");
 }
 
 #[test]
