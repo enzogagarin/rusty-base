@@ -3900,6 +3900,129 @@ fn supports_geo_point_field_values_and_filters() {
 }
 
 #[test]
+fn supports_relation_min_select_metadata_and_validation() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let tags = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "tags",
+                "fields": [{"name": "label", "type": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(tags.status, 200);
+
+    for record in [
+        json!({"id": "tag_1", "label": "rust"}),
+        json!({"id": "tag_2", "label": "sqlite"}),
+        json!({"id": "tag_3", "label": "pocketbase"}),
+    ] {
+        let response =
+            app.handle(HttpRequest::json("POST", "/api/collections/tags/records", record).unwrap());
+        assert_eq!(response.status, 200);
+    }
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "title", "type": "text"},
+                    {
+                        "name": "tags",
+                        "type": "relation",
+                        "collection": "tags",
+                        "minSelect": 2,
+                        "maxSelect": 3
+                    }
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(posts.status, 200);
+    let tags_field = collection_field(&posts.body, "tags");
+    assert_eq!(tags_field["minSelect"], 2);
+    assert_eq!(tags_field["maxSelect"], 3);
+
+    let missing_relation = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Too few"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(missing_relation.status, 400);
+    assert_eq!(
+        missing_relation.body["data"]["tags"]["code"],
+        "validation_min_select"
+    );
+
+    let too_few_relations = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Still too few", "tags": ["tag_1"]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(too_few_relations.status, 400);
+    assert_eq!(
+        too_few_relations.body["data"]["tags"]["code"],
+        "validation_min_select"
+    );
+
+    let valid = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Enough", "tags": ["tag_1", "tag_2"]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(valid.status, 200);
+
+    let invalid_kind = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "bad_min_select_kind",
+                "fields": [{"name": "title", "type": "text", "minSelect": 1}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_kind.status, 400);
+
+    let invalid_range = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "bad_min_select_range",
+                "fields": [{
+                    "name": "tags",
+                    "type": "relation",
+                    "collection": "tags",
+                    "minSelect": 2,
+                    "maxSelect": 1
+                }]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_range.status, 400);
+}
+
+#[test]
 fn enforces_required_and_text_field_options_on_records() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 

@@ -110,13 +110,14 @@ Responsibility:
 - preserve first common/text/select/url/editor/autodate field option metadata
   used by the admin UI, including visibility, required/presentable, text
   bounds, pattern, autogeneration/select settings, domain allow/deny lists, and
-  `onCreate`/`onUpdate` autodate flags plus JSON/editor size limits;
+  relation `minSelect`, `onCreate`/`onUpdate` autodate flags, and JSON/editor
+  size limits;
 - enforce required fields, text bounds/pattern constraints, basic scalar/array
   shapes, email shape, URL shape/domain options, PocketBase-style datetime
   format, geoPoint lon/lat shape, number bounds, select `values`/`maxSelect`,
   JSON required/size rules, editor size rules, custom autodate stamping,
-  relation `maxSelect`, and relation target existence for record create/update
-  against the final stored record shape;
+  relation `minSelect`/`maxSelect`, and relation target existence for record
+  create/update against the final stored record shape;
 - apply first record value modifiers for number add/subtract and multi-select/
   relation append, prepend, and remove operations before rule and validation
   checks;

@@ -269,15 +269,16 @@ Exit criteria:
 - Added first common/text/select/url/editor/autodate field option metadata
   parity for
   `required`, `hidden`, `system`, `presentable`, `primaryKey`, `min`, `max`,
-  `pattern`, `autogeneratePattern`, `values`, `maxSelect`, domain allow/deny
-  lists, `onCreate`/`onUpdate`, and JSON/editor `maxSize`, including
-  import/export preservation.
+  `pattern`, `autogeneratePattern`, `values`, relation `minSelect`,
+  `maxSelect`, domain allow/deny lists, `onCreate`/`onUpdate`, and JSON/editor
+  `maxSize`, including import/export preservation.
 - Added record create/update enforcement for `required`, text `min`/`max`/
   common regex-like `pattern` constraints, email shape, basic bool/number/array
   shapes, URL shape/domain options, PocketBase-style datetime format, geoPoint
   lon/lat shape, number `min`/`max`, select `values`/`maxSelect`, JSON
   required/`maxSize`, editor `maxSize`, custom autodate stamping, relation
-  `maxSelect`, and relation target existence against the final record state.
+  `minSelect`/`maxSelect`, and relation target existence against the final
+  record state.
 - Added PocketBase-style UTC `created`/`updated` timestamps for collection and
   record responses.
 - Added first `url` and `editor` field parity, including PocketBase `date`
@@ -291,6 +292,8 @@ Exit criteria:
 - Added collection `indexes` metadata persistence across create/patch/import/
   export responses for admin UI compatibility, while deferring safe SQLite index
   execution to a storage-specific pass.
+- Added relation `minSelect` metadata and create/update validation, including
+  missing and too-few relation checks.
 
 ## Next Sprint
 

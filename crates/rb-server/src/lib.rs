@@ -354,6 +354,8 @@ pub struct CollectionField {
     )]
     pub collection: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_select: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_select: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_size: Option<u64>,
@@ -400,6 +402,7 @@ impl CollectionField {
             name: name.into(),
             kind,
             collection: None,
+            min_select: None,
             max_select: None,
             max_size: None,
             min: None,
@@ -428,6 +431,7 @@ impl CollectionField {
             name: name.into(),
             kind: CollectionFieldKind::Relation,
             collection: Some(collection.into()),
+            min_select: None,
             max_select: None,
             max_size: None,
             min: None,
@@ -452,6 +456,11 @@ impl CollectionField {
 
     pub fn with_max_select(mut self, max_select: u64) -> Self {
         self.max_select = Some(max_select);
+        self
+    }
+
+    pub fn with_min_select(mut self, min_select: u64) -> Self {
+        self.min_select = Some(min_select);
         self
     }
 }
@@ -7638,6 +7647,9 @@ fn collection_field_export_value(field: CollectionField) -> JsonValue {
     if let Some(collection) = field.collection {
         value.insert("collection".to_string(), JsonValue::String(collection));
     }
+    if let Some(min_select) = field.min_select {
+        value.insert("minSelect".to_string(), json!(min_select));
+    }
     if let Some(max_select) = field.max_select {
         value.insert("maxSelect".to_string(), json!(max_select));
     }
@@ -7839,6 +7851,24 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
             if field.kind != CollectionFieldKind::Relation {
                 return Err(ServerError::BadRequest(format!(
                     "field '{}' declares a target collection but is not a relation",
+                    field.name
+                )));
+            }
+        }
+        if field.kind != CollectionFieldKind::Relation && field.min_select.is_some() {
+            return Err(ServerError::BadRequest(format!(
+                "field '{}' declares minSelect but is not a relation field",
+                field.name
+            )));
+        }
+        if field.kind == CollectionFieldKind::Relation {
+            let max_select = field.max_select.unwrap_or(1).max(1);
+            if field
+                .min_select
+                .is_some_and(|min_select| min_select > max_select)
+            {
+                return Err(ServerError::BadRequest(format!(
+                    "field '{}' minSelect cannot be greater than maxSelect",
                     field.name
                 )));
             }
@@ -9072,6 +9102,11 @@ fn validate_record_field_options(
                 format!("Field '{}' is required.", field.name),
             ));
         }
+        if relation_min_select(field) > 0
+            && value.is_none_or(|value| is_empty_field_value(field, value))
+        {
+            return Err(min_relation_select_error(field));
+        }
 
         let Some(value) = value else {
             continue;
@@ -9634,6 +9669,7 @@ fn relation_field_ids<'a>(
     value: &'a JsonValue,
 ) -> Result<Vec<&'a str>, ServerError> {
     let max_select = field.max_select.unwrap_or(1).max(1);
+    let min_select = relation_min_select(field);
     let ids = match value {
         JsonValue::String(id) => vec![id.as_str()],
         JsonValue::Array(values) => {
@@ -9672,6 +9708,9 @@ fn relation_field_ids<'a>(
             ),
         ));
     }
+    if (ids.len() as u64) < min_select {
+        return Err(min_relation_select_error(field));
+    }
 
     for id in &ids {
         if validate_record_id(id).is_err() {
@@ -9680,6 +9719,23 @@ fn relation_field_ids<'a>(
     }
 
     Ok(ids)
+}
+
+fn relation_min_select(field: &CollectionField) -> u64 {
+    field.min_select.unwrap_or(0)
+}
+
+fn min_relation_select_error(field: &CollectionField) -> ServerError {
+    let min_select = relation_min_select(field);
+    validation_error(
+        "Failed to validate record.",
+        &field.name,
+        "validation_min_select",
+        format!(
+            "Field '{}' requires at least {} relation(s).",
+            field.name, min_select
+        ),
+    )
 }
 
 fn invalid_relation_field_value(field: &CollectionField) -> ServerError {
