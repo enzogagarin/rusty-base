@@ -208,6 +208,10 @@ Exit criteria:
   password-auth summary and response `fields` projection.
 - Added PocketBase-style `email` collection field input, currently mapped to
   text-compatible filter behavior.
+- Added verification request/confirm and password-reset request/confirm auth
+  flows backed by short-lived opaque action tokens.
+- Added password-reset token confirmation that updates the auth record password
+  hash and invalidates existing auth tokens for the record.
 
 ## Next Sprint
 
@@ -217,5 +221,5 @@ Exit criteria:
    examples.
 4. Expand PocketBase-compatible relation-edge and uploaded-file modifier
    fixtures.
-5. Add auth route coverage beyond password/refresh: verification, password
-   reset, email change, OTP, and OAuth placeholders where useful.
+5. Add auth route coverage beyond password/refresh/reset: email change, OTP,
+   and OAuth placeholders where useful.

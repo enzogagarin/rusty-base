@@ -310,6 +310,8 @@ The first server slice supports:
   password-auth method summary and response `fields` projection;
 - `auth-with-password` and `auth-refresh` response `expand`/`fields` support,
   including response-level paths such as `record.expand.profile.bio`;
+- verification and password-reset request/confirm auth flows backed by opaque
+  action tokens;
 - relation expand respects target collection view rules and omits hidden related
   records from the `expand` payload;
 - PocketBase-like error response shape with `code`, `message`, and `data`;
@@ -323,6 +325,7 @@ The first server slice supports:
 - `auth-with-password` login with opaque bearer tokens and expiration metadata;
 - `auth-refresh` token rotation for authenticated auth records;
 - `auth-logout` public bearer-token revocation;
+- password-reset confirmation invalidates existing auth tokens for the record;
 - bearer-token expiration checks before `@request.auth.*` is populated;
 - `Authorization: Bearer ...` request context population for `@request.auth.*`;
 - a temporary `x-rb-auth-id` compatibility header for tests and early manual
@@ -348,8 +351,8 @@ Not implemented yet:
 - full PocketBase modifier compatibility for uploaded files and relation-edge
   cases;
 - cross-collection identifiers such as `@collection.*`;
-- full PocketBase auth provider/settings parity beyond the current password-token
-  flow;
+- full PocketBase auth provider/settings parity beyond the current
+  password/verification/reset token flow;
 - exact PocketBase admin API/export compatibility;
 - complete relation `expand` edge-case parity and relation permission fixtures;
 - files, realtime, and admin UI;

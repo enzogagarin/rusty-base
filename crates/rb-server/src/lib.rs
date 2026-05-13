@@ -25,6 +25,9 @@ use std::{
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 const AUTH_TOKEN_TTL_MILLIS: u128 = 7 * 24 * 60 * 60 * 1000;
+const VERIFICATION_TOKEN_TTL_MILLIS: u128 = 3 * 24 * 60 * 60 * 1000;
+const PASSWORD_RESET_TOKEN_TTL_MILLIS: u128 = 30 * 60 * 1000;
+const AUTH_FORM_VALIDATION_MESSAGE: &str = "An error occurred while validating the submitted data.";
 
 #[derive(Debug)]
 pub enum ServerError {
@@ -297,6 +300,102 @@ impl AuthWithPasswordRequest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuthEmailRequest {
+    email: String,
+}
+
+impl AuthEmailRequest {
+    fn from_json(value: JsonValue) -> Result<Self, ServerError> {
+        let object = value.as_object().ok_or_else(|| {
+            validation_error(
+                AUTH_FORM_VALIDATION_MESSAGE,
+                "body",
+                "validation_invalid_body",
+                "Request body must be a JSON object.",
+            )
+        })?;
+
+        Ok(Self {
+            email: required_form_string(object, "email", AUTH_FORM_VALIDATION_MESSAGE)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuthTokenRequest {
+    token: String,
+}
+
+impl AuthTokenRequest {
+    fn from_json(value: JsonValue) -> Result<Self, ServerError> {
+        let object = value.as_object().ok_or_else(|| {
+            validation_error(
+                AUTH_FORM_VALIDATION_MESSAGE,
+                "body",
+                "validation_invalid_body",
+                "Request body must be a JSON object.",
+            )
+        })?;
+
+        Ok(Self {
+            token: required_form_string(object, "token", AUTH_FORM_VALIDATION_MESSAGE)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfirmPasswordResetRequest {
+    token: String,
+    password: String,
+    password_confirm: String,
+}
+
+impl ConfirmPasswordResetRequest {
+    fn from_json(value: JsonValue) -> Result<Self, ServerError> {
+        let object = value.as_object().ok_or_else(|| {
+            validation_error(
+                AUTH_FORM_VALIDATION_MESSAGE,
+                "body",
+                "validation_invalid_body",
+                "Request body must be a JSON object.",
+            )
+        })?;
+
+        Ok(Self {
+            token: required_form_string(object, "token", AUTH_FORM_VALIDATION_MESSAGE)?,
+            password: required_form_string(object, "password", AUTH_FORM_VALIDATION_MESSAGE)?,
+            password_confirm: required_form_string(
+                object,
+                "passwordConfirm",
+                AUTH_FORM_VALIDATION_MESSAGE,
+            )?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthActionKind {
+    Verification,
+    PasswordReset,
+}
+
+impl AuthActionKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Verification => "verification",
+            Self::PasswordReset => "passwordReset",
+        }
+    }
+
+    fn ttl_millis(self) -> u128 {
+        match self {
+            Self::Verification => VERIFICATION_TOKEN_TTL_MILLIS,
+            Self::PasswordReset => PASSWORD_RESET_TOKEN_TTL_MILLIS,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollectionPatch {
@@ -374,6 +473,15 @@ impl Store {
                 token TEXT PRIMARY KEY NOT NULL,
                 collection_name TEXT NOT NULL,
                 record_id TEXT NOT NULL,
+                created TEXT NOT NULL,
+                expires TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS "_rb_auth_action_tokens" (
+                token TEXT PRIMARY KEY NOT NULL,
+                kind TEXT NOT NULL,
+                collection_name TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                data TEXT NOT NULL,
                 created TEXT NOT NULL,
                 expires TEXT NOT NULL
             );
@@ -486,6 +594,10 @@ impl Store {
                 r#"UPDATE "_rb_auth_tokens" SET collection_name = ?1 WHERE collection_name = ?2"#,
                 params![&new_name, old_name],
             )?;
+            tx.execute(
+                r#"UPDATE "_rb_auth_action_tokens" SET collection_name = ?1 WHERE collection_name = ?2"#,
+                params![&new_name, old_name],
+            )?;
         }
 
         let affected = tx.execute(
@@ -536,6 +648,10 @@ impl Store {
                     params![name],
                 )?;
                 tx.execute(
+                    r#"DELETE FROM "_rb_auth_action_tokens" WHERE collection_name = ?1"#,
+                    params![name],
+                )?;
+                tx.execute(
                     r#"DELETE FROM "_rb_collections" WHERE name = ?1"#,
                     params![name],
                 )?;
@@ -571,6 +687,10 @@ impl Store {
                 {
                     tx.execute(
                         r#"DELETE FROM "_rb_auth_tokens" WHERE collection_name = ?1"#,
+                        params![&collection.name],
+                    )?;
+                    tx.execute(
+                        r#"DELETE FROM "_rb_auth_action_tokens" WHERE collection_name = ?1"#,
                         params![&collection.name],
                     )?;
                 }
@@ -615,6 +735,10 @@ impl Store {
             r#"DELETE FROM "_rb_auth_tokens" WHERE collection_name = ?1"#,
             params![name],
         )?;
+        tx.execute(
+            r#"DELETE FROM "_rb_auth_action_tokens" WHERE collection_name = ?1"#,
+            params![name],
+        )?;
         let affected = tx.execute(
             r#"DELETE FROM "_rb_collections" WHERE name = ?1"#,
             params![name],
@@ -637,6 +761,10 @@ impl Store {
         conn.execute(&format!("DELETE FROM {table_sql}"), [])?;
         conn.execute(
             r#"DELETE FROM "_rb_auth_tokens" WHERE collection_name = ?1"#,
+            params![name],
+        )?;
+        conn.execute(
+            r#"DELETE FROM "_rb_auth_action_tokens" WHERE collection_name = ?1"#,
             params![name],
         )?;
         Ok(())
@@ -910,6 +1038,16 @@ impl Store {
         if affected == 0 {
             return Err(ServerError::NotFound(format!("record '{id}' not found")));
         }
+        if collection.collection_type == CollectionType::Auth {
+            conn.execute(
+                r#"DELETE FROM "_rb_auth_tokens" WHERE collection_name = ?1 AND record_id = ?2"#,
+                params![collection_name, id],
+            )?;
+            conn.execute(
+                r#"DELETE FROM "_rb_auth_action_tokens" WHERE collection_name = ?1 AND record_id = ?2"#,
+                params![collection_name, id],
+            )?;
+        }
 
         Ok(())
     }
@@ -1017,6 +1155,144 @@ impl Store {
         })
     }
 
+    pub fn request_verification(
+        &self,
+        collection_name: &str,
+        email: &str,
+    ) -> Result<(), ServerError> {
+        self.request_auth_action_token(collection_name, email, AuthActionKind::Verification)?;
+        Ok(())
+    }
+
+    pub fn confirm_verification(
+        &self,
+        collection_name: &str,
+        token: &str,
+    ) -> Result<(), ServerError> {
+        let collection = self.auth_collection(collection_name)?;
+        let conn = self.connection()?;
+        let record_id =
+            auth_action_subject(&conn, collection_name, AuthActionKind::Verification, token)?;
+        let table_sql = quote_identifier(&record_table_name(collection_name)?);
+        let data = conn
+            .query_row(
+                &format!("SELECT data FROM {table_sql} WHERE id = ?1 LIMIT 1"),
+                params![&record_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| invalid_auth_action_token(AuthActionKind::Verification))?;
+        let mut data = serde_json::from_str::<JsonValue>(&data)?;
+        let object = data_object_mut(&mut data)?;
+        object.insert("verified".to_string(), JsonValue::Bool(true));
+
+        let now = now_timestamp();
+        conn.execute(
+            &format!("UPDATE {table_sql} SET data = ?1, updated = ?2 WHERE id = ?3"),
+            params![serde_json::to_string(&data)?, now, &record_id],
+        )?;
+        delete_auth_action_tokens(
+            &conn,
+            collection.name.as_str(),
+            &record_id,
+            AuthActionKind::Verification,
+        )?;
+        Ok(())
+    }
+
+    pub fn request_password_reset(
+        &self,
+        collection_name: &str,
+        email: &str,
+    ) -> Result<(), ServerError> {
+        self.request_auth_action_token(collection_name, email, AuthActionKind::PasswordReset)?;
+        Ok(())
+    }
+
+    pub fn confirm_password_reset(
+        &self,
+        collection_name: &str,
+        token: &str,
+        password: &str,
+        password_confirm: &str,
+    ) -> Result<(), ServerError> {
+        let collection = self.auth_collection(collection_name)?;
+        let mut password_data = json!({
+            "password": password,
+            "passwordConfirm": password_confirm,
+        });
+        let password_object = data_object_mut(&mut password_data)?;
+        prepare_auth_password_with_message(
+            &collection,
+            password_object,
+            true,
+            AUTH_FORM_VALIDATION_MESSAGE,
+        )?;
+        let password_hash = password_object
+            .remove("passwordHash")
+            .ok_or_else(|| ServerError::BadRequest("missing password hash".to_string()))?;
+
+        let conn = self.connection()?;
+        let record_id =
+            auth_action_subject(&conn, collection_name, AuthActionKind::PasswordReset, token)?;
+        let table_sql = quote_identifier(&record_table_name(collection_name)?);
+        let data = conn
+            .query_row(
+                &format!("SELECT data FROM {table_sql} WHERE id = ?1 LIMIT 1"),
+                params![&record_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| invalid_auth_action_token(AuthActionKind::PasswordReset))?;
+        let mut data = serde_json::from_str::<JsonValue>(&data)?;
+        let object = data_object_mut(&mut data)?;
+        object.insert("passwordHash".to_string(), password_hash);
+
+        let now = now_timestamp();
+        conn.execute(
+            &format!("UPDATE {table_sql} SET data = ?1, updated = ?2 WHERE id = ?3"),
+            params![serde_json::to_string(&data)?, now, &record_id],
+        )?;
+        conn.execute(
+            r#"DELETE FROM "_rb_auth_tokens" WHERE collection_name = ?1 AND record_id = ?2"#,
+            params![collection_name, &record_id],
+        )?;
+        delete_auth_action_tokens(
+            &conn,
+            collection.name.as_str(),
+            &record_id,
+            AuthActionKind::PasswordReset,
+        )?;
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn latest_auth_action_token(
+        &self,
+        collection_name: &str,
+        record_id: &str,
+        kind: &str,
+    ) -> Result<Option<String>, ServerError> {
+        validate_collection_name(collection_name)?;
+        validate_record_id(record_id)?;
+        validate_auth_action_kind(kind)?;
+
+        let conn = self.connection()?;
+        conn.query_row(
+            r#"
+            SELECT token
+            FROM "_rb_auth_action_tokens"
+            WHERE collection_name = ?1 AND record_id = ?2 AND kind = ?3
+            ORDER BY CAST(created AS INTEGER) DESC
+            LIMIT 1
+            "#,
+            params![collection_name, record_id, kind],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(ServerError::Storage)
+    }
+
     pub fn revoke_auth_token(&self, collection_name: &str, token: &str) -> Result<(), ServerError> {
         let (token_collection_name, _) = self.valid_token_subject(token)?;
         if token_collection_name != collection_name {
@@ -1033,6 +1309,64 @@ impl Store {
         }
 
         Ok(())
+    }
+
+    fn request_auth_action_token(
+        &self,
+        collection_name: &str,
+        email: &str,
+        kind: AuthActionKind,
+    ) -> Result<Option<String>, ServerError> {
+        let collection = self.auth_collection(collection_name)?;
+        let table_sql = quote_identifier(&record_table_name(collection_name)?);
+        let conn = self.connection()?;
+        let record_id = conn
+            .query_row(
+                &format!(
+                    "SELECT id FROM {table_sql} WHERE json_extract(data, '$.email') = ?1 LIMIT 1"
+                ),
+                params![email],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        let Some(record_id) = record_id else {
+            return Ok(None);
+        };
+
+        delete_auth_action_tokens(&conn, &collection.name, &record_id, kind)?;
+        let token = generate_token();
+        let created = now_timestamp();
+        let expires = (now_millis() + kind.ttl_millis()).to_string();
+        conn.execute(
+            r#"
+            INSERT INTO "_rb_auth_action_tokens"
+                (token, kind, collection_name, record_id, data, created, expires)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+            params![
+                &token,
+                kind.as_str(),
+                &collection.name,
+                &record_id,
+                json!({ "email": email }).to_string(),
+                created,
+                expires
+            ],
+        )?;
+
+        Ok(Some(token))
+    }
+
+    fn auth_collection(&self, collection_name: &str) -> Result<CollectionConfig, ServerError> {
+        let collection = self.get_collection(collection_name)?;
+        if collection.collection_type != CollectionType::Auth {
+            return Err(ServerError::BadRequest(format!(
+                "collection '{collection_name}' is not an auth collection"
+            )));
+        }
+
+        Ok(collection)
     }
 
     pub fn context_for_token(
@@ -1391,6 +1725,35 @@ impl RustyBaseApp {
                 let fields = field_options_from_query(&query)?;
                 project_json_response(&mut payload, &fields)?;
                 Ok(HttpResponse::json(200, payload))
+            }
+            ("POST", ["api", "collections", collection, "request-verification"]) => {
+                let request = AuthEmailRequest::from_json(serde_json::from_slice(&request.body)?)?;
+                self.store
+                    .request_verification(collection, &request.email)?;
+                Ok(HttpResponse::json(204, JsonValue::Null))
+            }
+            ("POST", ["api", "collections", collection, "confirm-verification"]) => {
+                let request = AuthTokenRequest::from_json(serde_json::from_slice(&request.body)?)?;
+                self.store
+                    .confirm_verification(collection, &request.token)?;
+                Ok(HttpResponse::json(204, JsonValue::Null))
+            }
+            ("POST", ["api", "collections", collection, "request-password-reset"]) => {
+                let request = AuthEmailRequest::from_json(serde_json::from_slice(&request.body)?)?;
+                self.store
+                    .request_password_reset(collection, &request.email)?;
+                Ok(HttpResponse::json(204, JsonValue::Null))
+            }
+            ("POST", ["api", "collections", collection, "confirm-password-reset"]) => {
+                let request =
+                    ConfirmPasswordResetRequest::from_json(serde_json::from_slice(&request.body)?)?;
+                self.store.confirm_password_reset(
+                    collection,
+                    &request.token,
+                    &request.password,
+                    &request.password_confirm,
+                )?;
+                Ok(HttpResponse::json(204, JsonValue::Null))
             }
             ("POST", ["api", "collections", collection, "auth-with-password"]) => {
                 let auth =
@@ -2436,6 +2799,69 @@ fn insert_auth_token(
     Ok((token, expires))
 }
 
+fn auth_action_subject(
+    conn: &Connection,
+    collection_name: &str,
+    kind: AuthActionKind,
+    token: &str,
+) -> Result<String, ServerError> {
+    let row = conn
+        .query_row(
+            r#"
+            SELECT record_id, expires
+            FROM "_rb_auth_action_tokens"
+            WHERE token = ?1 AND kind = ?2 AND collection_name = ?3
+            LIMIT 1
+            "#,
+            params![token, kind.as_str(), collection_name],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| invalid_auth_action_token(kind))?;
+    let (record_id, expires) = row;
+    let expires = expires
+        .parse::<u128>()
+        .map_err(|_| invalid_auth_action_token(kind))?;
+    if expires <= now_millis() {
+        conn.execute(
+            r#"DELETE FROM "_rb_auth_action_tokens" WHERE token = ?1"#,
+            params![token],
+        )?;
+        return Err(invalid_auth_action_token(kind));
+    }
+
+    Ok(record_id)
+}
+
+fn delete_auth_action_tokens(
+    conn: &Connection,
+    collection_name: &str,
+    record_id: &str,
+    kind: AuthActionKind,
+) -> Result<(), ServerError> {
+    conn.execute(
+        r#"
+        DELETE FROM "_rb_auth_action_tokens"
+        WHERE collection_name = ?1 AND record_id = ?2 AND kind = ?3
+        "#,
+        params![collection_name, record_id, kind.as_str()],
+    )?;
+    Ok(())
+}
+
+fn validate_auth_action_kind(kind: &str) -> Result<(), ServerError> {
+    match kind {
+        "verification" | "passwordReset" => Ok(()),
+        _ => Err(ServerError::BadRequest(format!(
+            "unknown auth action token kind '{kind}'"
+        ))),
+    }
+}
+
+fn invalid_auth_action_token(kind: AuthActionKind) -> ServerError {
+    ServerError::BadRequest(format!("invalid or expired {} token", kind.as_str()))
+}
+
 fn apply_collection_patch(collection: &mut CollectionConfig, patch: CollectionPatch) {
     if let Some(name) = patch.name {
         collection.name = name;
@@ -2836,6 +3262,20 @@ fn prepare_auth_password(
     object: &mut Map<String, JsonValue>,
     require_password: bool,
 ) -> Result<(), ServerError> {
+    prepare_auth_password_with_message(
+        collection,
+        object,
+        require_password,
+        "Failed to validate record.",
+    )
+}
+
+fn prepare_auth_password_with_message(
+    collection: &CollectionConfig,
+    object: &mut Map<String, JsonValue>,
+    require_password: bool,
+    message: &'static str,
+) -> Result<(), ServerError> {
     if collection.collection_type != CollectionType::Auth {
         return Ok(());
     }
@@ -2847,7 +3287,7 @@ fn prepare_auth_password(
     let Some(password) = password else {
         return if require_password {
             Err(validation_error(
-                "Failed to validate record.",
+                message,
                 "password",
                 "validation_required",
                 "Password is required.",
@@ -2859,7 +3299,7 @@ fn prepare_auth_password(
 
     if password.len() < 8 {
         return Err(validation_error(
-            "Failed to validate record.",
+            message,
             "password",
             "validation_min_text_constraint",
             "Password must be at least 8 characters.",
@@ -2871,7 +3311,7 @@ fn prepare_auth_password(
         .is_some_and(|confirm| confirm != password)
     {
         return Err(validation_error(
-            "Failed to validate record.",
+            message,
             "passwordConfirm",
             "validation_values_mismatch",
             "Password confirmation does not match.",
