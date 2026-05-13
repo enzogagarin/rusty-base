@@ -888,10 +888,12 @@ name = "rb-server"
 version = "0.1.0"
 dependencies = [
  "argon2",
+ "base64",
  "image",
  "rand_core 0.6.4",
  "rb-filter-engine",
  "reqwest",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",

@@ -568,7 +568,9 @@ fn persists_auth_options_and_supports_oauth2_profile_linking() {
                             "name": "custom",
                             "displayName": "Custom",
                             "clientId": "client-id",
-                            "clientSecret": "client-secret"
+                            "clientSecret": "client-secret",
+                            "authUrl": "https://auth.example.test/oauth/authorize",
+                            "scopes": ["identity", "email"]
                         },
                         {
                             "name": "fixture",
@@ -595,6 +597,14 @@ fn persists_auth_options_and_supports_oauth2_profile_linking() {
         json!(["username"])
     );
     assert_eq!(users.body["oauth2"]["providers"][0]["name"], "github");
+    assert_eq!(
+        users.body["oauth2"]["providers"][1]["authUrl"],
+        "https://auth.example.test/oauth/authorize"
+    );
+    assert_eq!(
+        users.body["oauth2"]["providers"][1]["scopes"],
+        json!(["identity", "email"])
+    );
     assert_eq!(users.body["otp"]["enabled"], false);
 
     let methods = app.handle(HttpRequest::new(
@@ -616,6 +626,30 @@ fn persists_auth_options_and_supports_oauth2_profile_linking() {
         "GitHub"
     );
     assert_eq!(methods.body["authProviders"][0]["name"], "github");
+    let github_provider = &methods.body["oauth2"]["providers"][0];
+    let github_state = github_provider["state"].as_str().unwrap();
+    let github_verifier = github_provider["codeVerifier"].as_str().unwrap();
+    let github_challenge = github_provider["codeChallenge"].as_str().unwrap();
+    let github_auth_url = github_provider["authURL"].as_str().unwrap();
+    assert_eq!(github_provider["codeChallengeMethod"], "S256");
+    assert_eq!(github_state.len(), 32);
+    assert_eq!(github_verifier.len(), 43);
+    assert_eq!(github_challenge.len(), 43);
+    assert!(github_auth_url.starts_with("https://github.com/login/oauth/authorize?"));
+    assert!(github_auth_url.contains("client_id=client-id"));
+    assert!(github_auth_url.contains("scope=read%3Auser+user%3Aemail"));
+    assert!(github_auth_url.contains(&format!("state={github_state}")));
+    assert!(github_auth_url.contains(&format!("code_challenge={github_challenge}")));
+
+    let custom_provider = &methods.body["oauth2"]["providers"][1];
+    let custom_state = custom_provider["state"].as_str().unwrap();
+    let custom_challenge = custom_provider["codeChallenge"].as_str().unwrap();
+    let custom_auth_url = custom_provider["authURL"].as_str().unwrap();
+    assert!(custom_auth_url.starts_with("https://auth.example.test/oauth/authorize?"));
+    assert!(custom_auth_url.contains("scope=identity+email"));
+    assert!(custom_auth_url.contains(&format!("state={custom_state}")));
+    assert!(custom_auth_url.contains(&format!("code_challenge={custom_challenge}")));
+    assert_eq!(custom_provider["codeChallengeMethod"], "S256");
 
     let user = app.handle(
         HttpRequest::json(

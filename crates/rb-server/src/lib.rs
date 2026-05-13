@@ -2,11 +2,13 @@ use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rand_core::{OsRng, RngCore};
 use rb_filter_engine::{
     compile_filter_with_resolver_and_context, FieldKind, FieldResolver, FilterContext, FilterError,
     ResolvedField, Value as FilterValue,
 };
+use ring::digest;
 use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value as JsonValue};
@@ -277,6 +279,8 @@ pub struct OAuth2ProviderConfig {
     pub token_url: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub user_info_url: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4100,6 +4104,10 @@ fn duration_config_millis(config: Option<TokenDurationConfig>, default_millis: u
 }
 
 fn oauth2_auth_method_provider(provider: &OAuth2ProviderConfig) -> JsonValue {
+    let state = generate_oauth2_state();
+    let code_verifier = generate_oauth2_code_verifier();
+    let code_challenge = oauth2_code_challenge(&code_verifier);
+
     json!({
         "name": provider.name,
         "displayName": if provider.display_name.is_empty() {
@@ -4107,12 +4115,111 @@ fn oauth2_auth_method_provider(provider: &OAuth2ProviderConfig) -> JsonValue {
         } else {
             provider.display_name.clone()
         },
-        "state": "",
-        "authURL": "",
-        "codeVerifier": "",
-        "codeChallenge": "",
+        "state": state,
+        "authURL": oauth2_auth_url(provider, &state, &code_challenge),
+        "codeVerifier": code_verifier,
+        "codeChallenge": code_challenge,
         "codeChallengeMethod": "S256"
     })
+}
+
+fn generate_oauth2_state() -> String {
+    let mut bytes = [0u8; 24];
+    OsRng.fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn generate_oauth2_code_verifier() -> String {
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn oauth2_code_challenge(code_verifier: &str) -> String {
+    let digest = digest::digest(&digest::SHA256, code_verifier.as_bytes());
+    URL_SAFE_NO_PAD.encode(digest.as_ref())
+}
+
+fn oauth2_auth_url(provider: &OAuth2ProviderConfig, state: &str, code_challenge: &str) -> String {
+    let Some(auth_url) = oauth2_authorize_url(provider) else {
+        return String::new();
+    };
+    if provider.client_id.trim().is_empty() {
+        return String::new();
+    }
+
+    let scopes = oauth2_provider_scopes(provider);
+    let mut params = vec![
+        ("client_id", provider.client_id.trim().to_string()),
+        ("code_challenge", code_challenge.to_string()),
+        ("code_challenge_method", "S256".to_string()),
+        ("response_type", "code".to_string()),
+    ];
+    if !scopes.is_empty() {
+        params.push(("scope", scopes.join(" ")));
+    }
+    params.push(("state", state.to_string()));
+    params.push(("redirect_uri", String::new()));
+
+    append_query_params(&auth_url, &params)
+}
+
+fn oauth2_authorize_url(provider: &OAuth2ProviderConfig) -> Option<String> {
+    let auth_url = provider.auth_url.trim();
+    if !auth_url.is_empty() {
+        return Some(auth_url.to_string());
+    }
+
+    match oauth2_provider_key(&provider.name).as_str() {
+        "github" => Some("https://github.com/login/oauth/authorize".to_string()),
+        "google" => Some("https://accounts.google.com/o/oauth2/v2/auth".to_string()),
+        _ => None,
+    }
+}
+
+fn oauth2_provider_scopes(provider: &OAuth2ProviderConfig) -> Vec<String> {
+    if !provider.scopes.is_empty() {
+        return provider
+            .scopes
+            .iter()
+            .map(|scope| scope.trim())
+            .filter(|scope| !scope.is_empty())
+            .map(str::to_string)
+            .collect();
+    }
+
+    match oauth2_provider_key(&provider.name).as_str() {
+        "github" => vec!["read:user".to_string(), "user:email".to_string()],
+        "google" => vec![
+            "openid".to_string(),
+            "email".to_string(),
+            "profile".to_string(),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+fn append_query_params(base_url: &str, params: &[(&str, String)]) -> String {
+    let mut url = base_url.to_string();
+    let separator = if url.contains('?') {
+        if url.ends_with('?') || url.ends_with('&') {
+            ""
+        } else {
+            "&"
+        }
+    } else {
+        "?"
+    };
+    url.push_str(separator);
+    for (index, (name, value)) in params.iter().enumerate() {
+        if index > 0 {
+            url.push('&');
+        }
+        url.push_str(&percent_encode_query_component(name));
+        url.push('=');
+        url.push_str(&percent_encode_query_component(value));
+    }
+    url
 }
 
 fn ensure_oauth2_provider_configured(
@@ -6947,6 +7054,24 @@ fn parse_query(query: &str) -> HashMap<String, String> {
             Some((percent_decode(key), percent_decode(value)))
         })
         .collect()
+}
+
+fn percent_encode_query_component(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(byte as char)
+            }
+            b' ' => out.push('+'),
+            _ => {
+                out.push('%');
+                out.push(char::from(b"0123456789ABCDEF"[(byte >> 4) as usize]));
+                out.push(char::from(b"0123456789ABCDEF"[(byte & 0x0f) as usize]));
+            }
+        }
+    }
+    out
 }
 
 fn percent_decode(value: &str) -> String {

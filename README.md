@@ -321,8 +321,8 @@ The first server slice supports:
 - first `?fields=...` response projection support for records and expanded
   relations, including `*` and nested paths such as `expand.author.name`;
 - `GET /api/collections/:collection/auth-methods` with password, OTP, MFA,
-  OAuth2, and legacy SDK compatibility fields plus response `fields`
-  projection;
+  OAuth2 provider auth URLs, PKCE verifier/challenge data, and legacy SDK
+  compatibility fields plus response `fields` projection;
 - persisted auth collection options for password identities, token durations,
   OTP, MFA, and OAuth2 provider metadata across create/update/import/export;
 - `auth-with-password`, `auth-with-otp`, and `auth-refresh` response

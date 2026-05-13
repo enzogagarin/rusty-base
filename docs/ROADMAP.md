@@ -244,11 +244,14 @@ Exit criteria:
 - Added remote OAuth2 code exchange through configured token/userinfo endpoints,
   with initial GitHub and Google endpoint presets sharing the same account-link
   core.
+- Added PocketBase-style OAuth2 `auth-methods` output with generated state,
+  PKCE code verifier/challenge data, provider auth URLs, preset GitHub/Google
+  scopes, and custom provider scopes.
 
 ## Next Sprint
 
-1. Generate PocketBase-style OAuth2 `auth-methods` authURL/state/codeVerifier
-   data for configured providers.
+1. Expand OAuth2 provider presets and harden callback validation around
+   redirect URLs and provider-specific response edge cases.
 2. Expand compatibility fixtures around placeholder-like wildcard cases.
 3. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 4. Add relation compatibility fixtures copied from PocketBase-style access-rule
