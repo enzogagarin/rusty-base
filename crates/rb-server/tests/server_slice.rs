@@ -3527,6 +3527,126 @@ fn persists_pocketbase_style_field_options() {
 }
 
 #[test]
+fn supports_url_editor_and_date_field_parity() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let created = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "pages",
+                "fields": [
+                    {
+                        "name": "site",
+                        "type": "url",
+                        "required": true,
+                        "onlyDomains": ["example.com"],
+                        "exceptDomains": ["blocked.example.com"]
+                    },
+                    {
+                        "name": "body",
+                        "type": "editor",
+                        "maxSize": 16
+                    },
+                    {
+                        "name": "publishedAt",
+                        "type": "datetime"
+                    }
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created.status, 200);
+    assert_eq!(created.body["fields"][0]["type"], "url");
+    assert_eq!(
+        created.body["fields"][0]["onlyDomains"],
+        json!(["example.com"])
+    );
+    assert_eq!(
+        created.body["fields"][0]["exceptDomains"],
+        json!(["blocked.example.com"])
+    );
+    assert_eq!(created.body["fields"][1]["type"], "editor");
+    assert_eq!(created.body["fields"][1]["maxSize"], 16);
+    assert_eq!(created.body["fields"][2]["type"], "date");
+
+    let valid = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/pages/records",
+            json!({
+                "id": "page_1",
+                "site": "https://docs.example.com/guide?ref=rusty",
+                "body": "<p>hi</p>",
+                "publishedAt": "2024-11-10 18:45:27.123Z"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(valid.status, 200);
+
+    let invalid_url = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/pages/records",
+            json!({"site": "example.com"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_url.status, 400);
+    assert_eq!(
+        invalid_url.body["data"]["site"]["code"],
+        "validation_is_url"
+    );
+
+    let blocked_domain = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/pages/records",
+            json!({"site": "https://blocked.example.com"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(blocked_domain.status, 400);
+    assert_eq!(
+        blocked_domain.body["data"]["site"]["code"],
+        "validation_domain_constraint"
+    );
+
+    let too_large_editor = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/pages/records",
+            json!({
+                "site": "https://example.com",
+                "body": "<p>too long body</p>"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(too_large_editor.status, 400);
+    assert_eq!(
+        too_large_editor.body["data"]["body"]["code"],
+        "validation_max_size"
+    );
+
+    let invalid_domain_options = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "bad_domains",
+                "fields": [{"name": "published", "type": "bool", "onlyDomains": ["example.com"]}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_domain_options.status, 400);
+}
+
+#[test]
 fn enforces_required_and_text_field_options_on_records() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 

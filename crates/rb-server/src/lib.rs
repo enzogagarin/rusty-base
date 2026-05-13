@@ -39,6 +39,7 @@ const MAX_THUMB_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_THUMB_SOURCE_PIXELS: u64 = 16_000_000;
 const MAX_THUMB_EDGE: u32 = 2048;
 const DEFAULT_JSON_MAX_SIZE_BYTES: u64 = 1024 * 1024;
+const DEFAULT_EDITOR_MAX_SIZE_BYTES: u64 = 5 * 1024 * 1024;
 const REALTIME_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_BATCH_MAX_REQUESTS: u64 = 50;
 const DEFAULT_BATCH_TIMEOUT_SECONDS: u64 = 3;
@@ -367,6 +368,10 @@ pub struct CollectionField {
     pub thumbs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub values: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub only_domains: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub except_domains: Vec<String>,
     #[serde(default)]
     pub required: bool,
     #[serde(default)]
@@ -397,6 +402,8 @@ impl CollectionField {
             mime_types: Vec::new(),
             thumbs: Vec::new(),
             values: Vec::new(),
+            only_domains: Vec::new(),
+            except_domains: Vec::new(),
             required: false,
             system: false,
             hidden: false,
@@ -421,6 +428,8 @@ impl CollectionField {
             mime_types: Vec::new(),
             thumbs: Vec::new(),
             values: Vec::new(),
+            only_domains: Vec::new(),
+            except_domains: Vec::new(),
             required: false,
             system: false,
             hidden: false,
@@ -441,10 +450,12 @@ impl CollectionField {
 pub enum CollectionFieldKind {
     Text,
     Email,
+    Url,
+    Editor,
     File,
     Number,
     Bool,
-    #[serde(rename = "datetime")]
+    #[serde(rename = "date", alias = "datetime")]
     DateTime,
     Array,
     Json,
@@ -457,6 +468,8 @@ impl From<CollectionFieldKind> for FieldKind {
         match value {
             CollectionFieldKind::Text => Self::Text,
             CollectionFieldKind::Email => Self::Text,
+            CollectionFieldKind::Url => Self::Text,
+            CollectionFieldKind::Editor => Self::Text,
             CollectionFieldKind::File => Self::Text,
             CollectionFieldKind::Number => Self::Number,
             CollectionFieldKind::Bool => Self::Bool,
@@ -7463,6 +7476,12 @@ fn collection_field_export_value(field: CollectionField) -> JsonValue {
     if !field.values.is_empty() {
         value.insert("values".to_string(), json!(field.values));
     }
+    if !field.only_domains.is_empty() {
+        value.insert("onlyDomains".to_string(), json!(field.only_domains));
+    }
+    if !field.except_domains.is_empty() {
+        value.insert("exceptDomains".to_string(), json!(field.except_domains));
+    }
     value.insert("required".to_string(), JsonValue::Bool(field.required));
     value.insert("system".to_string(), JsonValue::Bool(field.system));
     value.insert("hidden".to_string(), JsonValue::Bool(field.hidden));
@@ -7633,13 +7652,26 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
         }
         if !matches!(
             field.kind,
-            CollectionFieldKind::File | CollectionFieldKind::Json
+            CollectionFieldKind::File | CollectionFieldKind::Json | CollectionFieldKind::Editor
         ) && field.max_size.is_some()
         {
             return Err(ServerError::BadRequest(format!(
-                "field '{}' declares maxSize but is not a file or json field",
+                "field '{}' declares maxSize but is not a file, json, or editor field",
                 field.name
             )));
+        }
+        if !matches!(
+            field.kind,
+            CollectionFieldKind::Email | CollectionFieldKind::Url
+        ) && (!field.only_domains.is_empty() || !field.except_domains.is_empty())
+        {
+            return Err(ServerError::BadRequest(format!(
+                "field '{}' declares domain options but is not an email or url field",
+                field.name
+            )));
+        }
+        for domain in field.only_domains.iter().chain(&field.except_domains) {
+            validate_domain_option(&field.name, domain)?;
         }
         if field.kind != CollectionFieldKind::Select && !field.values.is_empty() {
             return Err(ServerError::BadRequest(format!(
@@ -7726,6 +7758,22 @@ fn validate_select_field_settings(field: &CollectionField) -> Result<(), ServerE
                 field.name
             )));
         }
+    }
+
+    Ok(())
+}
+
+fn validate_domain_option(field_name: &str, domain: &str) -> Result<(), ServerError> {
+    let domain = domain.trim();
+    if domain.is_empty()
+        || domain.starts_with('.')
+        || domain.ends_with('.')
+        || !domain.contains('.')
+        || domain.chars().any(char::is_whitespace)
+    {
+        return Err(ServerError::BadRequest(format!(
+            "field '{field_name}' has invalid domain option '{domain}'"
+        )));
     }
 
     Ok(())
@@ -8813,6 +8861,12 @@ fn validate_record_field_options(
             CollectionFieldKind::Text | CollectionFieldKind::Email => {
                 validate_text_field_value(field, value)?;
             }
+            CollectionFieldKind::Url => {
+                validate_url_field_value(field, value)?;
+            }
+            CollectionFieldKind::Editor => {
+                validate_editor_field_value(field, value)?;
+            }
             CollectionFieldKind::Number => {
                 validate_number_field_value(field, value)?;
             }
@@ -9134,8 +9188,161 @@ fn validate_text_field_value(
             "Must be a valid email address.",
         ));
     }
+    if field.kind == CollectionFieldKind::Email {
+        let domain = text
+            .rsplit_once('@')
+            .map(|(_, domain)| domain)
+            .unwrap_or_default();
+        validate_domain_constraints(field, domain)?;
+    }
 
     Ok(())
+}
+
+fn validate_url_field_value(field: &CollectionField, value: &JsonValue) -> Result<(), ServerError> {
+    let Some(url) = value.as_str() else {
+        return Err(validation_error(
+            "Failed to validate record.",
+            &field.name,
+            "validation_invalid_string",
+            format!("Field '{}' must be a string.", field.name),
+        ));
+    };
+    if !is_plausible_url(url) {
+        return Err(validation_error(
+            "Failed to validate record.",
+            &field.name,
+            "validation_is_url",
+            "Must be a valid URL.",
+        ));
+    }
+    let Some(host) = url_host(url) else {
+        return Err(validation_error(
+            "Failed to validate record.",
+            &field.name,
+            "validation_is_url",
+            "Must be a valid URL.",
+        ));
+    };
+    validate_domain_constraints(field, &host)
+}
+
+fn validate_editor_field_value(
+    field: &CollectionField,
+    value: &JsonValue,
+) -> Result<(), ServerError> {
+    let Some(text) = value.as_str() else {
+        return Err(validation_error(
+            "Failed to validate record.",
+            &field.name,
+            "validation_invalid_string",
+            format!("Field '{}' must be a string.", field.name),
+        ));
+    };
+
+    let max_size = editor_field_max_size(field);
+    if text.len() as u64 > max_size {
+        return Err(validation_error(
+            "Failed to validate record.",
+            &field.name,
+            "validation_max_size",
+            format!("Field '{}' must be at most {} bytes.", field.name, max_size),
+        ));
+    }
+
+    Ok(())
+}
+
+fn editor_field_max_size(field: &CollectionField) -> u64 {
+    field
+        .max_size
+        .filter(|max_size| *max_size > 0)
+        .unwrap_or(DEFAULT_EDITOR_MAX_SIZE_BYTES)
+}
+
+fn validate_domain_constraints(field: &CollectionField, domain: &str) -> Result<(), ServerError> {
+    if !field.only_domains.is_empty()
+        && !field
+            .only_domains
+            .iter()
+            .any(|allowed| domain_matches(domain, allowed))
+    {
+        return Err(domain_constraint_error(field));
+    }
+    if field
+        .except_domains
+        .iter()
+        .any(|blocked| domain_matches(domain, blocked))
+    {
+        return Err(domain_constraint_error(field));
+    }
+
+    Ok(())
+}
+
+fn domain_constraint_error(field: &CollectionField) -> ServerError {
+    validation_error(
+        "Failed to validate record.",
+        &field.name,
+        "validation_domain_constraint",
+        format!("Field '{}' is not allowed for this domain.", field.name),
+    )
+}
+
+fn domain_matches(domain: &str, configured: &str) -> bool {
+    let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+    let configured = configured.trim().trim_end_matches('.').to_ascii_lowercase();
+    domain == configured || domain.ends_with(&format!(".{configured}"))
+}
+
+fn is_plausible_url(value: &str) -> bool {
+    let Some((scheme, rest)) = value.split_once("://") else {
+        return false;
+    };
+    if !is_url_scheme(scheme) || rest.is_empty() || value.chars().any(char::is_whitespace) {
+        return false;
+    }
+
+    url_host(value).is_some()
+}
+
+fn is_url_scheme(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphabetic()
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
+}
+
+fn url_host(value: &str) -> Option<String> {
+    let (_, rest) = value.split_once("://")?;
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|authority| !authority.is_empty())?;
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    if host_port.starts_with('[') {
+        let (host, _) = host_port.split_once(']')?;
+        return Some(host.trim_start_matches('[').to_ascii_lowercase());
+    }
+
+    let host = if let Some((host, port)) = host_port.rsplit_once(':') {
+        if port.is_empty() || !port.chars().all(|ch| ch.is_ascii_digit()) {
+            return None;
+        }
+        host
+    } else {
+        host_port
+    }
+    .trim_end_matches('.');
+    if host.is_empty() {
+        return None;
+    }
+
+    Some(host.to_ascii_lowercase())
 }
 
 fn validate_relation_field_value(
@@ -9579,10 +9786,12 @@ fn field_kind_id_prefix(kind: CollectionFieldKind) -> &'static str {
     match kind {
         CollectionFieldKind::Text => "text",
         CollectionFieldKind::Email => "email",
+        CollectionFieldKind::Url => "url",
+        CollectionFieldKind::Editor => "editor",
         CollectionFieldKind::File => "file",
         CollectionFieldKind::Number => "number",
         CollectionFieldKind::Bool => "bool",
-        CollectionFieldKind::DateTime => "datetime",
+        CollectionFieldKind::DateTime => "date",
         CollectionFieldKind::Array => "array",
         CollectionFieldKind::Json => "json",
         CollectionFieldKind::Relation => "relation",

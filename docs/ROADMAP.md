@@ -264,22 +264,26 @@ Exit criteria:
 - Added persisted collection field IDs, PocketBase-style `type` field metadata
   responses, export/import field ID preservation, and backwards-compatible
   `kind` input parsing.
-- Added first common/text/select field option metadata parity for `required`,
-  `hidden`, `system`, `presentable`, `primaryKey`, `min`, `max`, `pattern`,
-  `autogeneratePattern`, `values`, `maxSelect`, and JSON `maxSize`, including
-  import/export preservation.
+- Added first common/text/select/url/editor field option metadata parity for
+  `required`, `hidden`, `system`, `presentable`, `primaryKey`, `min`, `max`,
+  `pattern`, `autogeneratePattern`, `values`, `maxSelect`, domain allow/deny
+  lists, and JSON/editor `maxSize`, including import/export preservation.
 - Added record create/update enforcement for `required`, text `min`/`max`/
   common regex-like `pattern` constraints, email shape, basic bool/number/array
-  shapes, PocketBase-style datetime format, number `min`/`max`, select
-  `values`/`maxSelect`, JSON required/`maxSize`, relation `maxSelect`, and
-  relation target existence against the final record state.
+  shapes, URL shape/domain options, PocketBase-style datetime format, number
+  `min`/`max`, select `values`/`maxSelect`, JSON required/`maxSize`, editor
+  `maxSize`, relation `maxSelect`, and relation target existence against the
+  final record state.
 - Added PocketBase-style UTC `created`/`updated` timestamps for collection and
   record responses.
+- Added first `url` and `editor` field parity, including PocketBase `date`
+  type output, legacy `datetime` input compatibility, URL domain restrictions,
+  and editor `maxSize` validation.
 
 ## Next Sprint
 
 1. Expand remaining field-type parity beyond the currently supported
-   bool/number/text/email/date/select/json/relation/file subset.
+   bool/number/text/email/url/editor/date/select/json/relation/file subset.
 2. Expand OAuth2 provider presets and harden callback validation around
    redirect URLs and provider-specific response edge cases.
 3. Expand compatibility fixtures around placeholder-like wildcard cases.
