@@ -452,6 +452,45 @@ impl Store {
         Ok(collection)
     }
 
+    pub fn delete_collection(&self, name: &str) -> Result<(), ServerError> {
+        validate_collection_name(name)?;
+        self.get_collection(name)?;
+
+        let table_sql = quote_identifier(&record_table_name(name)?);
+        let mut conn = self.connection()?;
+        let tx = conn.transaction()?;
+        tx.execute(&format!("DROP TABLE IF EXISTS {table_sql}"), [])?;
+        tx.execute(
+            r#"DELETE FROM "_rb_auth_tokens" WHERE collection_name = ?1"#,
+            params![name],
+        )?;
+        let affected = tx.execute(
+            r#"DELETE FROM "_rb_collections" WHERE name = ?1"#,
+            params![name],
+        )?;
+        if affected == 0 {
+            return Err(ServerError::NotFound(format!(
+                "collection '{name}' not found"
+            )));
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn truncate_collection(&self, name: &str) -> Result<(), ServerError> {
+        validate_collection_name(name)?;
+        self.get_collection(name)?;
+
+        let table_sql = quote_identifier(&record_table_name(name)?);
+        let conn = self.connection()?;
+        conn.execute(&format!("DELETE FROM {table_sql}"), [])?;
+        conn.execute(
+            r#"DELETE FROM "_rb_auth_tokens" WHERE collection_name = ?1"#,
+            params![name],
+        )?;
+        Ok(())
+    }
+
     pub fn create_record(
         &self,
         collection_name: &str,
@@ -1014,6 +1053,14 @@ impl RustyBaseApp {
                 let patch: CollectionPatch = serde_json::from_slice(&request.body)?;
                 let collection = self.store.update_collection(collection, patch)?;
                 Ok(HttpResponse::json(200, json!(collection)))
+            }
+            ("DELETE", ["api", "collections", collection]) => {
+                self.store.delete_collection(collection)?;
+                Ok(HttpResponse::json(204, JsonValue::Null))
+            }
+            ("DELETE", ["api", "collections", collection, "truncate"]) => {
+                self.store.truncate_collection(collection)?;
+                Ok(HttpResponse::json(204, JsonValue::Null))
             }
             ("POST", ["api", "collections", collection, "auth-with-password"]) => {
                 let auth =

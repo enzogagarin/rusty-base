@@ -733,6 +733,53 @@ fn updates_collections_and_renames_record_tables() {
 }
 
 #[test]
+fn truncates_and_deletes_collections() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let collection_response = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [{"name": "title", "kind": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(collection_response.status, 200);
+
+    let created = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Rusty Base"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created.status, 200);
+
+    let truncate = app.handle(HttpRequest::new(
+        "DELETE",
+        "/api/collections/posts/truncate",
+    ));
+    assert_eq!(truncate.status, 204);
+
+    let empty = app.handle(HttpRequest::new("GET", "/api/collections/posts/records"));
+    assert_eq!(empty.status, 200);
+    assert_eq!(empty.body["totalItems"], 0);
+
+    let delete = app.handle(HttpRequest::new("DELETE", "/api/collections/posts"));
+    assert_eq!(delete.status, 204);
+
+    let collection = app.handle(HttpRequest::new("GET", "/api/collections/posts"));
+    assert_eq!(collection.status, 404);
+
+    let records = app.handle(HttpRequest::new("GET", "/api/collections/posts/records"));
+    assert_eq!(records.status, 404);
+}
+
+#[test]
 fn returns_forbidden_when_http_create_rule_denies_request() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 

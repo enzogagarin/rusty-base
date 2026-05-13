@@ -290,6 +290,8 @@ The first server slice supports:
 - `GET/POST /api/collections`;
 - `GET/PATCH /api/collections/:collection`, including safe metadata updates
   and record table renames;
+- `DELETE /api/collections/:collection` and
+  `DELETE /api/collections/:collection/truncate`;
 - `GET/POST /api/collections/:collection/records`;
 - `GET/PATCH/DELETE /api/collections/:collection/records/:id`;
 - PocketBase-like list response shape with `page`, `perPage`, `totalItems`,

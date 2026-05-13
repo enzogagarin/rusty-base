@@ -190,6 +190,7 @@ Exit criteria:
   `@request.body.*` arrays.
 - Added `GET/PATCH /api/collections/:collection` for collection metadata
   updates, field list changes, rule changes, and safe record table renames.
+- Added collection delete and truncate endpoints.
 
 ## Next Sprint
 
@@ -197,6 +198,6 @@ Exit criteria:
 2. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 3. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.
-4. Add collection delete and truncate endpoints.
+4. Add collection import/export-style bulk metadata operations.
 5. Expand PocketBase-compatible relation-edge and uploaded-file modifier
    fixtures.
