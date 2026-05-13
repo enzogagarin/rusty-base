@@ -305,9 +305,9 @@ The first server slice supports:
   `autogeneratePattern`, `values`, and `maxSelect`;
 - record create/update enforcement for `required`, text `min`/`max`/common
   regex-like `pattern` constraints, email shape, basic bool/number/array
-  shapes, number `min`/`max`, select `values`/`maxSelect`, relation
-  `maxSelect`, and relation target existence, evaluated against the final
-  record state on updates;
+  shapes, PocketBase-style datetime format, number `min`/`max`, select
+  `values`/`maxSelect`, relation `maxSelect`, and relation target existence,
+  evaluated against the final record state on updates;
 - `GET /api/collections/meta/scaffolds` for PocketBase-style collection type
   scaffolds;
 - `GET /api/collections/meta/export` as a Rusty Base import-ready metadata

@@ -104,9 +104,9 @@ Responsibility:
   including visibility, required/presentable, text bounds, pattern, and
   autogeneration/select settings;
 - enforce required fields, text bounds/pattern constraints, basic scalar/array
-  shapes, email shape, number bounds, select `values`/`maxSelect`, relation
-  `maxSelect`, and relation target existence for record create/update against
-  the final stored record shape;
+  shapes, email shape, PocketBase-style datetime format, number bounds, select
+  `values`/`maxSelect`, relation `maxSelect`, and relation target existence for
+  record create/update against the final stored record shape;
 - list records with PocketBase-style filtering, pagination, `skipTotal`,
   sorting, expand, and response projection;
 - execute JSON `/api/batch` record create/update/upsert/delete requests inside

@@ -3614,6 +3614,7 @@ fn enforces_non_text_field_option_shapes_on_records() {
                     {"name": "published", "type": "bool", "required": true},
                     {"name": "score", "type": "number", "min": 1, "max": 20},
                     {"name": "contact", "type": "email"},
+                    {"name": "publishedAt", "type": "datetime"},
                     {"name": "status", "type": "select", "values": ["draft", "published"]},
                     {"name": "roles", "type": "select", "values": ["reader", "writer", "admin"], "maxSelect": 2},
                     {"name": "tags", "type": "relation", "collection": "tags", "maxSelect": 1},
@@ -3635,6 +3636,7 @@ fn enforces_non_text_field_option_shapes_on_records() {
                 "published": true,
                 "score": 10,
                 "contact": "burak@example.com",
+                "publishedAt": "2024-11-10 18:45:27.123Z",
                 "status": "draft",
                 "roles": ["reader"],
                 "tags": "tag_1",
@@ -3708,6 +3710,48 @@ fn enforces_non_text_field_option_shapes_on_records() {
     assert_eq!(
         too_large_number.body["data"]["score"]["code"],
         "validation_max_number_constraint"
+    );
+
+    let invalid_datetime_shape = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": true, "publishedAt": 123}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_datetime_shape.status, 400);
+    assert_eq!(
+        invalid_datetime_shape.body["data"]["publishedAt"]["code"],
+        "validation_invalid_datetime"
+    );
+
+    let invalid_datetime_format = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": true, "publishedAt": "2024-11-10T18:45:27Z"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_datetime_format.status, 400);
+    assert_eq!(
+        invalid_datetime_format.body["data"]["publishedAt"]["code"],
+        "validation_invalid_datetime"
+    );
+
+    let invalid_datetime_calendar = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": true, "publishedAt": "2024-02-30 18:45:27.123Z"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_datetime_calendar.status, 400);
+    assert_eq!(
+        invalid_datetime_calendar.body["data"]["publishedAt"]["code"],
+        "validation_invalid_datetime"
     );
 
     let invalid_array = app.handle(
@@ -3906,17 +3950,37 @@ fn enforces_non_text_field_option_shapes_on_records() {
         "validation_invalid_select"
     );
 
+    let invalid_datetime_patch = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1",
+            json!({"publishedAt": "2023-02-29 00:00:00.000Z"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_datetime_patch.status, 400);
+    assert_eq!(
+        invalid_datetime_patch.body["data"]["publishedAt"]["code"],
+        "validation_invalid_datetime"
+    );
+
     let valid_patch = app.handle(
         HttpRequest::json(
             "PATCH",
             "/api/collections/posts/records/post_1",
-            json!({"score": 11, "status": "published", "roles": ["reader", "writer"]}),
+            json!({
+                "score": 11,
+                "publishedAt": "2024-12-01 09:00:00.000Z",
+                "status": "published",
+                "roles": ["reader", "writer"]
+            }),
         )
         .unwrap(),
     );
     assert_eq!(valid_patch.status, 200);
     assert_eq!(valid_patch.body["published"], true);
     assert_eq!(valid_patch.body["score"], 11);
+    assert_eq!(valid_patch.body["publishedAt"], "2024-12-01 09:00:00.000Z");
     assert_eq!(valid_patch.body["status"], "published");
     assert_eq!(valid_patch.body["roles"], json!(["reader", "writer"]));
 }

@@ -268,12 +268,14 @@ Exit criteria:
   preservation.
 - Added record create/update enforcement for `required`, text `min`/`max`/
   common regex-like `pattern` constraints, email shape, basic bool/number/array
-  shapes, number `min`/`max`, select `values`/`maxSelect`, relation
-  `maxSelect`, and relation target existence against the final record state.
+  shapes, PocketBase-style datetime format, number `min`/`max`, select
+  `values`/`maxSelect`, relation `maxSelect`, and relation target existence
+  against the final record state.
 
 ## Next Sprint
 
-1. Expand collection field option enforcement to JSON/date edge cases.
+1. Expand collection field option enforcement to JSON edge cases and remaining
+   field-type parity.
 2. Expand OAuth2 provider presets and harden callback validation around
    redirect URLs and provider-specific response edge cases.
 3. Expand compatibility fixtures around placeholder-like wildcard cases.
