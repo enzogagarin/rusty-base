@@ -69,9 +69,10 @@ Responsibility:
   create/update/delete events through collection or record subscriptions;
 - support auth collections with Argon2 password hashes and expiring bearer
   tokens;
-- expose a first public auth-methods summary for auth collections;
+- expose a first public auth-methods summary for auth collections, including
+  password, OTP, MFA, OAuth2, and legacy SDK compatibility fields;
 - store short-lived opaque auth action tokens for verification, password reset,
-  and email change flows;
+  email change, and OTP flows;
 - rotate valid auth tokens through `auth-refresh`;
 - revoke valid bearer tokens through `auth-logout`;
 - return PocketBase-like API error bodies with `code`, `message`, and `data`;

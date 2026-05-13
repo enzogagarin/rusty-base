@@ -29,6 +29,7 @@ const FILE_TOKEN_TTL_MILLIS: u128 = 2 * 60 * 1000;
 const VERIFICATION_TOKEN_TTL_MILLIS: u128 = 3 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TOKEN_TTL_MILLIS: u128 = 30 * 60 * 1000;
 const EMAIL_CHANGE_TOKEN_TTL_MILLIS: u128 = 30 * 60 * 1000;
+const OTP_TOKEN_TTL_MILLIS: u128 = 3 * 60 * 1000;
 const AUTH_FORM_VALIDATION_MESSAGE: &str = "An error occurred while validating the submitted data.";
 const MAX_THUMB_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_THUMB_SOURCE_PIXELS: u64 = 16_000_000;
@@ -503,6 +504,13 @@ struct AuthWithPasswordRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct AuthWithOtpRequest {
+    otp_id: String,
+    password: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RealtimeSubscribeRequest {
     client_id: String,
     #[serde(default)]
@@ -557,6 +565,24 @@ impl AuthWithPasswordRequest {
 
         Ok(Self {
             identity: required_form_string(object, "identity", "Failed to authenticate.")?,
+            password: required_form_string(object, "password", "Failed to authenticate.")?,
+        })
+    }
+}
+
+impl AuthWithOtpRequest {
+    fn from_json(value: JsonValue) -> Result<Self, ServerError> {
+        let object = value.as_object().ok_or_else(|| {
+            validation_error(
+                "Failed to authenticate.",
+                "body",
+                "validation_invalid_body",
+                "Request body must be a JSON object.",
+            )
+        })?;
+
+        Ok(Self {
+            otp_id: required_form_string(object, "otpId", "Failed to authenticate.")?,
             password: required_form_string(object, "password", "Failed to authenticate.")?,
         })
     }
@@ -687,6 +713,7 @@ enum AuthActionKind {
     Verification,
     PasswordReset,
     EmailChange,
+    Otp,
 }
 
 impl AuthActionKind {
@@ -695,6 +722,7 @@ impl AuthActionKind {
             Self::Verification => "verification",
             Self::PasswordReset => "passwordReset",
             Self::EmailChange => "emailChange",
+            Self::Otp => "otp",
         }
     }
 
@@ -703,6 +731,7 @@ impl AuthActionKind {
             Self::Verification => VERIFICATION_TOKEN_TTL_MILLIS,
             Self::PasswordReset => PASSWORD_RESET_TOKEN_TTL_MILLIS,
             Self::EmailChange => EMAIL_CHANGE_TOKEN_TTL_MILLIS,
+            Self::Otp => OTP_TOKEN_TTL_MILLIS,
         }
     }
 }
@@ -1556,6 +1585,115 @@ impl Store {
         })
     }
 
+    pub fn request_otp(&self, collection_name: &str, email: &str) -> Result<String, ServerError> {
+        let collection = self.auth_collection(collection_name)?;
+        let email = validate_form_email("email", email, AUTH_FORM_VALIDATION_MESSAGE)?;
+        let otp_id = generate_id();
+        let table_sql = quote_identifier(&record_table_name(collection_name)?);
+        let conn = self.connection()?;
+        let record_id = conn
+            .query_row(
+                &format!(
+                    "SELECT id FROM {table_sql} WHERE json_extract(data, '$.email') = ?1 LIMIT 1"
+                ),
+                params![&email],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        let Some(record_id) = record_id else {
+            return Ok(otp_id);
+        };
+
+        delete_auth_action_tokens(&conn, &collection.name, &record_id, AuthActionKind::Otp)?;
+        let password = generate_otp_password();
+        let created = now_timestamp();
+        let expires = (now_millis() + AuthActionKind::Otp.ttl_millis()).to_string();
+        conn.execute(
+            r#"
+            INSERT INTO "_rb_auth_action_tokens"
+                (token, kind, collection_name, record_id, data, created, expires)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+            params![
+                &otp_id,
+                AuthActionKind::Otp.as_str(),
+                &collection.name,
+                &record_id,
+                json!({ "email": email, "password": password }).to_string(),
+                created,
+                expires
+            ],
+        )?;
+
+        Ok(otp_id)
+    }
+
+    pub fn auth_with_otp(
+        &self,
+        collection_name: &str,
+        otp_id: &str,
+        password: &str,
+    ) -> Result<AuthResponse, ServerError> {
+        let collection = self.auth_collection(collection_name)?;
+        let conn = self.connection()?;
+        let (record_id, token_data) =
+            match auth_action_subject_data(&conn, collection_name, AuthActionKind::Otp, otp_id) {
+                Ok(data) => data,
+                Err(ServerError::BadRequest(_)) => return Err(invalid_credentials()),
+                Err(err) => return Err(err),
+            };
+        let expected_password = token_data
+            .get("password")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(invalid_credentials)?;
+        if password != expected_password {
+            return Err(invalid_credentials());
+        }
+
+        let table_sql = quote_identifier(&record_table_name(collection_name)?);
+        let row = conn
+            .query_row(
+                &format!(
+                    "SELECT id, data, created, updated FROM {table_sql} WHERE id = ?1 LIMIT 1"
+                ),
+                params![&record_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(invalid_credentials)?;
+
+        let (id, data, created, _) = row;
+        let mut data = serde_json::from_str::<JsonValue>(&data)?;
+        let object = data_object_mut(&mut data)?;
+        object.insert("verified".to_string(), JsonValue::Bool(true));
+        let updated = now_timestamp();
+        conn.execute(
+            &format!("UPDATE {table_sql} SET data = ?1, updated = ?2 WHERE id = ?3"),
+            params![serde_json::to_string(&data)?, &updated, &record_id],
+        )?;
+        delete_auth_action_tokens(
+            &conn,
+            collection.name.as_str(),
+            &record_id,
+            AuthActionKind::Otp,
+        )?;
+        let (token, expires) = insert_auth_token(&conn, collection_name, &record_id)?;
+
+        Ok(AuthResponse {
+            token,
+            expires,
+            record: record_from_parts(collection_name, id, data, created, updated),
+        })
+    }
+
     pub fn request_verification(
         &self,
         collection_name: &str,
@@ -1823,6 +1961,36 @@ impl Store {
         )
         .optional()
         .map_err(ServerError::Storage)
+    }
+
+    #[doc(hidden)]
+    pub fn latest_auth_action_data(
+        &self,
+        collection_name: &str,
+        record_id: &str,
+        kind: &str,
+    ) -> Result<Option<JsonValue>, ServerError> {
+        validate_collection_name(collection_name)?;
+        validate_record_id(record_id)?;
+        validate_auth_action_kind(kind)?;
+
+        let conn = self.connection()?;
+        let data = conn
+            .query_row(
+                r#"
+                SELECT data
+                FROM "_rb_auth_action_tokens"
+                WHERE collection_name = ?1 AND record_id = ?2 AND kind = ?3
+                ORDER BY CAST(created AS INTEGER) DESC
+                LIMIT 1
+                "#,
+                params![collection_name, record_id, kind],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        data.map(|value| serde_json::from_str::<JsonValue>(&value).map_err(ServerError::Json))
+            .transpose()
     }
 
     pub fn revoke_auth_token(&self, collection_name: &str, token: &str) -> Result<(), ServerError> {
@@ -2513,6 +2681,28 @@ impl RustyBaseApp {
                 let response =
                     self.store
                         .auth_with_password(collection, &auth.identity, &auth.password)?;
+                let expands = expand_options_from_query(&query)?;
+                let fields = field_options_from_query(&query)?;
+                let payload = auth_response_payload(
+                    &self.store,
+                    collection,
+                    response,
+                    &expands,
+                    &fields,
+                    request_context(&request, &query),
+                )?;
+                Ok(HttpResponse::json(200, payload))
+            }
+            ("POST", ["api", "collections", collection, "request-otp"]) => {
+                let request = AuthEmailRequest::from_json(serde_json::from_slice(&request.body)?)?;
+                let otp_id = self.store.request_otp(collection, &request.email)?;
+                Ok(HttpResponse::json(200, json!({ "otpId": otp_id })))
+            }
+            ("POST", ["api", "collections", collection, "auth-with-otp"]) => {
+                let auth = AuthWithOtpRequest::from_json(serde_json::from_slice(&request.body)?)?;
+                let response =
+                    self.store
+                        .auth_with_otp(collection, &auth.otp_id, &auth.password)?;
                 let expands = expand_options_from_query(&query)?;
                 let fields = field_options_from_query(&query)?;
                 let payload = auth_response_payload(
@@ -3347,6 +3537,8 @@ fn auth_methods_payload(collection: &CollectionConfig) -> Result<JsonValue, Serv
     }
 
     let identity_fields = auth_identity_fields(collection);
+    let email_password = identity_fields.iter().any(|field| field == "email");
+    let username_password = identity_fields.iter().any(|field| field == "username");
 
     Ok(json!({
         "password": {
@@ -3357,13 +3549,16 @@ fn auth_methods_payload(collection: &CollectionConfig) -> Result<JsonValue, Serv
             "enabled": false,
             "providers": [],
         },
+        "authProviders": [],
+        "emailPassword": email_password,
+        "usernamePassword": username_password,
         "mfa": {
             "enabled": false,
             "duration": 0,
         },
         "otp": {
-            "enabled": false,
-            "duration": 0,
+            "enabled": email_password,
+            "duration": if email_password { OTP_TOKEN_TTL_MILLIS / 1000 } else { 0 },
         }
     }))
 }
@@ -4128,7 +4323,7 @@ fn delete_auth_action_tokens(
 
 fn validate_auth_action_kind(kind: &str) -> Result<(), ServerError> {
     match kind {
-        "verification" | "passwordReset" | "emailChange" => Ok(()),
+        "verification" | "passwordReset" | "emailChange" | "otp" => Ok(()),
         _ => Err(ServerError::BadRequest(format!(
             "unknown auth action token kind '{kind}'"
         ))),
@@ -5295,6 +5490,33 @@ fn required_form_string(
     Ok(value.to_string())
 }
 
+fn validate_form_email(field: &str, value: &str, message: &str) -> Result<String, ServerError> {
+    let value = value.trim();
+    if is_plausible_email(value) {
+        Ok(value.to_string())
+    } else {
+        Err(validation_error(
+            message,
+            field,
+            "validation_is_email",
+            "Must be a valid email address.",
+        ))
+    }
+}
+
+fn is_plausible_email(value: &str) -> bool {
+    let Some((local, domain)) = value.split_once('@') else {
+        return false;
+    };
+
+    !local.is_empty()
+        && !domain.is_empty()
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && domain.contains('.')
+        && !value.chars().any(char::is_whitespace)
+}
+
 fn data_object(value: &JsonValue) -> Result<&Map<String, JsonValue>, ServerError> {
     value
         .as_object()
@@ -5375,6 +5597,13 @@ fn generate_token() -> String {
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
     format!("rb_{}", hex_encode(&bytes))
+}
+
+fn generate_otp_password() -> String {
+    let mut bytes = [0u8; 4];
+    OsRng.fill_bytes(&mut bytes);
+    let value = u32::from_le_bytes(bytes) % 1_000_000;
+    format!("{value:06}")
 }
 
 fn generate_file_suffix() -> String {

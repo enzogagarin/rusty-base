@@ -320,10 +320,14 @@ The first server slice supports:
   responses;
 - first `?fields=...` response projection support for records and expanded
   relations, including `*` and nested paths such as `expand.author.name`;
-- `GET /api/collections/:collection/auth-methods` with the current
-  password-auth method summary and response `fields` projection;
-- `auth-with-password` and `auth-refresh` response `expand`/`fields` support,
-  including response-level paths such as `record.expand.profile.bio`;
+- `GET /api/collections/:collection/auth-methods` with password, OTP, MFA,
+  OAuth2, and legacy SDK compatibility fields plus response `fields`
+  projection;
+- `auth-with-password`, `auth-with-otp`, and `auth-refresh` response
+  `expand`/`fields` support, including response-level paths such as
+  `record.expand.profile.bio`;
+- `request-otp` and `auth-with-otp` backed by short-lived one-time auth action
+  tokens;
 - verification, password-reset, and email-change request/confirm auth flows
   backed by opaque action tokens;
 - relation expand respects target collection view rules and omits hidden related

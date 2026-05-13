@@ -414,8 +414,12 @@ fn lists_auth_methods_and_projects_auth_method_fields() {
     );
     assert_eq!(methods.body["oauth2"]["enabled"], false);
     assert_eq!(methods.body["oauth2"]["providers"], json!([]));
+    assert_eq!(methods.body["authProviders"], json!([]));
+    assert_eq!(methods.body["emailPassword"], true);
+    assert_eq!(methods.body["usernamePassword"], true);
     assert_eq!(methods.body["mfa"]["enabled"], false);
-    assert_eq!(methods.body["otp"]["duration"], 0);
+    assert_eq!(methods.body["otp"]["enabled"], true);
+    assert_eq!(methods.body["otp"]["duration"], 180);
 
     let projected = app.handle(HttpRequest::new(
         "GET",
@@ -426,7 +430,7 @@ fn lists_auth_methods_and_projects_auth_method_fields() {
         projected.body["password"]["identityFields"],
         json!(["email", "username"])
     );
-    assert_eq!(projected.body["otp"]["enabled"], false);
+    assert_eq!(projected.body["otp"]["enabled"], true);
     assert!(projected.body.get("oauth2").is_none());
     assert!(projected.body["otp"].get("duration").is_none());
 
@@ -452,6 +456,165 @@ fn lists_auth_methods_and_projects_auth_method_fields() {
         .as_str()
         .unwrap()
         .contains("not an auth collection"));
+}
+
+#[test]
+fn supports_otp_request_and_auth_flow() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [
+                    {"name": "email", "type": "email"},
+                    {"name": "name", "kind": "text"},
+                    {"name": "verified", "kind": "bool"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(users.status, 200);
+
+    let user = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({
+                "id": "user_1",
+                "email": "burak@example.com",
+                "name": "Burak",
+                "verified": false,
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(user.status, 200);
+
+    let missing_email = app.handle(
+        HttpRequest::json("POST", "/api/collections/users/request-otp", json!({})).unwrap(),
+    );
+    assert_eq!(missing_email.status, 400);
+    assert_eq!(
+        missing_email.body["data"]["email"]["code"],
+        "validation_required"
+    );
+
+    let invalid_email = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/request-otp",
+            json!({"email": "not-an-email"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_email.status, 400);
+    assert_eq!(
+        invalid_email.body["data"]["email"]["code"],
+        "validation_is_email"
+    );
+
+    let unknown_email = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/request-otp",
+            json!({"email": "missing@example.com"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(unknown_email.status, 200);
+    assert!(unknown_email.body["otpId"].as_str().is_some());
+
+    let unknown_auth = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-otp",
+            json!({"otpId": unknown_email.body["otpId"], "password": "000000"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(unknown_auth.status, 400);
+    assert_eq!(unknown_auth.body["message"], "Failed to authenticate.");
+
+    let request_otp = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/request-otp",
+            json!({"email": "burak@example.com"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(request_otp.status, 200);
+    let otp_id = request_otp.body["otpId"].as_str().unwrap().to_string();
+    assert_eq!(
+        app.store()
+            .latest_auth_action_token("users", "user_1", "otp")
+            .unwrap()
+            .as_deref(),
+        Some(otp_id.as_str())
+    );
+    let otp_data = app
+        .store()
+        .latest_auth_action_data("users", "user_1", "otp")
+        .unwrap()
+        .unwrap();
+    let password = otp_data["password"].as_str().unwrap().to_string();
+    assert_eq!(password.len(), 6);
+
+    let missing_otp_id = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-otp",
+            json!({"password": password.clone()}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(missing_otp_id.status, 400);
+    assert_eq!(
+        missing_otp_id.body["data"]["otpId"]["code"],
+        "validation_required"
+    );
+
+    let wrong_password = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-otp",
+            json!({"otpId": otp_id.clone(), "password": "999999"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(wrong_password.status, 400);
+    assert_eq!(wrong_password.body["message"], "Failed to authenticate.");
+
+    let auth = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-otp?fields=token,record.email,record.verified",
+            json!({"otpId": otp_id.clone(), "password": password.clone()}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(auth.status, 200);
+    assert!(auth.body["token"].as_str().unwrap().starts_with("rb_"));
+    assert_eq!(auth.body["record"]["email"], "burak@example.com");
+    assert_eq!(auth.body["record"]["verified"], true);
+    assert!(auth.body.get("expires").is_none());
+
+    let reused_otp = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-otp",
+            json!({"otpId": otp_id, "password": password}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(reused_otp.status, 400);
 }
 
 #[test]

@@ -204,8 +204,9 @@ Exit criteria:
   for `auth-with-password` and `auth-refresh`.
 - Added relation expand coverage for target collection `viewRule` filtering so
   hidden related records are omitted from the `expand` payload.
-- Added `GET /api/collections/:collection/auth-methods` with the current
-  password-auth summary and response `fields` projection.
+- Added `GET /api/collections/:collection/auth-methods` with password, OTP,
+  MFA, OAuth2, legacy SDK compatibility fields, and response `fields`
+  projection.
 - Added PocketBase-style `email` collection field input, currently mapped to
   text-compatible filter behavior.
 - Added verification request/confirm and password-reset request/confirm auth
@@ -233,10 +234,12 @@ Exit criteria:
   delivery filtered through collection `listRule` or record `viewRule`.
 - Added PocketBase-style email change request/confirm auth flow, including
   current-password confirmation and stale auth/file token invalidation.
+- Added PocketBase-style `request-otp` and `auth-with-otp` MVP backed by
+  short-lived one-time action tokens.
 
 ## Next Sprint
 
-1. Add auth route coverage beyond password/refresh/reset/email change: OTP and
+1. Add auth route coverage beyond password/refresh/reset/email change/OTP:
    OAuth placeholders where useful.
 2. Expand compatibility fixtures around placeholder-like wildcard cases.
 3. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
