@@ -8407,69 +8407,192 @@ fn validate_record_field_options(
             continue;
         }
 
-        if matches!(
-            field.kind,
-            CollectionFieldKind::Text | CollectionFieldKind::Email
-        ) {
-            let Some(text) = value.as_str() else {
-                return Err(validation_error(
-                    "Failed to validate record.",
-                    &field.name,
-                    "validation_invalid_string",
-                    format!("Field '{}' must be a string.", field.name),
-                ));
-            };
-
-            if field
-                .min
-                .is_some_and(|min| text.chars().count() < min as usize)
-            {
-                return Err(validation_error(
-                    "Failed to validate record.",
-                    &field.name,
-                    "validation_min_text_constraint",
-                    format!(
-                        "Field '{}' must be at least {} characters.",
-                        field.name,
-                        field.min.unwrap_or_default()
-                    ),
-                ));
+        match field.kind {
+            CollectionFieldKind::Text | CollectionFieldKind::Email => {
+                validate_text_field_value(field, value)?;
             }
-            if field
-                .max
-                .is_some_and(|max| max > 0 && text.chars().count() > max as usize)
-            {
-                return Err(validation_error(
-                    "Failed to validate record.",
-                    &field.name,
-                    "validation_max_text_constraint",
-                    format!(
-                        "Field '{}' must be at most {} characters.",
-                        field.name,
-                        field.max.unwrap_or_default()
-                    ),
-                ));
+            CollectionFieldKind::Number => {
+                if !value.is_number() {
+                    return Err(validation_error(
+                        "Failed to validate record.",
+                        &field.name,
+                        "validation_invalid_number",
+                        format!("Field '{}' must be a number.", field.name),
+                    ));
+                }
             }
-            if field
-                .pattern
-                .as_deref()
-                .filter(|pattern| !pattern.is_empty())
-                .is_some_and(|pattern| !text_matches_pattern(text, pattern))
-            {
-                return Err(validation_error(
-                    "Failed to validate record.",
-                    &field.name,
-                    "validation_pattern_constraint",
-                    format!(
-                        "Field '{}' does not match the required pattern.",
-                        field.name
-                    ),
-                ));
+            CollectionFieldKind::Bool => {
+                if !value.is_boolean() {
+                    return Err(validation_error(
+                        "Failed to validate record.",
+                        &field.name,
+                        "validation_invalid_bool",
+                        format!("Field '{}' must be a boolean.", field.name),
+                    ));
+                }
             }
+            CollectionFieldKind::DateTime => {
+                if !value.is_string() {
+                    return Err(validation_error(
+                        "Failed to validate record.",
+                        &field.name,
+                        "validation_invalid_datetime",
+                        format!("Field '{}' must be a datetime string.", field.name),
+                    ));
+                }
+            }
+            CollectionFieldKind::Array => {
+                if !value.is_array() {
+                    return Err(validation_error(
+                        "Failed to validate record.",
+                        &field.name,
+                        "validation_invalid_array",
+                        format!("Field '{}' must be an array.", field.name),
+                    ));
+                }
+            }
+            CollectionFieldKind::Relation => validate_relation_field_value(field, value)?,
+            CollectionFieldKind::Json | CollectionFieldKind::File => {}
         }
     }
 
     Ok(())
+}
+
+fn validate_text_field_value(
+    field: &CollectionField,
+    value: &JsonValue,
+) -> Result<(), ServerError> {
+    let Some(text) = value.as_str() else {
+        return Err(validation_error(
+            "Failed to validate record.",
+            &field.name,
+            "validation_invalid_string",
+            format!("Field '{}' must be a string.", field.name),
+        ));
+    };
+
+    if field
+        .min
+        .is_some_and(|min| text.chars().count() < min as usize)
+    {
+        return Err(validation_error(
+            "Failed to validate record.",
+            &field.name,
+            "validation_min_text_constraint",
+            format!(
+                "Field '{}' must be at least {} characters.",
+                field.name,
+                field.min.unwrap_or_default()
+            ),
+        ));
+    }
+    if field
+        .max
+        .is_some_and(|max| max > 0 && text.chars().count() > max as usize)
+    {
+        return Err(validation_error(
+            "Failed to validate record.",
+            &field.name,
+            "validation_max_text_constraint",
+            format!(
+                "Field '{}' must be at most {} characters.",
+                field.name,
+                field.max.unwrap_or_default()
+            ),
+        ));
+    }
+    if field
+        .pattern
+        .as_deref()
+        .filter(|pattern| !pattern.is_empty())
+        .is_some_and(|pattern| !text_matches_pattern(text, pattern))
+    {
+        return Err(validation_error(
+            "Failed to validate record.",
+            &field.name,
+            "validation_pattern_constraint",
+            format!(
+                "Field '{}' does not match the required pattern.",
+                field.name
+            ),
+        ));
+    }
+    if field.kind == CollectionFieldKind::Email && !is_plausible_email(text) {
+        return Err(validation_error(
+            "Failed to validate record.",
+            &field.name,
+            "validation_is_email",
+            "Must be a valid email address.",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_relation_field_value(
+    field: &CollectionField,
+    value: &JsonValue,
+) -> Result<(), ServerError> {
+    let max_select = field.max_select.unwrap_or(1).max(1);
+    let ids = match value {
+        JsonValue::String(id) => vec![id.as_str()],
+        JsonValue::Array(values) => {
+            if values.len() as u64 > max_select {
+                return Err(validation_error(
+                    "Failed to validate record.",
+                    &field.name,
+                    "validation_max_select",
+                    format!(
+                        "Field '{}' accepts at most {} relation(s).",
+                        field.name, max_select
+                    ),
+                ));
+            }
+
+            let mut ids = Vec::with_capacity(values.len());
+            for value in values {
+                let Some(id) = value.as_str() else {
+                    return Err(invalid_relation_field_value(field));
+                };
+                ids.push(id);
+            }
+            ids
+        }
+        _ => return Err(invalid_relation_field_value(field)),
+    };
+
+    if ids.len() as u64 > max_select {
+        return Err(validation_error(
+            "Failed to validate record.",
+            &field.name,
+            "validation_max_select",
+            format!(
+                "Field '{}' accepts at most {} relation(s).",
+                field.name, max_select
+            ),
+        ));
+    }
+
+    for id in ids {
+        if validate_record_id(id).is_err() {
+            return Err(invalid_relation_field_value(field));
+        }
+    }
+
+    Ok(())
+}
+
+fn invalid_relation_field_value(field: &CollectionField) -> ServerError {
+    validation_error(
+        "Failed to validate record.",
+        &field.name,
+        "validation_invalid_relation",
+        format!(
+            "Field '{}' must be a relation id or relation id array.",
+            field.name
+        ),
+    )
 }
 
 fn is_empty_record_value(value: &JsonValue) -> bool {

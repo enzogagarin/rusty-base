@@ -265,13 +265,14 @@ Exit criteria:
 - Added first common/text field option metadata parity for `required`,
   `hidden`, `system`, `presentable`, `primaryKey`, `min`, `max`, `pattern`,
   and `autogeneratePattern`, including import/export preservation.
-- Added record create/update enforcement for `required` and text `min`/`max`/
-  common regex-like `pattern` constraints against the final record state.
+- Added record create/update enforcement for `required`, text `min`/`max`/
+  common regex-like `pattern` constraints, email shape, basic bool/number/array
+  shapes, and relation `maxSelect` against the final record state.
 
 ## Next Sprint
 
-1. Expand superuser/admin API parity around settings test helper routes and
-   deeper collection field option enforcement and edge cases.
+1. Expand collection field option enforcement to relation target existence,
+   number bounds, select/options parity, and JSON/date edge cases.
 2. Expand OAuth2 provider presets and harden callback validation around
    redirect URLs and provider-specific response edge cases.
 3. Expand compatibility fixtures around placeholder-like wildcard cases.

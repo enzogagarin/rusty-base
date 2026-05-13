@@ -3508,6 +3508,181 @@ fn enforces_required_and_text_field_options_on_records() {
 }
 
 #[test]
+fn enforces_non_text_field_option_shapes_on_records() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let tags = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "tags",
+                "fields": [{"name": "label", "type": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(tags.status, 200);
+
+    for record in [
+        json!({"id": "tag_1", "label": "rust"}),
+        json!({"id": "tag_2", "label": "sqlite"}),
+    ] {
+        let response =
+            app.handle(HttpRequest::json("POST", "/api/collections/tags/records", record).unwrap());
+        assert_eq!(response.status, 200);
+    }
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "published", "type": "bool", "required": true},
+                    {"name": "score", "type": "number"},
+                    {"name": "contact", "type": "email"},
+                    {"name": "tags", "type": "relation", "collection": "tags", "maxSelect": 1},
+                    {"name": "scopes", "type": "array"},
+                    {"name": "payload", "type": "json"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(posts.status, 200);
+
+    let valid = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({
+                "id": "post_1",
+                "published": true,
+                "score": 10,
+                "contact": "burak@example.com",
+                "tags": "tag_1",
+                "scopes": ["read"],
+                "payload": {"ok": true}
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(valid.status, 200);
+
+    let invalid_bool = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": "true"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_bool.status, 400);
+    assert_eq!(
+        invalid_bool.body["data"]["published"]["code"],
+        "validation_invalid_bool"
+    );
+
+    let invalid_number = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": true, "score": "10"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_number.status, 400);
+    assert_eq!(
+        invalid_number.body["data"]["score"]["code"],
+        "validation_invalid_number"
+    );
+
+    let invalid_array = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": true, "scopes": "read"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_array.status, 400);
+    assert_eq!(
+        invalid_array.body["data"]["scopes"]["code"],
+        "validation_invalid_array"
+    );
+
+    let invalid_relation_shape = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": true, "tags": 123}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_relation_shape.status, 400);
+    assert_eq!(
+        invalid_relation_shape.body["data"]["tags"]["code"],
+        "validation_invalid_relation"
+    );
+
+    let too_many_relations = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": true, "tags": ["tag_1", "tag_2"]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(too_many_relations.status, 400);
+    assert_eq!(
+        too_many_relations.body["data"]["tags"]["code"],
+        "validation_max_select"
+    );
+
+    let invalid_email = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": true, "contact": "not-email"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_email.status, 400);
+    assert_eq!(
+        invalid_email.body["data"]["contact"]["code"],
+        "validation_is_email"
+    );
+
+    let invalid_patch = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1",
+            json!({"published": "yes"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_patch.status, 400);
+    assert_eq!(
+        invalid_patch.body["data"]["published"]["code"],
+        "validation_invalid_bool"
+    );
+
+    let valid_patch = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1",
+            json!({"score": 11}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(valid_patch.status, 200);
+    assert_eq!(valid_patch.body["published"], true);
+    assert_eq!(valid_patch.body["score"], 11);
+}
+
+#[test]
 fn truncates_and_deletes_collections() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
