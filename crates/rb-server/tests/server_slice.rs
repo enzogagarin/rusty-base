@@ -1115,6 +1115,21 @@ fn uploads_and_serves_file_fields() {
     assert_eq!(updated_file.content_type, "text/markdown");
     assert_eq!(updated_file.raw_body, b"# updated");
 
+    let downloaded_file = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/docs/doc_1/{updated_attachment}?thumb=100x100&download=1"),
+    ));
+    assert_eq!(downloaded_file.status, 200);
+    assert_eq!(downloaded_file.raw_body, b"# updated");
+    assert_eq!(
+        downloaded_file.headers["content-disposition"],
+        format!("attachment; filename=\"{updated_attachment}\"")
+    );
+    let downloaded_http = String::from_utf8(downloaded_file.to_http_bytes()).unwrap();
+    assert!(downloaded_http.contains(&format!(
+        "content-disposition: attachment; filename=\"{updated_attachment}\""
+    )));
+
     let appended = app.handle(multipart_request(
         "PATCH",
         "/api/collections/docs/records/doc_1",

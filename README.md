@@ -305,6 +305,9 @@ The first server slice supports:
   downloads backed by the first SQLite file store;
 - `POST /api/files/token` and protected `file` fields, with short-lived file
   tokens populating `@request.auth.*` for protected downloads;
+- `download=1` file responses with `Content-Disposition: attachment`, while
+  `thumb` currently falls back to the original file until thumbnail generation
+  lands;
 - PocketBase-style uploaded-file modifiers for replace, append, prepend,
   delete-by-name, and zero-value clearing on file fields;
 - PocketBase-like list response shape with `page`, `perPage`, `totalItems`,

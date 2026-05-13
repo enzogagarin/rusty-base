@@ -1928,7 +1928,14 @@ impl RustyBaseApp {
                     }
                 }
                 let file = self.store.get_file(collection, record_id, filename)?;
-                Ok(HttpResponse::bytes(200, file.content_type, file.data))
+                let mut response = HttpResponse::bytes(200, file.content_type, file.data);
+                if truthy_query_value(&query, "download") {
+                    response = response.with_header(
+                        "Content-Disposition",
+                        content_disposition_attachment(filename),
+                    );
+                }
+                Ok(response)
             }
             ("GET", ["api", "collections"]) => {
                 let collections = self.store.list_collections()?;
@@ -2185,6 +2192,7 @@ pub struct HttpResponse {
     pub status: u16,
     pub body: JsonValue,
     pub content_type: String,
+    pub headers: HashMap<String, String>,
     pub raw_body: Vec<u8>,
 }
 
@@ -2194,6 +2202,7 @@ impl HttpResponse {
             status,
             body,
             content_type: "application/json".to_string(),
+            headers: HashMap::new(),
             raw_body: Vec::new(),
         }
     }
@@ -2203,8 +2212,16 @@ impl HttpResponse {
             status,
             body: JsonValue::Null,
             content_type: content_type.into(),
+            headers: HashMap::new(),
             raw_body: body,
         }
+    }
+
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        let name = name.into();
+        self.headers
+            .insert(normalize_http_header_name(&name), value.into());
+        self
     }
 
     pub fn to_http_bytes(&self) -> Vec<u8> {
@@ -2224,11 +2241,30 @@ impl HttpResponse {
         } else {
             self.raw_body.clone()
         };
+        let mut headers = self
+            .headers
+            .iter()
+            .filter(|(name, _)| {
+                !matches!(
+                    name.as_str(),
+                    "content-type" | "content-length" | "connection"
+                )
+            })
+            .collect::<Vec<_>>();
+        headers.sort_by(|(left, _), (right, _)| left.cmp(right));
+        let mut extra_headers = String::new();
+        for (name, value) in headers {
+            extra_headers.push_str(name);
+            extra_headers.push_str(": ");
+            extra_headers.push_str(&sanitize_http_header_value(value));
+            extra_headers.push_str("\r\n");
+        }
         format!(
-            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n",
             self.status,
             status_text,
             self.content_type,
+            extra_headers,
             body.len()
         )
         .into_bytes()
@@ -3124,6 +3160,15 @@ fn parse_u64_query(
             })
         })
         .transpose()
+}
+
+fn truthy_query_value(query: &HashMap<String, String>, name: &str) -> bool {
+    query.get(name).is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "t" | "true"
+        )
+    })
 }
 
 fn request_context(request: &HttpRequest, query: &HashMap<String, String>) -> FilterContext {
@@ -4517,6 +4562,29 @@ fn percent_decode(value: &str) -> String {
 
 fn normalize_http_header_name(name: &str) -> String {
     name.trim().to_ascii_lowercase()
+}
+
+fn sanitize_http_header_value(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch == '\r' || ch == '\n' { ' ' } else { ch })
+        .collect()
+}
+
+fn content_disposition_attachment(filename: &str) -> String {
+    format!(
+        "attachment; filename=\"{}\"",
+        filename
+            .chars()
+            .map(|ch| {
+                if ch == '"' || ch == '\\' || ch == '\r' || ch == '\n' {
+                    '_'
+                } else {
+                    ch
+                }
+            })
+            .collect::<String>()
+    )
 }
 
 fn is_false(value: &bool) -> bool {

@@ -60,6 +60,7 @@ Responsibility:
   prepend, delete-by-name, and clearing;
 - issue short-lived protected file tokens that populate `@request.auth.*` for
   protected file downloads;
+- expose file download attachment headers for `download=1` requests;
 - support auth collections with Argon2 password hashes and expiring bearer
   tokens;
 - expose a first public auth-methods summary for auth collections;
