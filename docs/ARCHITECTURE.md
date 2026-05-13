@@ -137,6 +137,9 @@ Responsibility:
 - export import-ready collection metadata through a Rusty Base helper route;
 - persist, patch, import, and export collection `indexes` metadata for admin UI
   compatibility without executing raw index SQL yet;
+- support a first read-only `view` collection path with persisted `viewQuery`,
+  list/view records from a single SELECT query, and filter/sort predicates
+  compiled by the Rust filter engine against view columns;
 - expand first-level and nested relation records into the PocketBase-style
   `expand` response object;
 - project record, auth, and expanded relation responses with first-pass

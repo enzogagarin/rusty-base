@@ -332,6 +332,9 @@ The first server slice supports:
 - collection `indexes` metadata is persisted, patched, imported, and exported
   for admin UI compatibility; executing those indexes against the JSON-backed
   record tables is intentionally left for a dedicated storage pass;
+- first read-only `view` collection MVP with persisted `viewQuery`, list/view
+  records backed by a single SELECT query, filter/sort support through the Rust
+  filter engine, and rejected record mutations;
 - `GET/PATCH /api/collections/:collection`, including safe metadata updates
   and record table renames;
 - `DELETE /api/collections/:collection` and

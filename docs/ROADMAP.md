@@ -296,19 +296,24 @@ Exit criteria:
   missing and too-few relation checks.
 - Added relation `cascadeDelete` metadata and recursive dependent-record
   cleanup when a referenced target record is deleted.
+- Added a first read-only `view` collection MVP with persisted `viewQuery`,
+  SELECT-backed list/view records, filter/sort support through `rb-filter-engine`,
+  and mutation endpoints rejected as read-only.
 
 ## Next Sprint
 
 1. Expand remaining field-type parity beyond the currently supported
    bool/number/text/email/url/editor/date/autodate/geoPoint/select/json/
    relation/file subset.
-2. Design safe SQLite index execution for JSON-backed record tables instead of
+2. Harden view collection compatibility around field inference, relation expand
+   edge cases, and safer query planning.
+3. Design safe SQLite index execution for JSON-backed record tables instead of
    running raw PocketBase index SQL strings directly.
-3. Expand OAuth2 provider presets and harden callback validation around
+4. Expand OAuth2 provider presets and harden callback validation around
    redirect URLs and provider-specific response edge cases.
-4. Expand compatibility fixtures around placeholder-like wildcard cases.
-5. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
-6. Add relation compatibility fixtures copied from PocketBase-style access-rule
+5. Expand compatibility fixtures around placeholder-like wildcard cases.
+6. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
+7. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.
-7. Add file option parity and uploaded/protected-file compatibility fixtures
+8. Add file option parity and uploaded/protected-file compatibility fixtures
    around edge cases.

@@ -110,6 +110,8 @@ pub struct CollectionConfig {
     pub fields: Vec<CollectionField>,
     #[serde(default)]
     pub indexes: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub view_query: String,
     #[serde(default)]
     pub list_rule: Option<String>,
     #[serde(default)]
@@ -152,6 +154,7 @@ impl CollectionConfig {
             collection_type: CollectionType::Base,
             fields: fields.into_iter().collect(),
             indexes: Vec::new(),
+            view_query: String::new(),
             list_rule: None,
             view_rule: None,
             create_rule: None,
@@ -218,6 +221,7 @@ pub enum CollectionType {
     #[default]
     Base,
     Auth,
+    View,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1395,6 +1399,10 @@ pub struct CollectionPatch {
     #[serde(default)]
     pub indexes: Option<Vec<String>>,
     #[serde(default)]
+    pub view_query: Option<String>,
+    #[serde(default, rename = "type")]
+    pub collection_type: Option<CollectionType>,
+    #[serde(default)]
     pub list_rule: Option<Option<String>>,
     #[serde(default)]
     pub view_rule: Option<Option<String>>,
@@ -1566,19 +1574,21 @@ impl Store {
             "#,
             params![&collection.name, schema_json, now],
         )?;
-        conn.execute(
-            &format!(
-                r#"
-                CREATE TABLE IF NOT EXISTS {table_sql} (
-                    id TEXT PRIMARY KEY NOT NULL,
-                    data TEXT NOT NULL,
-                    created TEXT NOT NULL,
-                    updated TEXT NOT NULL
-                )
-                "#
-            ),
-            [],
-        )?;
+        if collection_owns_record_table(&collection) {
+            conn.execute(
+                &format!(
+                    r#"
+                    CREATE TABLE IF NOT EXISTS {table_sql} (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        data TEXT NOT NULL,
+                        created TEXT NOT NULL,
+                        updated TEXT NOT NULL
+                    )
+                    "#
+                ),
+                [],
+            )?;
+        }
 
         Ok(collection)
     }
@@ -1783,6 +1793,7 @@ impl Store {
     ) -> Result<CollectionConfig, ServerError> {
         validate_collection_identifier(identifier)?;
         let mut collection = self.get_collection(identifier)?;
+        let old_collection = collection.clone();
         let old_name = collection.name.clone();
         apply_collection_patch(&mut collection, patch);
         normalize_collection(&mut collection);
@@ -1799,12 +1810,16 @@ impl Store {
         if old_name != new_name {
             ensure_collection_identifier_available_tx(&tx, &new_name, Some(&old_name))?;
 
-            let old_table_sql = quote_identifier(&old_table);
-            let new_table_sql = quote_identifier(&new_table);
-            tx.execute(
-                &format!("ALTER TABLE {old_table_sql} RENAME TO {new_table_sql}"),
-                [],
-            )?;
+            if collection_owns_record_table(&old_collection)
+                && collection_owns_record_table(&collection)
+            {
+                let old_table_sql = quote_identifier(&old_table);
+                let new_table_sql = quote_identifier(&new_table);
+                tx.execute(
+                    &format!("ALTER TABLE {old_table_sql} RENAME TO {new_table_sql}"),
+                    [],
+                )?;
+            }
             tx.execute(
                 r#"UPDATE "_rb_auth_tokens" SET collection_name = ?1 WHERE collection_name = ?2"#,
                 params![&new_name, &old_name],
@@ -1824,6 +1839,30 @@ impl Store {
             tx.execute(
                 r#"UPDATE "_rb_files" SET collection_name = ?1 WHERE collection_name = ?2"#,
                 params![&new_name, &old_name],
+            )?;
+        }
+        if collection_owns_record_table(&old_collection)
+            && !collection_owns_record_table(&collection)
+        {
+            let old_table_sql = quote_identifier(&old_table);
+            tx.execute(&format!("DROP TABLE IF EXISTS {old_table_sql}"), [])?;
+        }
+        if !collection_owns_record_table(&old_collection)
+            && collection_owns_record_table(&collection)
+        {
+            let new_table_sql = quote_identifier(&new_table);
+            tx.execute(
+                &format!(
+                    r#"
+                    CREATE TABLE IF NOT EXISTS {new_table_sql} (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        data TEXT NOT NULL,
+                        created TEXT NOT NULL,
+                        updated TEXT NOT NULL
+                    )
+                    "#
+                ),
+                [],
             )?;
         }
 
@@ -1928,19 +1967,23 @@ impl Store {
             }
 
             let table_sql = quote_identifier(&record_table_name(&collection.name)?);
-            tx.execute(
-                &format!(
-                    r#"
-                    CREATE TABLE IF NOT EXISTS {table_sql} (
-                        id TEXT PRIMARY KEY NOT NULL,
-                        data TEXT NOT NULL,
-                        created TEXT NOT NULL,
-                        updated TEXT NOT NULL
-                    )
-                    "#
-                ),
-                [],
-            )?;
+            if collection_owns_record_table(&collection) {
+                tx.execute(
+                    &format!(
+                        r#"
+                        CREATE TABLE IF NOT EXISTS {table_sql} (
+                            id TEXT PRIMARY KEY NOT NULL,
+                            data TEXT NOT NULL,
+                            created TEXT NOT NULL,
+                            updated TEXT NOT NULL
+                        )
+                        "#
+                    ),
+                    [],
+                )?;
+            } else {
+                tx.execute(&format!("DROP TABLE IF EXISTS {table_sql}"), [])?;
+            }
 
             if let Some(current) = existing.get(&collection.name) {
                 if current.collection_type == CollectionType::Auth
@@ -2090,6 +2133,9 @@ impl Store {
         context: FilterContext,
     ) -> Result<JsonValue, ServerError> {
         let collection = self.get_collection(collection_name)?;
+        if collection.collection_type == CollectionType::View {
+            return Err(read_only_view_collection(&collection.name));
+        }
         let collection_name = collection.name.as_str();
         let object = data_object_mut(&mut data)?;
         let file_changes = prepare_file_changes(&collection, object, uploads, None)?;
@@ -2151,6 +2197,9 @@ impl Store {
     ) -> Result<JsonValue, ServerError> {
         validate_record_id(id)?;
         let collection = self.get_collection(collection_name)?;
+        if collection.collection_type == CollectionType::View {
+            return self.get_view_record(&collection, id, context);
+        }
         let collection_name = collection.name.as_str();
         let collection_id = record_collection_id(&collection);
         let resolver = RecordResolver::new(&collection);
@@ -2188,6 +2237,9 @@ impl Store {
         options: ListOptions,
     ) -> Result<RecordList, ServerError> {
         let collection = self.get_collection(collection_name)?;
+        if collection.collection_type == CollectionType::View {
+            return self.list_view_records(&collection, options);
+        }
         let collection_name = collection.name.as_str();
         let collection_id = record_collection_id(&collection);
         let resolver = RecordResolver::new(&collection);
@@ -2231,6 +2283,126 @@ impl Store {
 
         if !options.expand.is_empty() {
             self.expand_records(&collection, &mut items, &options.expand, &options.context)?;
+        }
+        if !options.fields.is_empty() {
+            project_record_responses(&mut items, &options.fields)?;
+        }
+
+        let total_pages = if options.skip_total {
+            -1
+        } else if total_items == 0 {
+            0
+        } else {
+            let per_page = options.per_page as i64;
+            (total_items + per_page - 1) / per_page
+        };
+
+        Ok(RecordList {
+            page: options.page,
+            per_page: options.per_page,
+            total_items,
+            total_pages,
+            items,
+        })
+    }
+
+    fn get_view_record(
+        &self,
+        collection: &CollectionConfig,
+        id: &str,
+        context: FilterContext,
+    ) -> Result<JsonValue, ServerError> {
+        let collection_name = collection.name.as_str();
+        let collection_id = record_collection_id(collection);
+        let resolver = ViewRecordResolver::new(collection);
+        let mut params = vec![SqlValue::Text(id.to_string())];
+        let mut where_parts = vec![format!("{} = ?", quote_identifier("id"))];
+
+        if !is_superuser_context(&context) {
+            if let Some(rule) = collection
+                .view_rule
+                .as_deref()
+                .filter(|rule| !rule.trim().is_empty())
+            {
+                let compiled = compile_filter_with_resolver_and_context(rule, &resolver, context)?;
+                where_parts.push(format!("({})", compiled.sql));
+                params.extend(filter_params_to_sqlite(compiled.params)?);
+            }
+        }
+
+        let view_sql = view_query_sql(collection)?;
+        let sql = format!(
+            "SELECT * FROM ({view_sql}) AS {} WHERE {} LIMIT 1",
+            quote_identifier("_rb_view"),
+            where_parts.join(" AND ")
+        );
+        let conn = self.connection()?;
+        let mut stmt = conn.prepare(&sql)?;
+        let column_names = statement_column_names(&stmt);
+        let mut rows = stmt.query(params_from_iter(params.iter()))?;
+        if let Some(row) = rows.next()? {
+            view_row_to_record(collection_name, &collection_id, &column_names, row)
+        } else {
+            Err(ServerError::NotFound(format!("record '{id}' not found")))
+        }
+    }
+
+    fn list_view_records(
+        &self,
+        collection: &CollectionConfig,
+        options: ListOptions,
+    ) -> Result<RecordList, ServerError> {
+        let collection_name = collection.name.as_str();
+        let collection_id = record_collection_id(collection);
+        let resolver = ViewRecordResolver::new(collection);
+        let predicate = compile_list_predicate(collection, &resolver, &options)?;
+        let order_sql = view_record_sort_sql(&resolver, options.sort.as_deref())?;
+        let view_sql = view_query_sql(collection)?;
+        let view_table_sql = format!("({view_sql}) AS {}", quote_identifier("_rb_view"));
+        let where_sql = predicate
+            .sql
+            .as_ref()
+            .map(|sql| format!(" WHERE {sql}"))
+            .unwrap_or_default();
+        let offset = options.page.saturating_sub(1) * options.per_page;
+
+        let (total_items, mut items) = {
+            let conn = self.connection()?;
+            let total_items = if options.skip_total {
+                -1
+            } else {
+                let count_sql = format!("SELECT COUNT(*) FROM {view_table_sql}{where_sql}");
+                conn.query_row(
+                    &count_sql,
+                    params_from_iter(predicate.params.iter()),
+                    |row| row.get::<_, i64>(0),
+                )?
+            };
+
+            let list_sql = format!(
+                "SELECT * FROM {view_table_sql}{where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?"
+            );
+            let mut list_params = predicate.params;
+            list_params.push(SqlValue::Integer(options.per_page as i64));
+            list_params.push(SqlValue::Integer(offset as i64));
+
+            let mut stmt = conn.prepare(&list_sql)?;
+            let column_names = statement_column_names(&stmt);
+            let mut rows = stmt.query(params_from_iter(list_params.iter()))?;
+            let mut items = Vec::new();
+            while let Some(row) = rows.next()? {
+                items.push(view_row_to_record(
+                    collection_name,
+                    &collection_id,
+                    &column_names,
+                    row,
+                )?);
+            }
+            (total_items, items)
+        };
+
+        if !options.expand.is_empty() {
+            self.expand_records(collection, &mut items, &options.expand, &options.context)?;
         }
         if !options.fields.is_empty() {
             project_record_responses(&mut items, &options.fields)?;
@@ -2298,6 +2470,9 @@ impl Store {
     ) -> Result<JsonValue, ServerError> {
         validate_record_id(id)?;
         let collection = self.get_collection(collection_name)?;
+        if collection.collection_type == CollectionType::View {
+            return Err(read_only_view_collection(&collection.name));
+        }
         let collection_name = collection.name.as_str();
         let mut patch = patch;
         let mut existing = self.read_record(collection_name, id)?;
@@ -2386,6 +2561,9 @@ impl Store {
     ) -> Result<(), ServerError> {
         validate_record_id(id)?;
         let collection = self.get_collection(collection_identifier)?;
+        if collection.collection_type == CollectionType::View {
+            return Err(read_only_view_collection(&collection.name));
+        }
         let collection_name = collection.name.as_str();
         let collection_id = record_collection_id(&collection);
         let record_key = (collection_name.to_string(), id.to_string());
@@ -3704,6 +3882,11 @@ impl Store {
     fn record_exists(&self, collection_identifier: &str, id: &str) -> Result<bool, ServerError> {
         validate_record_id(id)?;
         let collection = self.get_collection(collection_identifier)?;
+        if collection.collection_type == CollectionType::View {
+            return Ok(self
+                .get_view_record(&collection, id, FilterContext::default())
+                .is_ok());
+        }
         let table_sql = quote_identifier(&record_table_name(&collection.name)?);
         let conn = self.connection()?;
         let count = conn.query_row(
@@ -4965,6 +5148,55 @@ impl FieldResolver for RecordResolver<'_> {
     }
 }
 
+struct ViewRecordResolver<'a> {
+    collection: &'a CollectionConfig,
+}
+
+impl<'a> ViewRecordResolver<'a> {
+    fn new(collection: &'a CollectionConfig) -> Self {
+        Self { collection }
+    }
+
+    fn custom_field(&self, field: &str) -> Option<&CollectionField> {
+        self.collection
+            .fields
+            .iter()
+            .find(|candidate| candidate.name == field)
+    }
+}
+
+impl FieldResolver for ViewRecordResolver<'_> {
+    fn resolve_field(&self, field: &str) -> Result<ResolvedField, FilterError> {
+        match field {
+            "id" => {
+                return Ok(ResolvedField::with_kind(
+                    quote_identifier("id"),
+                    FieldKind::Text,
+                ))
+            }
+            "created" | "updated" => {
+                return Ok(ResolvedField::with_kind(
+                    quote_identifier(field),
+                    FieldKind::DateTime,
+                ))
+            }
+            _ => {}
+        }
+
+        if let Some(custom_field) = self.custom_field(field) {
+            return Ok(ResolvedField::with_kind(
+                quote_identifier(field),
+                filter_field_kind(custom_field),
+            ));
+        }
+
+        Err(FilterError::with_kind(
+            rb_filter_engine::FilterErrorKind::UnknownField,
+            format!("unknown field '{field}'"),
+        ))
+    }
+}
+
 struct IncomingRecordResolver<'a> {
     collection: &'a CollectionConfig,
 }
@@ -5083,7 +5315,7 @@ struct CompiledPredicate {
 
 fn compile_list_predicate(
     collection: &CollectionConfig,
-    resolver: &RecordResolver<'_>,
+    resolver: &impl FieldResolver,
     options: &ListOptions,
 ) -> Result<CompiledPredicate, ServerError> {
     let mut sql = Vec::new();
@@ -5119,7 +5351,7 @@ fn compile_list_predicate(
 
 fn push_compiled_predicate(
     filter: &str,
-    resolver: &RecordResolver<'_>,
+    resolver: &impl FieldResolver,
     context: &FilterContext,
     sql: &mut Vec<String>,
     params: &mut Vec<SqlValue>,
@@ -5211,7 +5443,7 @@ fn collection_sort_sql(sort: Option<&str>) -> Result<String, ServerError> {
 }
 
 fn record_sort_sql(
-    resolver: &RecordResolver<'_>,
+    resolver: &impl FieldResolver,
     sort: Option<&str>,
 ) -> Result<String, ServerError> {
     let Some(sort) = sort.map(str::trim).filter(|sort| !sort.is_empty()) else {
@@ -5245,6 +5477,17 @@ fn record_sort_sql(
         Ok(r#""created" DESC, "id" ASC"#.to_string())
     } else {
         Ok(parts.join(", "))
+    }
+}
+
+fn view_record_sort_sql(
+    resolver: &impl FieldResolver,
+    sort: Option<&str>,
+) -> Result<String, ServerError> {
+    if sort.map(str::trim).is_none_or(str::is_empty) {
+        Ok(format!("{} ASC", quote_identifier("id")))
+    } else {
+        record_sort_sql(resolver, sort)
     }
 }
 
@@ -6782,6 +7025,67 @@ fn row_to_record(
     ))
 }
 
+fn statement_column_names(stmt: &rusqlite::Statement<'_>) -> Vec<String> {
+    stmt.column_names()
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+fn view_row_to_record(
+    collection_name: &str,
+    collection_id: &str,
+    column_names: &[String],
+    row: &rusqlite::Row<'_>,
+) -> Result<JsonValue, ServerError> {
+    let mut record = Map::new();
+    for (index, name) in column_names.iter().enumerate() {
+        let value = row.get::<_, SqlValue>(index)?;
+        record.insert(name.clone(), sql_value_to_json(value));
+    }
+
+    let id = record
+        .get("id")
+        .and_then(view_record_id)
+        .ok_or_else(|| ServerError::BadRequest("viewQuery must return an id column".to_string()))?;
+    record.insert("id".to_string(), JsonValue::String(id));
+    record.insert(
+        "collectionId".to_string(),
+        JsonValue::String(collection_id.to_string()),
+    );
+    record.insert(
+        "collectionName".to_string(),
+        JsonValue::String(collection_name.to_string()),
+    );
+    record
+        .entry("created".to_string())
+        .or_insert_with(|| JsonValue::String(String::new()));
+    record
+        .entry("updated".to_string())
+        .or_insert_with(|| JsonValue::String(String::new()));
+    Ok(JsonValue::Object(record))
+}
+
+fn view_record_id(value: &JsonValue) -> Option<String> {
+    match value {
+        JsonValue::String(value) if !value.is_empty() => Some(value.clone()),
+        JsonValue::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn sql_value_to_json(value: SqlValue) -> JsonValue {
+    match value {
+        SqlValue::Null => JsonValue::Null,
+        SqlValue::Integer(value) => json!(value),
+        SqlValue::Real(value) => serde_json::Number::from_f64(value)
+            .map(JsonValue::Number)
+            .unwrap_or(JsonValue::Null),
+        SqlValue::Text(value) => JsonValue::String(value),
+        SqlValue::Blob(value) => JsonValue::String(URL_SAFE_NO_PAD.encode(value)),
+    }
+}
+
 fn collection_row_to_value(
     name: String,
     schema_json: String,
@@ -6818,6 +7122,15 @@ fn record_collection_id(collection: &CollectionConfig) -> String {
 
 fn collection_id_sql() -> String {
     r#"COALESCE(NULLIF(json_extract("schema_json", '$.id'), ''), "name")"#.to_string()
+}
+
+fn collection_owns_record_table(collection: &CollectionConfig) -> bool {
+    collection.collection_type != CollectionType::View
+}
+
+fn view_query_sql(collection: &CollectionConfig) -> Result<String, ServerError> {
+    validate_view_query(&collection.view_query)?;
+    Ok(collection.view_query.trim().to_string())
 }
 
 fn decorate_collection_response_fields(object: &mut Map<String, JsonValue>) {
@@ -6925,6 +7238,10 @@ fn forbidden(action: &str, collection_name: &str) -> ServerError {
     ServerError::Forbidden(format!(
         "{action} rule denied access to collection '{collection_name}'"
     ))
+}
+
+fn read_only_view_collection(collection_name: &str) -> ServerError {
+    ServerError::BadRequest(format!("view collection '{collection_name}' is read-only"))
 }
 
 fn invalid_credentials() -> ServerError {
@@ -7323,12 +7640,18 @@ fn apply_collection_patch(collection: &mut CollectionConfig, patch: CollectionPa
     if let Some(name) = patch.name {
         collection.name = name;
     }
+    if let Some(collection_type) = patch.collection_type {
+        collection.collection_type = collection_type;
+    }
     if let Some(mut fields) = patch.fields {
         preserve_collection_field_ids(&collection.fields, &mut fields);
         collection.fields = fields;
     }
     if let Some(indexes) = patch.indexes {
         collection.indexes = indexes;
+    }
+    if let Some(view_query) = patch.view_query {
+        collection.view_query = view_query;
     }
     if let Some(rule) = patch.list_rule {
         collection.list_rule = rule;
@@ -7386,7 +7709,12 @@ fn normalize_collection(collection: &mut CollectionConfig) {
         .retain(|field| !is_response_only_collection_field(field));
     normalize_collection_id(collection);
     normalize_collection_indexes(&mut collection.indexes);
+    collection.view_query = collection.view_query.trim().to_string();
     normalize_collection_fields(&mut collection.fields);
+
+    if collection.collection_type != CollectionType::View {
+        collection.view_query.clear();
+    }
 
     if collection.collection_type != CollectionType::Auth {
         collection.auth_rule = None;
@@ -7693,6 +8021,8 @@ fn collection_export_payload(collections: Vec<CollectionConfig>) -> JsonValue {
 
 fn collection_export_value(collection: CollectionConfig) -> JsonValue {
     let id = collection_id_value(&collection).unwrap_or_else(|| collection.name.clone());
+    let is_view_collection = collection.collection_type == CollectionType::View;
+    let view_query = collection.view_query;
     let mut value = json!({
         "id": id,
         "name": collection.name,
@@ -7709,6 +8039,9 @@ fn collection_export_value(collection: CollectionConfig) -> JsonValue {
         "deleteRule": collection.delete_rule
     });
     let object = value.as_object_mut().expect("export value must be object");
+    if is_view_collection || !view_query.is_empty() {
+        object.insert("viewQuery".to_string(), json!(view_query));
+    }
     insert_optional_json(object, "authRule", collection.auth_rule);
     insert_optional_json(object, "manageRule", collection.manage_rule);
     insert_optional_json(object, "passwordAuth", collection.password_auth);
@@ -7909,6 +8242,9 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
     validate_collection_name(&collection.name)?;
     if let Some(id) = collection.id.as_deref() {
         validate_collection_id(id)?;
+    }
+    if collection.collection_type == CollectionType::View {
+        validate_view_query(&collection.view_query)?;
     }
     for index in &collection.indexes {
         validate_collection_index(index)?;
@@ -8277,6 +8613,25 @@ fn validate_collection_index(index: &str) -> Result<(), ServerError> {
     } else {
         Err(ServerError::BadRequest(
             "collection indexes must be non-empty strings without control characters".to_string(),
+        ))
+    }
+}
+
+fn validate_view_query(query: &str) -> Result<(), ServerError> {
+    let query = query.trim();
+    let lowered = query.to_ascii_lowercase();
+    if !query.is_empty()
+        && query.len() <= 8192
+        && lowered.starts_with("select ")
+        && !query.contains(';')
+        && !query
+            .chars()
+            .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t'))
+    {
+        Ok(())
+    } else {
+        Err(ServerError::BadRequest(
+            "viewQuery must be a single SELECT query".to_string(),
         ))
     }
 }

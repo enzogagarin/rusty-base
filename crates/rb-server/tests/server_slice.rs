@@ -5164,6 +5164,139 @@ fn returns_collection_scaffolds_and_import_ready_export_payload() {
 }
 
 #[test]
+fn supports_read_only_view_collection_queries() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "title", "type": "text"},
+                    {"name": "published", "type": "bool"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(posts.status, 200);
+
+    for record in [
+        json!({"id": "post_1", "title": "Rusty Base", "published": true}),
+        json!({"id": "post_2", "title": "Draft Note", "published": false}),
+    ] {
+        let response = app
+            .handle(HttpRequest::json("POST", "/api/collections/posts/records", record).unwrap());
+        assert_eq!(response.status, 200);
+    }
+
+    let view_query = r#"SELECT id, json_extract(data, '$.title') AS title, created, updated FROM "_rb_records_posts" WHERE json_extract(data, '$.published') = 1"#;
+    let created_view = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "published_posts",
+                "type": "view",
+                "viewQuery": view_query,
+                "fields": [{"name": "title", "type": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created_view.status, 200);
+    assert_eq!(created_view.body["type"], "view");
+    assert_eq!(created_view.body["viewQuery"], view_query);
+    assert_eq!(
+        collection_field(&created_view.body, "title")["type"],
+        "text"
+    );
+
+    let list = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/published_posts/records?filter=title%20~%20%27Rusty%27",
+    ));
+    assert_eq!(list.status, 200);
+    assert_eq!(list.body["totalItems"], 1);
+    assert_eq!(list.body["items"][0]["id"], "post_1");
+    assert_eq!(list.body["items"][0]["title"], "Rusty Base");
+    assert_eq!(list.body["items"][0]["collectionName"], "published_posts");
+
+    let record = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/published_posts/records/post_1",
+    ));
+    assert_eq!(record.status, 200);
+    assert_eq!(record.body["title"], "Rusty Base");
+
+    let hidden = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/published_posts/records/post_2",
+    ));
+    assert_eq!(hidden.status, 404);
+
+    let create_denied = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/published_posts/records",
+            json!({"id": "post_3", "title": "Nope"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(create_denied.status, 400);
+
+    let patch_denied = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/published_posts/records/post_1",
+            json!({"title": "Nope"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(patch_denied.status, 400);
+
+    let delete_denied = app.handle(HttpRequest::new(
+        "DELETE",
+        "/api/collections/published_posts/records/post_1",
+    ));
+    assert_eq!(delete_denied.status, 400);
+
+    let exported = app.handle(HttpRequest::new("GET", "/api/collections/meta/export"));
+    assert_eq!(exported.status, 200);
+    let exported_view = exported.body["collections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|collection| collection["name"] == "published_posts")
+        .unwrap();
+    assert_eq!(exported_view["type"], "view");
+    assert_eq!(exported_view["viewQuery"], view_query);
+
+    let invalid_view = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "bad_view",
+                "type": "view",
+                "viewQuery": "DELETE FROM _rb_records_posts",
+                "fields": []
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_view.status, 400);
+
+    let delete_view = app.handle(HttpRequest::new(
+        "DELETE",
+        "/api/collections/published_posts",
+    ));
+    assert_eq!(delete_view.status, 204);
+}
+
+#[test]
 fn expands_single_multi_and_nested_relation_records() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
