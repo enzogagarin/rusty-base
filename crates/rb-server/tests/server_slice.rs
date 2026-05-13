@@ -3647,6 +3647,78 @@ fn supports_url_editor_and_date_field_parity() {
 }
 
 #[test]
+fn supports_geo_point_field_values_and_filters() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let created = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "places",
+                "fields": [
+                    {"name": "name", "type": "text"},
+                    {"name": "location", "type": "geoPoint"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created.status, 200);
+    assert_eq!(created.body["fields"][1]["type"], "geoPoint");
+
+    let valid = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/places/records",
+            json!({
+                "id": "place_1",
+                "name": "Istanbul",
+                "location": {"lon": 28.9784, "lat": 41.0082}
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(valid.status, 200);
+
+    let filtered = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/places/records?filter=location.lat%20%3E%3D%2040%20%26%26%20location.lon%20%3C%2030",
+    ));
+    assert_eq!(filtered.status, 200);
+    assert_eq!(filtered.body["totalItems"], 1);
+    assert_eq!(filtered.body["items"][0]["id"], "place_1");
+
+    let invalid_shape = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/places/records",
+            json!({"location": {"lon": 28.9784, "lat": "41.0082"}}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_shape.status, 400);
+    assert_eq!(
+        invalid_shape.body["data"]["location"]["code"],
+        "validation_invalid_geo_point"
+    );
+
+    let invalid_range = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/places/records",
+            json!({"location": {"lon": 28.9784, "lat": 91}}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_range.status, 400);
+    assert_eq!(
+        invalid_range.body["data"]["location"]["code"],
+        "validation_invalid_geo_point"
+    );
+}
+
+#[test]
 fn enforces_required_and_text_field_options_on_records() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 

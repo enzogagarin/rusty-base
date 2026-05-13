@@ -270,20 +270,23 @@ Exit criteria:
   lists, and JSON/editor `maxSize`, including import/export preservation.
 - Added record create/update enforcement for `required`, text `min`/`max`/
   common regex-like `pattern` constraints, email shape, basic bool/number/array
-  shapes, URL shape/domain options, PocketBase-style datetime format, number
-  `min`/`max`, select `values`/`maxSelect`, JSON required/`maxSize`, editor
-  `maxSize`, relation `maxSelect`, and relation target existence against the
-  final record state.
+  shapes, URL shape/domain options, PocketBase-style datetime format, geoPoint
+  lon/lat shape, number `min`/`max`, select `values`/`maxSelect`, JSON
+  required/`maxSize`, editor `maxSize`, relation `maxSelect`, and relation
+  target existence against the final record state.
 - Added PocketBase-style UTC `created`/`updated` timestamps for collection and
   record responses.
 - Added first `url` and `editor` field parity, including PocketBase `date`
   type output, legacy `datetime` input compatibility, URL domain restrictions,
   and editor `maxSize` validation.
+- Added first `geoPoint` field parity with lon/lat validation and nested
+  `location.lat`/`location.lon` filter support.
 
 ## Next Sprint
 
 1. Expand remaining field-type parity beyond the currently supported
-   bool/number/text/email/url/editor/date/select/json/relation/file subset.
+   bool/number/text/email/url/editor/date/geoPoint/select/json/relation/file
+   subset.
 2. Expand OAuth2 provider presets and harden callback validation around
    redirect URLs and provider-specific response edge cases.
 3. Expand compatibility fixtures around placeholder-like wildcard cases.

@@ -461,6 +461,8 @@ pub enum CollectionFieldKind {
     Json,
     Relation,
     Select,
+    #[serde(rename = "geoPoint", alias = "geopoint")]
+    GeoPoint,
 }
 
 impl From<CollectionFieldKind> for FieldKind {
@@ -478,6 +480,7 @@ impl From<CollectionFieldKind> for FieldKind {
             CollectionFieldKind::Json => Self::Json,
             CollectionFieldKind::Relation => Self::Relation,
             CollectionFieldKind::Select => Self::Text,
+            CollectionFieldKind::GeoPoint => Self::Json,
         }
     }
 }
@@ -4770,7 +4773,7 @@ impl<'a> RecordResolver<'a> {
     fn json_root_kind(&self, field: &str) -> Option<CollectionFieldKind> {
         let (root, _) = field.split_once('.')?;
         self.custom_field_kind(root)
-            .filter(|kind| *kind == CollectionFieldKind::Json)
+            .filter(|kind| is_json_path_field_kind(*kind))
     }
 }
 
@@ -4833,7 +4836,7 @@ impl<'a> IncomingRecordResolver<'a> {
     fn json_root_kind(&self, field: &str) -> Option<CollectionFieldKind> {
         let (root, _) = field.split_once('.')?;
         self.custom_field_kind(root)
-            .filter(|kind| *kind == CollectionFieldKind::Json)
+            .filter(|kind| is_json_path_field_kind(*kind))
     }
 }
 
@@ -4879,6 +4882,13 @@ fn filter_field_kind(field: &CollectionField) -> FieldKind {
     } else {
         FieldKind::from(field.kind)
     }
+}
+
+fn is_json_path_field_kind(kind: CollectionFieldKind) -> bool {
+    matches!(
+        kind,
+        CollectionFieldKind::Json | CollectionFieldKind::GeoPoint
+    )
 }
 
 struct CollectionResolver;
@@ -6140,15 +6150,16 @@ fn multipart_text_value(
                 )
             })
         }
-        CollectionFieldKind::Array | CollectionFieldKind::Json => serde_json::from_str(&value)
-            .map_err(|_| {
+        CollectionFieldKind::Array | CollectionFieldKind::Json | CollectionFieldKind::GeoPoint => {
+            serde_json::from_str(&value).map_err(|_| {
                 validation_error(
                     "Failed to validate record.",
                     name,
                     "validation_invalid_json",
                     format!("Field '{name}' must be valid JSON."),
                 )
-            }),
+            })
+        }
         _ => Ok(JsonValue::String(value)),
     }
 }
@@ -8896,6 +8907,7 @@ fn validate_record_field_options(
             CollectionFieldKind::Relation => validate_relation_field_value(field, value)?,
             CollectionFieldKind::Select => validate_select_field_value(field, value)?,
             CollectionFieldKind::Json => validate_json_field_value(field, value)?,
+            CollectionFieldKind::GeoPoint => validate_geo_point_field_value(field, value)?,
             CollectionFieldKind::File => {}
         }
     }
@@ -8926,6 +8938,39 @@ fn json_field_max_size(field: &CollectionField) -> u64 {
         .max_size
         .filter(|max_size| *max_size > 0)
         .unwrap_or(DEFAULT_JSON_MAX_SIZE_BYTES)
+}
+
+fn validate_geo_point_field_value(
+    field: &CollectionField,
+    value: &JsonValue,
+) -> Result<(), ServerError> {
+    let Some(object) = value.as_object() else {
+        return Err(invalid_geo_point_field_value(field));
+    };
+    let Some(lon) = object.get("lon").and_then(JsonValue::as_f64) else {
+        return Err(invalid_geo_point_field_value(field));
+    };
+    let Some(lat) = object.get("lat").and_then(JsonValue::as_f64) else {
+        return Err(invalid_geo_point_field_value(field));
+    };
+
+    if !(-180.0..=180.0).contains(&lon) || !(-90.0..=90.0).contains(&lat) {
+        return Err(invalid_geo_point_field_value(field));
+    }
+
+    Ok(())
+}
+
+fn invalid_geo_point_field_value(field: &CollectionField) -> ServerError {
+    validation_error(
+        "Failed to validate record.",
+        &field.name,
+        "validation_invalid_geo_point",
+        format!(
+            "Field '{}' must be an object with numeric lon/lat coordinates.",
+            field.name
+        ),
+    )
 }
 
 fn validate_datetime_field_value(
@@ -9796,6 +9841,7 @@ fn field_kind_id_prefix(kind: CollectionFieldKind) -> &'static str {
         CollectionFieldKind::Json => "json",
         CollectionFieldKind::Relation => "relation",
         CollectionFieldKind::Select => "select",
+        CollectionFieldKind::GeoPoint => "geoPoint",
     }
 }
 
