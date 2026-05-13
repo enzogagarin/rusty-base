@@ -236,11 +236,14 @@ Exit criteria:
   current-password confirmation and stale auth/file token invalidation.
 - Added PocketBase-style `request-otp` and `auth-with-otp` MVP backed by
   short-lived one-time action tokens.
+- Added persisted auth collection options for password identities, token
+  durations, OTP, MFA, and OAuth2 provider metadata, plus an `auth-with-oauth2`
+  validation/placeholder route for configured providers.
 
 ## Next Sprint
 
-1. Add auth route coverage beyond password/refresh/reset/email change/OTP:
-   OAuth placeholders where useful.
+1. Replace the OAuth2 placeholder with the first real provider callback
+   exchange and account-linking flow.
 2. Expand compatibility fixtures around placeholder-like wildcard cases.
 3. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 4. Add relation compatibility fixtures copied from PocketBase-style access-rule

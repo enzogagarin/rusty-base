@@ -71,6 +71,8 @@ Responsibility:
   tokens;
 - expose a first public auth-methods summary for auth collections, including
   password, OTP, MFA, OAuth2, and legacy SDK compatibility fields;
+- persist normalized auth collection options for password identity fields,
+  token durations, OTP, MFA, and OAuth2 provider metadata;
 - store short-lived opaque auth action tokens for verification, password reset,
   email change, and OTP flows;
 - rotate valid auth tokens through `auth-refresh`;

@@ -107,6 +107,28 @@ pub struct CollectionConfig {
     pub update_rule: Option<String>,
     #[serde(default)]
     pub delete_rule: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_rule: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manage_rule: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_auth: Option<AuthPasswordConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<TokenDurationConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_reset_token: Option<TokenDurationConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email_change_token: Option<TokenDurationConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_token: Option<TokenDurationConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_token: Option<TokenDurationConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth2: Option<OAuth2Config>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mfa: Option<MfaConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub otp: Option<OtpConfig>,
 }
 
 impl CollectionConfig {
@@ -120,6 +142,17 @@ impl CollectionConfig {
             create_rule: None,
             update_rule: None,
             delete_rule: None,
+            auth_rule: None,
+            manage_rule: None,
+            password_auth: None,
+            auth_token: None,
+            password_reset_token: None,
+            email_change_token: None,
+            verification_token: None,
+            file_token: None,
+            oauth2: None,
+            mfa: None,
+            otp: None,
         }
     }
 
@@ -170,6 +203,116 @@ pub enum CollectionType {
     #[default]
     Base,
     Auth,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthPasswordConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub identity_fields: Vec<String>,
+}
+
+impl Default for AuthPasswordConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            identity_fields: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenDurationConfig {
+    #[serde(default)]
+    pub duration: u64,
+}
+
+impl TokenDurationConfig {
+    fn seconds(duration: u64) -> Self {
+        Self { duration }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuth2Config {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub mapped_fields: OAuth2MappedFields,
+    #[serde(default)]
+    pub providers: Vec<OAuth2ProviderConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuth2MappedFields {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default, alias = "avatarUrl", rename = "avatarURL")]
+    pub avatar_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuth2ProviderConfig {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MfaConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub duration: u64,
+    #[serde(default)]
+    pub rule: String,
+}
+
+impl Default for MfaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            duration: 1800,
+            rule: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OtpConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub duration: u64,
+    #[serde(default)]
+    pub length: u64,
+}
+
+impl Default for OtpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            duration: (OTP_TOKEN_TTL_MILLIS / 1000) as u64,
+            length: 8,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -509,6 +652,15 @@ struct AuthWithOtpRequest {
     password: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct AuthWithOAuth2Request {
+    provider: String,
+    code: String,
+    code_verifier: String,
+    redirect_url: String,
+    create_data: JsonValue,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RealtimeSubscribeRequest {
@@ -584,6 +736,38 @@ impl AuthWithOtpRequest {
         Ok(Self {
             otp_id: required_form_string(object, "otpId", "Failed to authenticate.")?,
             password: required_form_string(object, "password", "Failed to authenticate.")?,
+        })
+    }
+}
+
+impl AuthWithOAuth2Request {
+    fn from_json(value: JsonValue) -> Result<Self, ServerError> {
+        let object = value.as_object().ok_or_else(|| {
+            validation_error(
+                AUTH_FORM_VALIDATION_MESSAGE,
+                "body",
+                "validation_invalid_body",
+                "Request body must be a JSON object.",
+            )
+        })?;
+
+        Ok(Self {
+            provider: required_form_string(object, "provider", AUTH_FORM_VALIDATION_MESSAGE)?,
+            code: required_form_string(object, "code", AUTH_FORM_VALIDATION_MESSAGE)?,
+            code_verifier: required_form_string(
+                object,
+                "codeVerifier",
+                AUTH_FORM_VALIDATION_MESSAGE,
+            )?,
+            redirect_url: required_form_string(
+                object,
+                "redirectUrl",
+                AUTH_FORM_VALIDATION_MESSAGE,
+            )?,
+            create_data: object
+                .get("createData")
+                .cloned()
+                .unwrap_or_else(|| JsonValue::Object(Map::new())),
         })
     }
 }
@@ -725,15 +909,6 @@ impl AuthActionKind {
             Self::Otp => "otp",
         }
     }
-
-    fn ttl_millis(self) -> u128 {
-        match self {
-            Self::Verification => VERIFICATION_TOKEN_TTL_MILLIS,
-            Self::PasswordReset => PASSWORD_RESET_TOKEN_TTL_MILLIS,
-            Self::EmailChange => EMAIL_CHANGE_TOKEN_TTL_MILLIS,
-            Self::Otp => OTP_TOKEN_TTL_MILLIS,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -753,6 +928,28 @@ pub struct CollectionPatch {
     pub update_rule: Option<Option<String>>,
     #[serde(default)]
     pub delete_rule: Option<Option<String>>,
+    #[serde(default)]
+    pub auth_rule: Option<Option<String>>,
+    #[serde(default)]
+    pub manage_rule: Option<Option<String>>,
+    #[serde(default)]
+    pub password_auth: Option<AuthPasswordConfig>,
+    #[serde(default)]
+    pub auth_token: Option<TokenDurationConfig>,
+    #[serde(default)]
+    pub password_reset_token: Option<TokenDurationConfig>,
+    #[serde(default)]
+    pub email_change_token: Option<TokenDurationConfig>,
+    #[serde(default)]
+    pub verification_token: Option<TokenDurationConfig>,
+    #[serde(default)]
+    pub file_token: Option<TokenDurationConfig>,
+    #[serde(default)]
+    pub oauth2: Option<OAuth2Config>,
+    #[serde(default)]
+    pub mfa: Option<MfaConfig>,
+    #[serde(default)]
+    pub otp: Option<OtpConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -850,8 +1047,9 @@ impl Store {
 
     pub fn create_collection(
         &self,
-        collection: CollectionConfig,
+        mut collection: CollectionConfig,
     ) -> Result<CollectionConfig, ServerError> {
+        normalize_collection(&mut collection);
         validate_collection(&collection)?;
 
         let now = now_timestamp();
@@ -915,6 +1113,7 @@ impl Store {
         validate_collection_name(name)?;
         let mut collection = self.get_collection(name)?;
         apply_collection_patch(&mut collection, patch);
+        normalize_collection(&mut collection);
         validate_collection(&collection)?;
 
         let old_name = name;
@@ -983,7 +1182,14 @@ impl Store {
         Ok(collection)
     }
 
-    pub fn import_collections(&self, request: CollectionImportRequest) -> Result<(), ServerError> {
+    pub fn import_collections(
+        &self,
+        mut request: CollectionImportRequest,
+    ) -> Result<(), ServerError> {
+        for collection in &mut request.collections {
+            normalize_collection(collection);
+        }
+
         let mut incoming_names = HashMap::new();
         for collection in &request.collections {
             validate_collection(collection)?;
@@ -1488,19 +1694,23 @@ impl Store {
         identity: &str,
         password: &str,
     ) -> Result<AuthResponse, ServerError> {
-        let collection = self.get_collection(collection_name)?;
-        if collection.collection_type != CollectionType::Auth {
-            return Err(ServerError::BadRequest(format!(
-                "collection '{collection_name}' is not an auth collection"
-            )));
+        let collection = self.auth_collection(collection_name)?;
+        let password_config = auth_password_config(&collection);
+        if !password_config.enabled {
+            return Err(invalid_credentials());
         }
 
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
+        let mut predicates = vec!["id = ?1".to_string()];
+        for field in password_config.identity_fields {
+            predicates.push(format!("json_extract(data, '$.{field}') = ?1"));
+        }
         let conn = self.connection()?;
         let row = conn
             .query_row(
                 &format!(
-                    "SELECT id, data, created, updated FROM {table_sql} WHERE id = ?1 OR json_extract(data, '$.email') = ?1 OR json_extract(data, '$.username') = ?1 LIMIT 1"
+                    "SELECT id, data, created, updated FROM {table_sql} WHERE {} LIMIT 1",
+                    predicates.join(" OR ")
                 ),
                 params![identity],
                 |row| {
@@ -1524,7 +1734,12 @@ impl Store {
             .ok_or_else(invalid_credentials)?;
         verify_password(password, password_hash)?;
 
-        let (token, expires) = insert_auth_token(&conn, collection_name, &id)?;
+        let (token, expires) = insert_auth_token(
+            &conn,
+            collection_name,
+            &id,
+            auth_token_ttl_millis(&collection),
+        )?;
         drop(conn);
 
         Ok(AuthResponse {
@@ -1539,6 +1754,7 @@ impl Store {
         collection_name: &str,
         token: &str,
     ) -> Result<AuthResponse, ServerError> {
+        let collection = self.auth_collection(collection_name)?;
         let (token_collection_name, record_id) = self.valid_token_subject(token)?;
         if token_collection_name != collection_name {
             return Err(ServerError::Forbidden("invalid auth token".to_string()));
@@ -1568,7 +1784,12 @@ impl Store {
             r#"DELETE FROM "_rb_auth_tokens" WHERE token = ?1"#,
             params![token],
         )?;
-        let (new_token, expires) = insert_auth_token(&conn, collection_name, &record_id)?;
+        let (new_token, expires) = insert_auth_token(
+            &conn,
+            collection_name,
+            &record_id,
+            auth_token_ttl_millis(&collection),
+        )?;
         drop(conn);
 
         let (id, data, created, updated) = row;
@@ -1587,6 +1808,16 @@ impl Store {
 
     pub fn request_otp(&self, collection_name: &str, email: &str) -> Result<String, ServerError> {
         let collection = self.auth_collection(collection_name)?;
+        let otp = auth_otp_config(&collection);
+        if !otp.enabled
+            || !default_auth_identity_fields(&collection)
+                .iter()
+                .any(|field| field == "email")
+        {
+            return Err(ServerError::BadRequest(format!(
+                "OTP auth is not enabled for collection '{collection_name}'"
+            )));
+        }
         let email = validate_form_email("email", email, AUTH_FORM_VALIDATION_MESSAGE)?;
         let otp_id = generate_id();
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
@@ -1606,9 +1837,9 @@ impl Store {
         };
 
         delete_auth_action_tokens(&conn, &collection.name, &record_id, AuthActionKind::Otp)?;
-        let password = generate_otp_password();
+        let password = generate_otp_password(otp.length);
         let created = now_timestamp();
-        let expires = (now_millis() + AuthActionKind::Otp.ttl_millis()).to_string();
+        let expires = (now_millis() + u128::from(otp.duration) * 1000).to_string();
         conn.execute(
             r#"
             INSERT INTO "_rb_auth_action_tokens"
@@ -1685,7 +1916,12 @@ impl Store {
             &record_id,
             AuthActionKind::Otp,
         )?;
-        let (token, expires) = insert_auth_token(&conn, collection_name, &record_id)?;
+        let (token, expires) = insert_auth_token(
+            &conn,
+            collection_name,
+            &record_id,
+            auth_token_ttl_millis(&collection),
+        )?;
 
         Ok(AuthResponse {
             token,
@@ -1849,7 +2085,9 @@ impl Store {
         )?;
         let token = generate_token();
         let created = now_timestamp();
-        let expires = (now_millis() + AuthActionKind::EmailChange.ttl_millis()).to_string();
+        let expires = (now_millis()
+            + auth_action_ttl_millis(&collection, AuthActionKind::EmailChange))
+        .to_string();
         conn.execute(
             r#"
             INSERT INTO "_rb_auth_action_tokens"
@@ -2037,7 +2275,7 @@ impl Store {
         delete_auth_action_tokens(&conn, &collection.name, &record_id, kind)?;
         let token = generate_token();
         let created = now_timestamp();
-        let expires = (now_millis() + kind.ttl_millis()).to_string();
+        let expires = (now_millis() + auth_action_ttl_millis(&collection, kind)).to_string();
         conn.execute(
             r#"
             INSERT INTO "_rb_auth_action_tokens"
@@ -2133,9 +2371,10 @@ impl Store {
 
     pub fn create_file_token(&self, auth_token: &str) -> Result<String, ServerError> {
         let (collection_name, record_id) = self.valid_token_subject(auth_token)?;
+        let collection = self.auth_collection(&collection_name)?;
         let token = generate_token();
         let now = now_millis();
-        let expires = (now + FILE_TOKEN_TTL_MILLIS).to_string();
+        let expires = (now + file_token_ttl_millis(&collection)).to_string();
         let conn = self.connection()?;
         conn.execute(
             r#"
@@ -2714,6 +2953,21 @@ impl RustyBaseApp {
                     request_context(&request, &query),
                 )?;
                 Ok(HttpResponse::json(200, payload))
+            }
+            ("POST", ["api", "collections", collection, "auth-with-oauth2"]) => {
+                let auth =
+                    AuthWithOAuth2Request::from_json(serde_json::from_slice(&request.body)?)?;
+                let collection_config = self.store.auth_collection(collection)?;
+                ensure_oauth2_provider_configured(&collection_config, &auth.provider)?;
+                let _ = (
+                    &auth.code,
+                    &auth.code_verifier,
+                    &auth.redirect_url,
+                    &auth.create_data,
+                );
+                Err(ServerError::BadRequest(
+                    "OAuth2 auth provider flow is not implemented yet".to_string(),
+                ))
             }
             ("POST", ["api", "collections", collection, "auth-refresh"]) => {
                 let token = bearer_token(&request)
@@ -3536,40 +3790,155 @@ fn auth_methods_payload(collection: &CollectionConfig) -> Result<JsonValue, Serv
         )));
     }
 
-    let identity_fields = auth_identity_fields(collection);
-    let email_password = identity_fields.iter().any(|field| field == "email");
-    let username_password = identity_fields.iter().any(|field| field == "username");
+    let password = auth_password_config(collection);
+    let identity_fields = password.identity_fields.clone();
+    let email_password = password.enabled && identity_fields.iter().any(|field| field == "email");
+    let username_password =
+        password.enabled && identity_fields.iter().any(|field| field == "username");
+    let has_email_field = default_auth_identity_fields(collection)
+        .iter()
+        .any(|field| field == "email");
+    let oauth2 = collection.oauth2.clone().unwrap_or_default();
+    let oauth2_providers = if oauth2.enabled {
+        oauth2
+            .providers
+            .iter()
+            .filter(|provider| !provider.name.trim().is_empty())
+            .map(oauth2_auth_method_provider)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let mfa = collection.mfa.clone().unwrap_or_default();
+    let otp = auth_otp_config(collection);
 
     Ok(json!({
         "password": {
-            "enabled": true,
+            "enabled": password.enabled,
             "identityFields": identity_fields,
         },
         "oauth2": {
-            "enabled": false,
-            "providers": [],
+            "enabled": oauth2.enabled && !oauth2_providers.is_empty(),
+            "providers": oauth2_providers.clone(),
         },
-        "authProviders": [],
+        "authProviders": oauth2_providers,
         "emailPassword": email_password,
         "usernamePassword": username_password,
         "mfa": {
-            "enabled": false,
-            "duration": 0,
+            "enabled": mfa.enabled,
+            "duration": if mfa.enabled { mfa.duration } else { 0 },
         },
         "otp": {
-            "enabled": email_password,
-            "duration": if email_password { OTP_TOKEN_TTL_MILLIS / 1000 } else { 0 },
+            "enabled": otp.enabled && has_email_field,
+            "duration": if otp.enabled && has_email_field { otp.duration } else { 0 },
         }
     }))
 }
 
-fn auth_identity_fields(collection: &CollectionConfig) -> Vec<String> {
+fn auth_password_config(collection: &CollectionConfig) -> AuthPasswordConfig {
+    let mut config = collection.password_auth.clone().unwrap_or_default();
+    if config.identity_fields.is_empty() {
+        config.identity_fields = default_auth_identity_fields(collection);
+    }
+    dedupe_strings(&mut config.identity_fields);
+    config
+}
+
+fn default_auth_identity_fields(collection: &CollectionConfig) -> Vec<String> {
     collection
         .fields
         .iter()
         .filter(|field| field.name == "email" || field.name == "username")
         .map(|field| field.name.clone())
         .collect()
+}
+
+fn auth_otp_config(collection: &CollectionConfig) -> OtpConfig {
+    let mut config = collection.otp.clone().unwrap_or_else(|| OtpConfig {
+        enabled: default_auth_identity_fields(collection)
+            .iter()
+            .any(|field| field == "email"),
+        ..Default::default()
+    });
+    if config.duration == 0 {
+        config.duration = (OTP_TOKEN_TTL_MILLIS / 1000) as u64;
+    }
+    if config.length == 0 {
+        config.length = 8;
+    }
+    config
+}
+
+fn auth_token_ttl_millis(collection: &CollectionConfig) -> u128 {
+    duration_config_millis(collection.auth_token, AUTH_TOKEN_TTL_MILLIS)
+}
+
+fn file_token_ttl_millis(collection: &CollectionConfig) -> u128 {
+    duration_config_millis(collection.file_token, FILE_TOKEN_TTL_MILLIS)
+}
+
+fn auth_action_ttl_millis(collection: &CollectionConfig, kind: AuthActionKind) -> u128 {
+    match kind {
+        AuthActionKind::Verification => {
+            duration_config_millis(collection.verification_token, VERIFICATION_TOKEN_TTL_MILLIS)
+        }
+        AuthActionKind::PasswordReset => duration_config_millis(
+            collection.password_reset_token,
+            PASSWORD_RESET_TOKEN_TTL_MILLIS,
+        ),
+        AuthActionKind::EmailChange => {
+            duration_config_millis(collection.email_change_token, EMAIL_CHANGE_TOKEN_TTL_MILLIS)
+        }
+        AuthActionKind::Otp => u128::from(auth_otp_config(collection).duration) * 1000,
+    }
+}
+
+fn duration_config_millis(config: Option<TokenDurationConfig>, default_millis: u128) -> u128 {
+    config
+        .map(|config| u128::from(config.duration) * 1000)
+        .filter(|duration| *duration > 0)
+        .unwrap_or(default_millis)
+}
+
+fn oauth2_auth_method_provider(provider: &OAuth2ProviderConfig) -> JsonValue {
+    json!({
+        "name": provider.name,
+        "displayName": if provider.display_name.is_empty() {
+            provider.name.clone()
+        } else {
+            provider.display_name.clone()
+        },
+        "state": "",
+        "authURL": "",
+        "codeVerifier": "",
+        "codeChallenge": "",
+        "codeChallengeMethod": "S256"
+    })
+}
+
+fn ensure_oauth2_provider_configured(
+    collection: &CollectionConfig,
+    provider: &str,
+) -> Result<(), ServerError> {
+    let oauth2 = collection.oauth2.clone().unwrap_or_default();
+    if !oauth2.enabled {
+        return Err(ServerError::BadRequest(format!(
+            "OAuth2 auth is not enabled for collection '{}'",
+            collection.name
+        )));
+    }
+
+    if oauth2
+        .providers
+        .iter()
+        .any(|candidate| candidate.name == provider)
+    {
+        Ok(())
+    } else {
+        Err(ServerError::BadRequest(format!(
+            "OAuth2 provider '{provider}' is not configured"
+        )))
+    }
 }
 
 fn record_payload_from_request(
@@ -4232,10 +4601,11 @@ fn insert_auth_token(
     conn: &Connection,
     collection_name: &str,
     record_id: &str,
+    ttl_millis: u128,
 ) -> Result<(String, String), ServerError> {
     let token = generate_token();
     let now = now_millis();
-    let expires = (now + AUTH_TOKEN_TTL_MILLIS).to_string();
+    let expires = (now + ttl_millis).to_string();
     conn.execute(
         r#"
         INSERT INTO "_rb_auth_tokens" (token, collection_name, record_id, created, expires)
@@ -4356,6 +4726,96 @@ fn apply_collection_patch(collection: &mut CollectionConfig, patch: CollectionPa
     if let Some(rule) = patch.delete_rule {
         collection.delete_rule = rule;
     }
+    if let Some(rule) = patch.auth_rule {
+        collection.auth_rule = rule;
+    }
+    if let Some(rule) = patch.manage_rule {
+        collection.manage_rule = rule;
+    }
+    if let Some(password_auth) = patch.password_auth {
+        collection.password_auth = Some(password_auth);
+    }
+    if let Some(auth_token) = patch.auth_token {
+        collection.auth_token = Some(auth_token);
+    }
+    if let Some(password_reset_token) = patch.password_reset_token {
+        collection.password_reset_token = Some(password_reset_token);
+    }
+    if let Some(email_change_token) = patch.email_change_token {
+        collection.email_change_token = Some(email_change_token);
+    }
+    if let Some(verification_token) = patch.verification_token {
+        collection.verification_token = Some(verification_token);
+    }
+    if let Some(file_token) = patch.file_token {
+        collection.file_token = Some(file_token);
+    }
+    if let Some(oauth2) = patch.oauth2 {
+        collection.oauth2 = Some(oauth2);
+    }
+    if let Some(mfa) = patch.mfa {
+        collection.mfa = Some(mfa);
+    }
+    if let Some(otp) = patch.otp {
+        collection.otp = Some(otp);
+    }
+}
+
+fn normalize_collection(collection: &mut CollectionConfig) {
+    if collection.collection_type != CollectionType::Auth {
+        collection.auth_rule = None;
+        collection.manage_rule = None;
+        collection.password_auth = None;
+        collection.auth_token = None;
+        collection.password_reset_token = None;
+        collection.email_change_token = None;
+        collection.verification_token = None;
+        collection.file_token = None;
+        collection.oauth2 = None;
+        collection.mfa = None;
+        collection.otp = None;
+        return;
+    }
+
+    let default_identity_fields = default_auth_identity_fields(collection);
+    let password_auth = collection
+        .password_auth
+        .get_or_insert_with(Default::default);
+    if password_auth.identity_fields.is_empty() {
+        password_auth.identity_fields = default_identity_fields.clone();
+    }
+    dedupe_strings(&mut password_auth.identity_fields);
+
+    collection.auth_rule.get_or_insert_with(|| String::new());
+    collection
+        .auth_token
+        .get_or_insert_with(|| TokenDurationConfig::seconds((AUTH_TOKEN_TTL_MILLIS / 1000) as u64));
+    collection.password_reset_token.get_or_insert_with(|| {
+        TokenDurationConfig::seconds((PASSWORD_RESET_TOKEN_TTL_MILLIS / 1000) as u64)
+    });
+    collection.email_change_token.get_or_insert_with(|| {
+        TokenDurationConfig::seconds((EMAIL_CHANGE_TOKEN_TTL_MILLIS / 1000) as u64)
+    });
+    collection.verification_token.get_or_insert_with(|| {
+        TokenDurationConfig::seconds((VERIFICATION_TOKEN_TTL_MILLIS / 1000) as u64)
+    });
+    collection
+        .file_token
+        .get_or_insert_with(|| TokenDurationConfig::seconds((FILE_TOKEN_TTL_MILLIS / 1000) as u64));
+    collection.oauth2.get_or_insert_with(Default::default);
+    collection.mfa.get_or_insert_with(Default::default);
+
+    let otp_missing = collection.otp.is_none();
+    let otp = collection.otp.get_or_insert_with(Default::default);
+    if otp.duration == 0 {
+        otp.duration = (OTP_TOKEN_TTL_MILLIS / 1000) as u64;
+    }
+    if otp.length == 0 {
+        otp.length = 8;
+    }
+    if otp_missing && !otp.enabled {
+        otp.enabled = default_identity_fields.iter().any(|field| field == "email");
+    }
 }
 
 fn collection_scaffolds() -> JsonValue {
@@ -4433,7 +4893,7 @@ fn collection_scaffolds() -> JsonValue {
                     "rule": ""
                 },
                 "otp": {
-                    "enabled": false,
+                    "enabled": true,
                     "duration": 180,
                     "length": 8
                 }
@@ -4512,7 +4972,7 @@ fn collection_export_payload(collections: Vec<CollectionConfig>) -> JsonValue {
 }
 
 fn collection_export_value(collection: CollectionConfig) -> JsonValue {
-    json!({
+    let mut value = json!({
         "name": collection.name,
         "type": collection.collection_type,
         "schema": collection.fields
@@ -4524,7 +4984,34 @@ fn collection_export_value(collection: CollectionConfig) -> JsonValue {
         "createRule": collection.create_rule,
         "updateRule": collection.update_rule,
         "deleteRule": collection.delete_rule
-    })
+    });
+    let object = value.as_object_mut().expect("export value must be object");
+    insert_optional_json(object, "authRule", collection.auth_rule);
+    insert_optional_json(object, "manageRule", collection.manage_rule);
+    insert_optional_json(object, "passwordAuth", collection.password_auth);
+    insert_optional_json(object, "authToken", collection.auth_token);
+    insert_optional_json(
+        object,
+        "passwordResetToken",
+        collection.password_reset_token,
+    );
+    insert_optional_json(object, "emailChangeToken", collection.email_change_token);
+    insert_optional_json(object, "verificationToken", collection.verification_token);
+    insert_optional_json(object, "fileToken", collection.file_token);
+    insert_optional_json(object, "oauth2", collection.oauth2);
+    insert_optional_json(object, "mfa", collection.mfa);
+    insert_optional_json(object, "otp", collection.otp);
+    value
+}
+
+fn insert_optional_json<T: Serialize>(
+    object: &mut Map<String, JsonValue>,
+    key: &str,
+    value: Option<T>,
+) {
+    if let Some(value) = value {
+        object.insert(key.to_string(), json!(value));
+    }
 }
 
 fn collection_field_export_value(field: CollectionField) -> JsonValue {
@@ -4694,6 +5181,89 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
                         field.name, thumb
                     )));
                 }
+            }
+        }
+    }
+
+    validate_auth_options(collection)?;
+
+    Ok(())
+}
+
+fn validate_auth_options(collection: &CollectionConfig) -> Result<(), ServerError> {
+    if collection.collection_type != CollectionType::Auth {
+        return Ok(());
+    }
+
+    let field_names = collection
+        .fields
+        .iter()
+        .map(|field| field.name.as_str())
+        .collect::<HashSet<_>>();
+    let password_auth = auth_password_config(collection);
+    for field in &password_auth.identity_fields {
+        if !field_names.contains(field.as_str()) {
+            return Err(ServerError::BadRequest(format!(
+                "password auth identity field '{field}' does not exist"
+            )));
+        }
+    }
+
+    for (name, value) in [
+        (
+            "authToken",
+            collection.auth_token.map(|config| config.duration),
+        ),
+        (
+            "passwordResetToken",
+            collection
+                .password_reset_token
+                .map(|config| config.duration),
+        ),
+        (
+            "emailChangeToken",
+            collection.email_change_token.map(|config| config.duration),
+        ),
+        (
+            "verificationToken",
+            collection.verification_token.map(|config| config.duration),
+        ),
+        (
+            "fileToken",
+            collection.file_token.map(|config| config.duration),
+        ),
+    ] {
+        if value.is_some_and(|duration| duration == 0) {
+            return Err(ServerError::BadRequest(format!(
+                "{name} duration must be greater than zero"
+            )));
+        }
+    }
+
+    if let Some(otp) = &collection.otp {
+        if otp.enabled && !field_names.contains("email") {
+            return Err(ServerError::BadRequest(
+                "OTP auth requires an email identity field".to_string(),
+            ));
+        }
+        if otp.duration == 0 {
+            return Err(ServerError::BadRequest(
+                "otp duration must be greater than zero".to_string(),
+            ));
+        }
+        if !(4..=12).contains(&otp.length) {
+            return Err(ServerError::BadRequest(
+                "otp length must be between 4 and 12".to_string(),
+            ));
+        }
+    }
+
+    if let Some(oauth2) = &collection.oauth2 {
+        for provider in &oauth2.providers {
+            if provider.name.trim().is_empty() {
+                return Err(ServerError::BadRequest(
+                    "OAuth2 provider name is required".to_string(),
+                ));
             }
         }
     }
@@ -5599,11 +6169,13 @@ fn generate_token() -> String {
     format!("rb_{}", hex_encode(&bytes))
 }
 
-fn generate_otp_password() -> String {
-    let mut bytes = [0u8; 4];
+fn generate_otp_password(length: u64) -> String {
+    let mut bytes = [0u8; 8];
     OsRng.fill_bytes(&mut bytes);
-    let value = u32::from_le_bytes(bytes) % 1_000_000;
-    format!("{value:06}")
+    let length = length.clamp(4, 12) as usize;
+    let modulus = 10_u64.pow(length as u32);
+    let value = u64::from_le_bytes(bytes) % modulus;
+    format!("{value:0length$}")
 }
 
 fn generate_file_suffix() -> String {
@@ -5750,6 +6322,10 @@ fn content_disposition_attachment(filename: &str) -> String {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn error_response(err: ServerError) -> HttpResponse {

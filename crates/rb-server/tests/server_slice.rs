@@ -459,6 +459,170 @@ fn lists_auth_methods_and_projects_auth_method_fields() {
 }
 
 #[test]
+fn persists_auth_options_and_exposes_oauth2_placeholder() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [
+                    {"name": "email", "type": "email"},
+                    {"name": "username", "kind": "text"}
+                ],
+                "passwordAuth": {
+                    "enabled": true,
+                    "identityFields": ["username"]
+                },
+                "oauth2": {
+                    "enabled": true,
+                    "providers": [
+                        {
+                            "name": "github",
+                            "displayName": "GitHub",
+                            "clientId": "client-id",
+                            "clientSecret": "client-secret"
+                        }
+                    ]
+                },
+                "otp": {
+                    "enabled": false,
+                    "duration": 240,
+                    "length": 10
+                }
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(users.status, 200);
+    assert_eq!(
+        users.body["passwordAuth"]["identityFields"],
+        json!(["username"])
+    );
+    assert_eq!(users.body["oauth2"]["providers"][0]["name"], "github");
+    assert_eq!(users.body["otp"]["enabled"], false);
+
+    let methods = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/users/auth-methods",
+    ));
+    assert_eq!(methods.status, 200);
+    assert_eq!(
+        methods.body["password"]["identityFields"],
+        json!(["username"])
+    );
+    assert_eq!(methods.body["emailPassword"], false);
+    assert_eq!(methods.body["usernamePassword"], true);
+    assert_eq!(methods.body["otp"]["enabled"], false);
+    assert_eq!(methods.body["oauth2"]["enabled"], true);
+    assert_eq!(methods.body["oauth2"]["providers"][0]["name"], "github");
+    assert_eq!(
+        methods.body["oauth2"]["providers"][0]["displayName"],
+        "GitHub"
+    );
+    assert_eq!(methods.body["authProviders"][0]["name"], "github");
+
+    let user = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({
+                "id": "user_1",
+                "email": "burak@example.com",
+                "username": "burak",
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(user.status, 200);
+
+    let email_login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "burak@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(email_login.status, 400);
+
+    let username_login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "burak", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(username_login.status, 200);
+
+    let missing_provider = app.handle(
+        HttpRequest::json("POST", "/api/collections/users/auth-with-oauth2", json!({})).unwrap(),
+    );
+    assert_eq!(missing_provider.status, 400);
+    assert_eq!(
+        missing_provider.body["data"]["provider"]["code"],
+        "validation_required"
+    );
+
+    let unknown_provider = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-oauth2",
+            json!({
+                "provider": "google",
+                "code": "code",
+                "codeVerifier": "verifier",
+                "redirectUrl": "http://127.0.0.1/callback"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(unknown_provider.status, 400);
+    assert!(unknown_provider.body["message"]
+        .as_str()
+        .unwrap()
+        .contains("not configured"));
+
+    let configured_provider = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-oauth2",
+            json!({
+                "provider": "github",
+                "code": "code",
+                "codeVerifier": "verifier",
+                "redirectUrl": "http://127.0.0.1/callback",
+                "createData": {"name": "Burak"}
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(configured_provider.status, 400);
+    assert!(configured_provider.body["message"]
+        .as_str()
+        .unwrap()
+        .contains("not implemented yet"));
+
+    let exported = app.handle(HttpRequest::new("GET", "/api/collections/meta/export"));
+    assert_eq!(exported.status, 200);
+    assert_eq!(
+        exported.body["collections"][0]["passwordAuth"]["identityFields"],
+        json!(["username"])
+    );
+    assert_eq!(
+        exported.body["collections"][0]["oauth2"]["providers"][0]["clientId"],
+        "client-id"
+    );
+    assert_eq!(exported.body["collections"][0]["otp"]["length"], 10);
+}
+
+#[test]
 fn supports_otp_request_and_auth_flow() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
@@ -565,7 +729,7 @@ fn supports_otp_request_and_auth_flow() {
         .unwrap()
         .unwrap();
     let password = otp_data["password"].as_str().unwrap().to_string();
-    assert_eq!(password.len(), 6);
+    assert_eq!(password.len(), 8);
 
     let missing_otp_id = app.handle(
         HttpRequest::json(

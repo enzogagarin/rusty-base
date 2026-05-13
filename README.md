@@ -323,9 +323,13 @@ The first server slice supports:
 - `GET /api/collections/:collection/auth-methods` with password, OTP, MFA,
   OAuth2, and legacy SDK compatibility fields plus response `fields`
   projection;
+- persisted auth collection options for password identities, token durations,
+  OTP, MFA, and OAuth2 provider metadata across create/update/import/export;
 - `auth-with-password`, `auth-with-otp`, and `auth-refresh` response
   `expand`/`fields` support, including response-level paths such as
   `record.expand.profile.bio`;
+- `auth-with-oauth2` request validation and configured-provider placeholder
+  errors ahead of the real provider callback exchange;
 - `request-otp` and `auth-with-otp` backed by short-lived one-time auth action
   tokens;
 - verification, password-reset, and email-change request/confirm auth flows
