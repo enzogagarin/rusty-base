@@ -65,6 +65,8 @@ Responsibility:
   PNG/JPEG/GIF/WebP uploads;
 - validate first file-field upload options (`maxSize`, `mimeTypes`, configured
   `thumbs`);
+- keep an in-process realtime broker for SSE clients and publish first record
+  create/update/delete events through collection or record subscriptions;
 - support auth collections with Argon2 password hashes and expiring bearer
   tokens;
 - expose a first public auth-methods summary for auth collections;
@@ -94,8 +96,8 @@ Non-responsibility:
   PocketBase-compatible route;
 - it does not implement OAuth providers or full auth settings yet;
 - it does not own full file field option parity, S3/local filesystem adapters,
-  realtime, admin UI, protected-file edge parity, or migration compatibility
-  yet.
+  complete realtime parity, admin UI, protected-file edge parity, or migration
+  compatibility yet.
 
 Current integration shape:
 

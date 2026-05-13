@@ -300,6 +300,8 @@ The first server slice supports:
   `DELETE /api/collections/:collection/truncate`;
 - `GET/POST /api/collections/:collection/records`;
 - `GET/PATCH/DELETE /api/collections/:collection/records/:id`;
+- `GET /api/realtime` SSE connect and `POST /api/realtime` subscriptions for
+  first record create/update/delete events;
 - PocketBase-style `file` collection field input, multipart record
   create/update uploads, and `GET /api/files/:collection/:record/:filename`
   downloads backed by the first SQLite file store;
@@ -369,7 +371,9 @@ Not implemented yet:
   password/verification/reset token flow;
 - exact PocketBase admin API/export compatibility;
 - complete relation `expand` edge-case parity and relation permission fixtures;
-- realtime and admin UI;
+- complete realtime parity, including subscription options, SDK edge cases, and
+  production keepalive behavior;
+- admin UI;
 - Go FFI bindings;
 - `cargo-fuzz` corpus and CI fuzz target;
 - benchmark suite.

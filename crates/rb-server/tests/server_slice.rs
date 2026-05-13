@@ -1,7 +1,7 @@
 use rb_filter_engine::{FilterContext, Value as FilterValue};
 use rb_server::{
-    CollectionConfig, CollectionField, CollectionFieldKind, HttpRequest, ListOptions, RustyBaseApp,
-    Store,
+    CollectionConfig, CollectionField, CollectionFieldKind, HttpRequest, ListOptions,
+    RealtimeConnection, RealtimeEvent, RustyBaseApp, Store,
 };
 use rusqlite::{params, Connection};
 use serde_json::json;
@@ -10,7 +10,7 @@ use std::{
     io::Cursor,
     path::PathBuf,
     process,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 #[test]
@@ -1028,6 +1028,107 @@ fn handles_pocketbase_style_records_http_routes() {
     assert_eq!(list.status, 200);
     assert_eq!(list.body["totalItems"], 1);
     assert_eq!(list.body["items"][0]["title"], "Rusty Base");
+}
+
+#[test]
+fn publishes_realtime_record_events() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let connect_response = app.handle(HttpRequest::new("GET", "/api/realtime"));
+    assert_eq!(connect_response.status, 200);
+    assert_eq!(connect_response.content_type, "text/event-stream");
+    let connect_body = String::from_utf8(connect_response.raw_body).unwrap();
+    assert!(connect_body.contains("event: PB_CONNECT"));
+    assert!(connect_body.contains("clientId"));
+
+    let collection = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "title", "kind": "text"},
+                    {"name": "public", "kind": "bool"}
+                ],
+                "listRule": "public = true"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(collection.status, 200);
+
+    let connection = app.realtime_connect().unwrap();
+    let connect = expect_realtime_event(&connection);
+    assert_eq!(connect.event, "PB_CONNECT");
+    assert_eq!(connect.data["clientId"], connection.client_id);
+
+    let invalid_client = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/realtime",
+            json!({"clientId": "missing", "subscriptions": ["posts/*"]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_client.status, 404);
+
+    let subscribe = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/realtime",
+            json!({"clientId": connection.client_id, "subscriptions": ["posts/*"]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(subscribe.status, 204);
+
+    let visible = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"id": "post_1", "title": "Visible", "public": true}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(visible.status, 200);
+    let event = expect_realtime_event(&connection);
+    assert_eq!(event.event, "posts/*");
+    assert_eq!(event.data["action"], "create");
+    assert_eq!(event.data["record"]["id"], "post_1");
+
+    let hidden = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"id": "post_2", "title": "Hidden", "public": false}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(hidden.status, 200);
+    assert!(connection.recv_timeout(Duration::from_millis(50)).is_err());
+
+    let updated = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1",
+            json!({"title": "Updated"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(updated.status, 200);
+    let event = expect_realtime_event(&connection);
+    assert_eq!(event.data["action"], "update");
+    assert_eq!(event.data["record"]["title"], "Updated");
+
+    let deleted = app.handle(HttpRequest::new(
+        "DELETE",
+        "/api/collections/posts/records/post_1",
+    ));
+    assert_eq!(deleted.status, 204);
+    let event = expect_realtime_event(&connection);
+    assert_eq!(event.data["action"], "delete");
+    assert_eq!(event.data["record"]["id"], "post_1");
 }
 
 #[test]
@@ -2383,6 +2484,10 @@ fn png_fixture(width: u32, height: u32) -> Vec<u8> {
 fn image_dimensions(data: &[u8]) -> (u32, u32) {
     let image = image::load_from_memory(data).unwrap();
     (image.width(), image.height())
+}
+
+fn expect_realtime_event(connection: &RealtimeConnection) -> RealtimeEvent {
+    connection.recv_timeout(Duration::from_millis(200)).unwrap()
 }
 
 fn posts_collection() -> CollectionConfig {

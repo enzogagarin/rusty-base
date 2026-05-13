@@ -18,9 +18,9 @@ use std::{
     path::Path,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
+        mpsc, Arc, Mutex,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -32,6 +32,7 @@ const AUTH_FORM_VALIDATION_MESSAGE: &str = "An error occurred while validating t
 const MAX_THUMB_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_THUMB_SOURCE_PIXELS: u64 = 16_000_000;
 const MAX_THUMB_EDGE: u32 = 2048;
+const REALTIME_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug)]
 pub enum ServerError {
@@ -366,10 +367,180 @@ struct PreparedFileChanges {
     delete_files: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RealtimeEvent {
+    pub event: String,
+    pub data: JsonValue,
+}
+
+pub struct RealtimeConnection {
+    pub client_id: String,
+    receiver: mpsc::Receiver<RealtimeEvent>,
+}
+
+impl RealtimeConnection {
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<RealtimeEvent, mpsc::RecvTimeoutError> {
+        self.receiver.recv_timeout(timeout)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RealtimeSubscription {
+    collection: String,
+    record_id: Option<String>,
+}
+
+impl RealtimeSubscription {
+    fn topic(&self) -> String {
+        match &self.record_id {
+            Some(record_id) => format!("{}/{record_id}", self.collection),
+            None => format!("{}/*", self.collection),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RealtimeClient {
+    sender: mpsc::Sender<RealtimeEvent>,
+    subscriptions: Vec<RealtimeSubscription>,
+    context: FilterContext,
+}
+
+#[derive(Debug, Clone)]
+struct RealtimeClientSnapshot {
+    client_id: String,
+    sender: mpsc::Sender<RealtimeEvent>,
+    subscriptions: Vec<RealtimeSubscription>,
+    context: FilterContext,
+}
+
+#[derive(Debug, Clone)]
+struct RealtimeDelivery {
+    client_id: String,
+    sender: mpsc::Sender<RealtimeEvent>,
+    event: RealtimeEvent,
+}
+
+#[derive(Debug, Default)]
+struct RealtimeBroker {
+    clients: Mutex<HashMap<String, RealtimeClient>>,
+}
+
+impl RealtimeBroker {
+    fn connect(&self) -> Result<RealtimeConnection, ServerError> {
+        let client_id = generate_id();
+        let (sender, receiver) = mpsc::channel();
+        let connection = RealtimeConnection {
+            client_id: client_id.clone(),
+            receiver,
+        };
+        let client = RealtimeClient {
+            sender: sender.clone(),
+            subscriptions: Vec::new(),
+            context: FilterContext::default(),
+        };
+
+        self.clients
+            .lock()
+            .map_err(|_| ServerError::Storage(rusqlite::Error::InvalidQuery))?
+            .insert(client_id.clone(), client);
+        let _ = sender.send(RealtimeEvent {
+            event: "PB_CONNECT".to_string(),
+            data: json!({ "clientId": client_id }),
+        });
+
+        Ok(connection)
+    }
+
+    fn set_subscriptions(
+        &self,
+        client_id: &str,
+        subscriptions: Vec<RealtimeSubscription>,
+        context: FilterContext,
+    ) -> Result<(), ServerError> {
+        let mut clients = self
+            .clients
+            .lock()
+            .map_err(|_| ServerError::Storage(rusqlite::Error::InvalidQuery))?;
+        let client = clients
+            .get_mut(client_id)
+            .ok_or_else(|| ServerError::NotFound("Missing or invalid client id.".to_string()))?;
+
+        client.subscriptions = subscriptions;
+        client.context = context;
+        Ok(())
+    }
+
+    fn snapshots(&self) -> Vec<RealtimeClientSnapshot> {
+        let Ok(clients) = self.clients.lock() else {
+            return Vec::new();
+        };
+
+        clients
+            .iter()
+            .map(|(client_id, client)| RealtimeClientSnapshot {
+                client_id: client_id.clone(),
+                sender: client.sender.clone(),
+                subscriptions: client.subscriptions.clone(),
+                context: client.context.clone(),
+            })
+            .collect()
+    }
+
+    fn remove_client(&self, client_id: &str) {
+        if let Ok(mut clients) = self.clients.lock() {
+            clients.remove(client_id);
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct AuthWithPasswordRequest {
     identity: String,
     password: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RealtimeSubscribeRequest {
+    client_id: String,
+    #[serde(default)]
+    subscriptions: Vec<String>,
+}
+
+impl RealtimeSubscribeRequest {
+    fn from_json(value: JsonValue) -> Result<Self, ServerError> {
+        let object = value.as_object().ok_or_else(|| {
+            validation_error(
+                "Something went wrong while processing your request.",
+                "body",
+                "validation_invalid_body",
+                "Request body must be a JSON object.",
+            )
+        })?;
+
+        let client_id = required_form_string(
+            object,
+            "clientId",
+            "Something went wrong while processing your request.",
+        )?;
+        let subscriptions = object
+            .get("subscriptions")
+            .and_then(JsonValue::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(JsonValue::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(Self {
+            client_id,
+            subscriptions,
+        })
+    }
 }
 
 impl AuthWithPasswordRequest {
@@ -1871,8 +2042,23 @@ impl Store {
         context: FilterContext,
         action: &str,
     ) -> Result<(), ServerError> {
+        if self.existing_record_rule_allows(collection_name, collection, rule, id, context)? {
+            Ok(())
+        } else {
+            Err(forbidden(action, collection_name))
+        }
+    }
+
+    fn existing_record_rule_allows(
+        &self,
+        collection_name: &str,
+        collection: &CollectionConfig,
+        rule: Option<&str>,
+        id: &str,
+        context: FilterContext,
+    ) -> Result<bool, ServerError> {
         let Some(rule) = non_empty_rule(rule) else {
-            return Ok(());
+            return Ok(true);
         };
 
         let resolver = RecordResolver::new(collection);
@@ -1893,11 +2079,7 @@ impl Store {
             .optional()?
             .is_some();
 
-        if allowed {
-            Ok(())
-        } else {
-            Err(forbidden(action, collection_name))
-        }
+        Ok(allowed)
     }
 
     fn connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, ServerError> {
@@ -1910,17 +2092,23 @@ impl Store {
 #[derive(Clone)]
 pub struct RustyBaseApp {
     store: Arc<Store>,
+    realtime: Arc<RealtimeBroker>,
 }
 
 impl RustyBaseApp {
     pub fn new(store: Store) -> Self {
         Self {
             store: Arc::new(store),
+            realtime: Arc::new(RealtimeBroker::default()),
         }
     }
 
     pub fn store(&self) -> &Store {
         &self.store
+    }
+
+    pub fn realtime_connect(&self) -> Result<RealtimeConnection, ServerError> {
+        self.realtime.connect()
     }
 
     pub fn handle(&self, request: HttpRequest) -> HttpResponse {
@@ -1940,6 +2128,25 @@ impl RustyBaseApp {
                 200,
                 json!({"code": 200, "message": "API is healthy."}),
             )),
+            ("GET", ["api", "realtime"]) => {
+                let connection = self.realtime_connect()?;
+                Ok(HttpResponse::event_stream(vec![RealtimeEvent {
+                    event: "PB_CONNECT".to_string(),
+                    data: json!({ "clientId": connection.client_id }),
+                }]))
+            }
+            ("POST", ["api", "realtime"]) => {
+                let subscribe =
+                    RealtimeSubscribeRequest::from_json(serde_json::from_slice(&request.body)?)?;
+                let subscriptions = realtime_subscriptions(&subscribe.subscriptions)?;
+                for subscription in &subscriptions {
+                    self.store.get_collection(&subscription.collection)?;
+                }
+                let context = self.request_context(&request, &query)?;
+                self.realtime
+                    .set_subscriptions(&subscribe.client_id, subscriptions, context)?;
+                Ok(HttpResponse::json(204, JsonValue::Null))
+            }
             ("POST", ["api", "files", "token"]) => {
                 let auth_token = bearer_token(&request)
                     .ok_or_else(|| ServerError::Forbidden("missing auth token".to_string()))?;
@@ -2111,11 +2318,13 @@ impl RustyBaseApp {
                     uploads,
                     context.clone(),
                 )?;
+                let realtime_record = record.clone();
                 let expands = expand_options_from_query(&query)?;
                 self.store
                     .expand_record_response(collection, &mut record, &expands, &context)?;
                 let fields = field_options_from_query(&query)?;
                 project_record_response(&mut record, &fields)?;
+                self.publish_realtime_record_event(collection, "create", &realtime_record);
                 Ok(HttpResponse::json(200, record))
             }
             ("GET", ["api", "collections", collection, "records", id]) => {
@@ -2139,19 +2348,27 @@ impl RustyBaseApp {
                     uploads,
                     context.clone(),
                 )?;
+                let realtime_record = record.clone();
                 let expands = expand_options_from_query(&query)?;
                 self.store
                     .expand_record_response(collection, &mut record, &expands, &context)?;
                 let fields = field_options_from_query(&query)?;
                 project_record_response(&mut record, &fields)?;
+                self.publish_realtime_record_event(collection, "update", &realtime_record);
                 Ok(HttpResponse::json(200, record))
             }
             ("DELETE", ["api", "collections", collection, "records", id]) => {
+                let realtime_record = self.store.read_record(collection, id).ok();
+                let realtime_deliveries = realtime_record
+                    .as_ref()
+                    .map(|record| self.realtime_deliveries(collection, "delete", record))
+                    .unwrap_or_default();
                 self.store.delete_record_with_context(
                     collection,
                     id,
                     self.request_context(&request, &query)?,
                 )?;
+                self.send_realtime_deliveries(realtime_deliveries);
                 Ok(HttpResponse::json(204, JsonValue::Null))
             }
             _ => Err(ServerError::NotFound(format!(
@@ -2185,6 +2402,96 @@ impl RustyBaseApp {
         }
 
         self.request_context(request, query)
+    }
+
+    fn publish_realtime_record_event(&self, collection: &str, action: &str, record: &JsonValue) {
+        let deliveries = self.realtime_deliveries(collection, action, record);
+        self.send_realtime_deliveries(deliveries);
+    }
+
+    fn realtime_deliveries(
+        &self,
+        collection_name: &str,
+        action: &str,
+        record: &JsonValue,
+    ) -> Vec<RealtimeDelivery> {
+        let Some(record_id) = record.get("id").and_then(JsonValue::as_str) else {
+            return Vec::new();
+        };
+        let Ok(collection) = self.store.get_collection(collection_name) else {
+            return Vec::new();
+        };
+
+        let payload = json!({
+            "action": action,
+            "record": record,
+        });
+        let mut deliveries = Vec::new();
+        for client in self.realtime.snapshots() {
+            for subscription in client
+                .subscriptions
+                .iter()
+                .filter(|subscription| subscription.collection == collection_name)
+                .filter(|subscription| {
+                    subscription
+                        .record_id
+                        .as_deref()
+                        .map_or(true, |subscribed_id| subscribed_id == record_id)
+                })
+            {
+                if !self.realtime_subscription_allows(
+                    &collection,
+                    subscription,
+                    record_id,
+                    &client.context,
+                ) {
+                    continue;
+                }
+
+                deliveries.push(RealtimeDelivery {
+                    client_id: client.client_id.clone(),
+                    sender: client.sender.clone(),
+                    event: RealtimeEvent {
+                        event: subscription.topic(),
+                        data: payload.clone(),
+                    },
+                });
+            }
+        }
+
+        deliveries
+    }
+
+    fn realtime_subscription_allows(
+        &self,
+        collection: &CollectionConfig,
+        subscription: &RealtimeSubscription,
+        record_id: &str,
+        context: &FilterContext,
+    ) -> bool {
+        let rule = if subscription.record_id.is_some() {
+            collection.view_rule.as_deref()
+        } else {
+            collection.list_rule.as_deref()
+        };
+
+        self.store
+            .existing_record_rule_allows(
+                &collection.name,
+                collection,
+                rule,
+                record_id,
+                context.clone(),
+            )
+            .unwrap_or(false)
+    }
+
+    fn send_realtime_deliveries(&self, deliveries: Vec<RealtimeDelivery>) {
+        for delivery in deliveries {
+            if delivery.sender.send(delivery.event).is_err() {
+                self.realtime.remove_client(&delivery.client_id);
+            }
+        }
     }
 }
 
@@ -2255,6 +2562,13 @@ impl HttpResponse {
             headers: HashMap::new(),
             raw_body: body,
         }
+    }
+
+    pub fn event_stream(events: Vec<RealtimeEvent>) -> Self {
+        let body = events.iter().flat_map(sse_event_bytes).collect::<Vec<u8>>();
+        Self::bytes(200, "text/event-stream", body)
+            .with_header("Cache-Control", "no-cache")
+            .with_header("X-Accel-Buffering", "no")
     }
 
     pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
@@ -2331,8 +2645,44 @@ pub fn serve(addr: &str, db_path: impl AsRef<Path>) -> Result<(), ServerError> {
 
 fn handle_stream(app: RustyBaseApp, mut stream: TcpStream) -> Result<(), ServerError> {
     let request = parse_http_request(&mut stream)?;
+    let (path, _) = split_path_query(&request.path);
+    let segments = path_segments(&path);
+    let segments = segments.iter().map(String::as_str).collect::<Vec<_>>();
+    if request.method == "GET" && segments.as_slice() == ["api", "realtime"] {
+        return handle_realtime_stream(app, stream);
+    }
+
     let response = app.handle(request);
     stream.write_all(&response.to_http_bytes())?;
+    Ok(())
+}
+
+fn handle_realtime_stream(app: RustyBaseApp, mut stream: TcpStream) -> Result<(), ServerError> {
+    let connection = app.realtime_connect()?;
+    stream.write_all(
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nX-Accel-Buffering: no\r\nConnection: keep-alive\r\n\r\n",
+    )?;
+
+    loop {
+        match connection.recv_timeout(REALTIME_IDLE_TIMEOUT) {
+            Ok(event) => {
+                stream.write_all(&sse_event_bytes(&event))?;
+                stream.flush()?;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let event = RealtimeEvent {
+                    event: "PB_DISCONNECT".to_string(),
+                    data: json!({}),
+                };
+                stream.write_all(&sse_event_bytes(&event))?;
+                stream.flush()?;
+                break;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    app.realtime.remove_client(&connection.client_id);
     Ok(())
 }
 
@@ -2615,6 +2965,43 @@ fn field_options_from_query(query: &HashMap<String, String>) -> Result<Vec<Strin
     }
 
     Ok(projections)
+}
+
+fn realtime_subscriptions(values: &[String]) -> Result<Vec<RealtimeSubscription>, ServerError> {
+    let mut subscriptions = Vec::new();
+    for value in values {
+        let topic = value
+            .split_once('?')
+            .map_or(value.as_str(), |(topic, _)| topic);
+        let topic = topic.trim().trim_matches('/');
+        if topic.is_empty() {
+            continue;
+        }
+        let Some((collection, target)) = topic.split_once('/') else {
+            return Err(ServerError::BadRequest(format!(
+                "invalid realtime subscription '{value}'"
+            )));
+        };
+        validate_collection_name(collection)?;
+        let record_id = if target == "*" {
+            None
+        } else {
+            validate_record_id(target)?;
+            Some(target.to_string())
+        };
+        subscriptions.push(RealtimeSubscription {
+            collection: collection.to_string(),
+            record_id,
+        });
+    }
+    dedupe_realtime_subscriptions(&mut subscriptions);
+
+    Ok(subscriptions)
+}
+
+fn dedupe_realtime_subscriptions(subscriptions: &mut Vec<RealtimeSubscription>) {
+    let mut seen = HashSet::new();
+    subscriptions.retain(|subscription| seen.insert(subscription.topic()));
 }
 
 fn validate_field_projection_path(path: &str) -> Result<(), ServerError> {
@@ -4828,6 +5215,22 @@ fn percent_decode(value: &str) -> String {
 
 fn normalize_http_header_name(name: &str) -> String {
     name.trim().to_ascii_lowercase()
+}
+
+fn sse_event_bytes(event: &RealtimeEvent) -> Vec<u8> {
+    let data = serde_json::to_string(&event.data).unwrap_or_else(|_| "{}".to_string());
+    format!(
+        "event: {}\ndata: {data}\n\n",
+        sanitize_sse_event(&event.event)
+    )
+    .into_bytes()
+}
+
+fn sanitize_sse_event(event: &str) -> String {
+    event
+        .chars()
+        .filter(|ch| *ch != '\r' && *ch != '\n')
+        .collect()
 }
 
 fn sanitize_http_header_value(value: &str) -> String {

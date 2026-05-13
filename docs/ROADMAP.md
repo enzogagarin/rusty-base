@@ -228,14 +228,17 @@ Exit criteria:
   `WxHf`, `0xH`, `Wx0`).
 - Added file-field option validation for `maxSize`, `mimeTypes`, and configured
   `thumbs` so thumbnail requests only generate declared sizes.
+- Added the first realtime MVP: `GET /api/realtime` SSE connect,
+  `POST /api/realtime` subscriptions, and record create/update/delete event
+  delivery filtered through collection `listRule` or record `viewRule`.
 
 ## Next Sprint
 
-1. Expand compatibility fixtures around placeholder-like wildcard cases.
-2. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
-3. Add relation compatibility fixtures copied from PocketBase-style access-rule
-   examples.
-4. Add file option parity and uploaded/protected-file compatibility fixtures
-   around edge cases.
-5. Add auth route coverage beyond password/refresh/reset: email change, OTP,
+1. Add auth route coverage beyond password/refresh/reset: email change, OTP,
    and OAuth placeholders where useful.
+2. Expand compatibility fixtures around placeholder-like wildcard cases.
+3. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
+4. Add relation compatibility fixtures copied from PocketBase-style access-rule
+   examples.
+5. Add file option parity and uploaded/protected-file compatibility fixtures
+   around edge cases.
