@@ -293,6 +293,8 @@ The first server slice supports:
 
 - SQLite-backed collection metadata;
 - per-collection record tables with JSON record data;
+- PocketBase-style UTC `created`/`updated` timestamps for collection and
+  record responses;
 - `GET/POST /api/collections`, with collection list pagination, filtering,
   sorting, and response `fields` projection;
 - persisted collection IDs with collection metadata lookup/update/truncate/delete

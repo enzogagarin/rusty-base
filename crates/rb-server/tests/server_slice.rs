@@ -119,6 +119,50 @@ fn stores_collection_records_and_filters_with_filter_engine() {
 }
 
 #[test]
+fn uses_pocketbase_style_system_timestamps() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let collection = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [{"name": "title", "type": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(collection.status, 200);
+    assert_pocketbase_datetime_value(&collection.body["created"]);
+    assert_pocketbase_datetime_value(&collection.body["updated"]);
+
+    let created = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"id": "post_1", "title": "Timestamped"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created.status, 200);
+    assert_pocketbase_datetime_value(&created.body["created"]);
+    assert_pocketbase_datetime_value(&created.body["updated"]);
+
+    let updated = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1",
+            json!({"title": "Updated timestamp"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(updated.status, 200);
+    assert_pocketbase_datetime_value(&updated.body["created"]);
+    assert_pocketbase_datetime_value(&updated.body["updated"]);
+}
+
+#[test]
 fn applies_list_rule_with_request_auth_context() {
     let store = Store::open_in_memory().unwrap();
     store
@@ -5024,4 +5068,25 @@ fn posts_collection() -> CollectionConfig {
             CollectionField::new("score", CollectionFieldKind::Number),
         ],
     )
+}
+
+fn assert_pocketbase_datetime_value(value: &JsonValue) {
+    let value = value.as_str().expect("datetime value must be a string");
+    let bytes = value.as_bytes();
+    assert_eq!(bytes.len(), 24, "unexpected datetime length: {value}");
+    assert_eq!(bytes[4], b'-');
+    assert_eq!(bytes[7], b'-');
+    assert_eq!(bytes[10], b' ');
+    assert_eq!(bytes[13], b':');
+    assert_eq!(bytes[16], b':');
+    assert_eq!(bytes[19], b'.');
+    assert_eq!(bytes[23], b'Z');
+    for index in [
+        0usize, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18, 20, 21, 22,
+    ] {
+        assert!(
+            bytes[index].is_ascii_digit(),
+            "unexpected datetime digit at {index}: {value}"
+        );
+    }
 }

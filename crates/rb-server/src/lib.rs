@@ -3032,7 +3032,7 @@ impl Store {
             SELECT token
             FROM "_rb_auth_action_tokens"
             WHERE collection_name = ?1 AND record_id = ?2 AND kind = ?3
-            ORDER BY CAST(created AS INTEGER) DESC
+            ORDER BY created DESC
             LIMIT 1
             "#,
             params![collection_name, record_id, kind],
@@ -3060,7 +3060,7 @@ impl Store {
                 SELECT data
                 FROM "_rb_auth_action_tokens"
                 WHERE collection_name = ?1 AND record_id = ?2 AND kind = ?3
-                ORDER BY CAST(created AS INTEGER) DESC
+                ORDER BY created DESC
                 LIMIT 1
                 "#,
                 params![collection_name, record_id, kind],
@@ -9637,7 +9637,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn now_timestamp() -> String {
-    now_millis().to_string()
+    timestamp_from_millis(now_millis())
 }
 
 fn now_millis() -> u128 {
@@ -9645,6 +9645,35 @@ fn now_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
+}
+
+fn timestamp_from_millis(millis: u128) -> String {
+    let total_seconds = millis / 1000;
+    let millisecond = (millis % 1000) as u32;
+    let days = (total_seconds / 86_400) as i64;
+    let seconds_of_day = (total_seconds % 86_400) as u32;
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3600;
+    let minute = (seconds_of_day % 3600) / 60;
+    let second = seconds_of_day % 60;
+
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}.{millisecond:03}Z")
+}
+
+fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
+    let days = days_since_unix_epoch + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    let year = year + if month <= 2 { 1 } else { 0 };
+
+    (year as i32, month as u32, day as u32)
 }
 
 fn split_path_query(path: &str) -> (String, HashMap<String, String>) {

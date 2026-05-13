@@ -273,6 +273,8 @@ Exit criteria:
   shapes, PocketBase-style datetime format, number `min`/`max`, select
   `values`/`maxSelect`, JSON required/`maxSize`, relation `maxSelect`, and
   relation target existence against the final record state.
+- Added PocketBase-style UTC `created`/`updated` timestamps for collection and
+  record responses.
 
 ## Next Sprint
 

@@ -64,6 +64,8 @@ Responsibility:
 - provide the first PocketBase-style HTTP shell;
 - store collection metadata in SQLite;
 - store record data in per-collection SQLite tables;
+- emit PocketBase-style UTC `created`/`updated` timestamps for collection and
+  record responses;
 - store the first uploaded file blobs in SQLite for the current MVP and serve
   them through `/api/files/:collection/:record/:filename`;
 - support the first PocketBase-style file field mutations for replace, append,
