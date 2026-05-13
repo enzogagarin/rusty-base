@@ -459,7 +459,7 @@ fn lists_auth_methods_and_projects_auth_method_fields() {
 }
 
 #[test]
-fn persists_auth_options_and_exposes_oauth2_placeholder() {
+fn persists_auth_options_and_supports_oauth2_profile_linking() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
     let users = app.handle(
@@ -471,7 +471,10 @@ fn persists_auth_options_and_exposes_oauth2_placeholder() {
                 "type": "auth",
                 "fields": [
                     {"name": "email", "type": "email"},
-                    {"name": "username", "kind": "text"}
+                    {"name": "username", "kind": "text"},
+                    {"name": "name", "kind": "text"},
+                    {"name": "verified", "kind": "bool"},
+                    {"name": "emailVisibility", "kind": "bool"}
                 ],
                 "passwordAuth": {
                     "enabled": true,
@@ -589,7 +592,7 @@ fn persists_auth_options_and_exposes_oauth2_placeholder() {
         .unwrap()
         .contains("not configured"));
 
-    let configured_provider = app.handle(
+    let opaque_provider = app.handle(
         HttpRequest::json(
             "POST",
             "/api/collections/users/auth-with-oauth2",
@@ -603,11 +606,101 @@ fn persists_auth_options_and_exposes_oauth2_placeholder() {
         )
         .unwrap(),
     );
-    assert_eq!(configured_provider.status, 400);
-    assert!(configured_provider.body["message"]
+    assert_eq!(opaque_provider.status, 400);
+    assert!(opaque_provider.body["message"]
         .as_str()
         .unwrap()
         .contains("not implemented yet"));
+
+    let linked_profile_code = json!({
+        "id": "gh_1",
+        "email": "burak@example.com",
+        "username": "github_burak",
+        "name": "Burak GitHub",
+        "accessToken": "access-token",
+        "rawUser": {"login": "github_burak"}
+    })
+    .to_string();
+    let linked_provider = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-oauth2?fields=token,record.id,record.email,meta.id,meta.email,meta.isNew,meta.provider,meta.accessToken",
+            json!({
+                "provider": "github",
+                "code": linked_profile_code,
+                "codeVerifier": "verifier",
+                "redirectUrl": "http://127.0.0.1/callback",
+                "createData": {"name": "Ignored"}
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(linked_provider.status, 200);
+    assert!(linked_provider.body["token"]
+        .as_str()
+        .unwrap()
+        .starts_with("rb_"));
+    assert_eq!(linked_provider.body["record"]["id"], "user_1");
+    assert_eq!(linked_provider.body["record"]["email"], "burak@example.com");
+    assert_eq!(linked_provider.body["meta"]["provider"], "github");
+    assert_eq!(linked_provider.body["meta"]["id"], "gh_1");
+    assert_eq!(linked_provider.body["meta"]["email"], "burak@example.com");
+    assert_eq!(linked_provider.body["meta"]["isNew"], false);
+    assert_eq!(linked_provider.body["meta"]["accessToken"], "access-token");
+
+    let repeated_profile_code = json!({
+        "id": "gh_1",
+        "email": "changed@example.com"
+    })
+    .to_string();
+    let repeated_provider = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-oauth2?fields=record.id,meta.isNew,meta.email",
+            json!({
+                "provider": "github",
+                "code": repeated_profile_code,
+                "codeVerifier": "verifier",
+                "redirectUrl": "http://127.0.0.1/callback"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(repeated_provider.status, 200);
+    assert_eq!(repeated_provider.body["record"]["id"], "user_1");
+    assert_eq!(repeated_provider.body["meta"]["isNew"], false);
+    assert_eq!(
+        repeated_provider.body["meta"]["email"],
+        "changed@example.com"
+    );
+
+    let new_profile_code = json!({
+        "id": "gh_2",
+        "email": "oauth@example.com",
+        "username": "oauth_user",
+        "name": "OAuth User"
+    })
+    .to_string();
+    let new_provider = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-oauth2?fields=record.email,record.username,record.name,record.verified,record.emailVisibility,meta.isNew",
+            json!({
+                "provider": "github",
+                "code": new_profile_code,
+                "codeVerifier": "verifier",
+                "redirectUrl": "http://127.0.0.1/callback"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(new_provider.status, 200);
+    assert_eq!(new_provider.body["record"]["email"], "oauth@example.com");
+    assert_eq!(new_provider.body["record"]["username"], "oauth_user");
+    assert_eq!(new_provider.body["record"]["name"], "OAuth User");
+    assert_eq!(new_provider.body["record"]["verified"], true);
+    assert_eq!(new_provider.body["record"]["emailVisibility"], false);
+    assert_eq!(new_provider.body["meta"]["isNew"], true);
 
     let exported = app.handle(HttpRequest::new("GET", "/api/collections/meta/export"));
     assert_eq!(exported.status, 200);

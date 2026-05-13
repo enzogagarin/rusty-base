@@ -97,7 +97,8 @@ Non-responsibility:
 - it is not a complete PocketBase API surface yet;
 - its server-side `auth-logout` route is a Rusty Base extension rather than a
   PocketBase-compatible route;
-- it does not implement OAuth providers or full auth settings yet;
+- it does not implement remote OAuth provider callback exchange or full auth
+  settings yet;
 - it does not own full file field option parity, S3/local filesystem adapters,
   complete realtime parity, admin UI, protected-file edge parity, or migration
   compatibility yet.

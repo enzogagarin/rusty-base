@@ -445,6 +445,19 @@ pub struct AuthResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct OAuth2Profile {
+    provider_id: String,
+    name: Option<String>,
+    username: Option<String>,
+    email: Option<String>,
+    avatar_url: Option<String>,
+    raw_user: JsonValue,
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+    expiry: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct FileUpload {
     field_name: String,
     original_name: String,
@@ -1022,6 +1035,16 @@ impl Store {
                 created TEXT NOT NULL,
                 expires TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS "_rb_auth_external_accounts" (
+                collection_name TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                provider_id TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                data TEXT NOT NULL,
+                created TEXT NOT NULL,
+                updated TEXT NOT NULL,
+                PRIMARY KEY (collection_name, provider, provider_id)
+            );
             CREATE TABLE IF NOT EXISTS "_rb_file_tokens" (
                 token TEXT PRIMARY KEY NOT NULL,
                 collection_name TEXT NOT NULL,
@@ -1155,6 +1178,10 @@ impl Store {
                 params![&new_name, old_name],
             )?;
             tx.execute(
+                r#"UPDATE "_rb_auth_external_accounts" SET collection_name = ?1 WHERE collection_name = ?2"#,
+                params![&new_name, old_name],
+            )?;
+            tx.execute(
                 r#"UPDATE "_rb_file_tokens" SET collection_name = ?1 WHERE collection_name = ?2"#,
                 params![&new_name, old_name],
             )?;
@@ -1223,6 +1250,10 @@ impl Store {
                     params![name],
                 )?;
                 tx.execute(
+                    r#"DELETE FROM "_rb_auth_external_accounts" WHERE collection_name = ?1"#,
+                    params![name],
+                )?;
+                tx.execute(
                     r#"DELETE FROM "_rb_file_tokens" WHERE collection_name = ?1"#,
                     params![name],
                 )?;
@@ -1270,6 +1301,10 @@ impl Store {
                     )?;
                     tx.execute(
                         r#"DELETE FROM "_rb_auth_action_tokens" WHERE collection_name = ?1"#,
+                        params![&collection.name],
+                    )?;
+                    tx.execute(
+                        r#"DELETE FROM "_rb_auth_external_accounts" WHERE collection_name = ?1"#,
                         params![&collection.name],
                     )?;
                     tx.execute(
@@ -1323,6 +1358,10 @@ impl Store {
             params![name],
         )?;
         tx.execute(
+            r#"DELETE FROM "_rb_auth_external_accounts" WHERE collection_name = ?1"#,
+            params![name],
+        )?;
+        tx.execute(
             r#"DELETE FROM "_rb_file_tokens" WHERE collection_name = ?1"#,
             params![name],
         )?;
@@ -1356,6 +1395,10 @@ impl Store {
         )?;
         conn.execute(
             r#"DELETE FROM "_rb_auth_action_tokens" WHERE collection_name = ?1"#,
+            params![name],
+        )?;
+        conn.execute(
+            r#"DELETE FROM "_rb_auth_external_accounts" WHERE collection_name = ?1"#,
             params![name],
         )?;
         conn.execute(
@@ -1680,6 +1723,10 @@ impl Store {
                 params![collection_name, id],
             )?;
             conn.execute(
+                r#"DELETE FROM "_rb_auth_external_accounts" WHERE collection_name = ?1 AND record_id = ?2"#,
+                params![collection_name, id],
+            )?;
+            conn.execute(
                 r#"DELETE FROM "_rb_file_tokens" WHERE collection_name = ?1 AND record_id = ?2"#,
                 params![collection_name, id],
             )?;
@@ -1928,6 +1975,117 @@ impl Store {
             expires,
             record: record_from_parts(collection_name, id, data, created, updated),
         })
+    }
+
+    fn auth_with_oauth2_profile(
+        &self,
+        collection_name: &str,
+        provider: &str,
+        profile: OAuth2Profile,
+        create_data: &JsonValue,
+    ) -> Result<(AuthResponse, JsonValue), ServerError> {
+        let collection = self.auth_collection(collection_name)?;
+        ensure_oauth2_provider_configured(&collection, provider)?;
+        let conn = self.connection()?;
+        let linked_record_id = conn
+            .query_row(
+                r#"
+                SELECT record_id
+                FROM "_rb_auth_external_accounts"
+                WHERE collection_name = ?1 AND provider = ?2 AND provider_id = ?3
+                LIMIT 1
+                "#,
+                params![collection_name, provider, &profile.provider_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        let (record_id, is_new) = if let Some(record_id) = linked_record_id {
+            (record_id, false)
+        } else if let Some(email) = profile.email.as_deref() {
+            let table_sql = quote_identifier(&record_table_name(collection_name)?);
+            let record_id = conn
+                .query_row(
+                    &format!(
+                        "SELECT id FROM {table_sql} WHERE json_extract(data, '$.email') = ?1 LIMIT 1"
+                    ),
+                    params![email],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if let Some(record_id) = record_id {
+                (record_id, false)
+            } else {
+                (
+                    insert_oauth2_auth_record_tx(
+                        &conn,
+                        &collection,
+                        collection_name,
+                        &profile,
+                        create_data,
+                    )?,
+                    true,
+                )
+            }
+        } else {
+            (
+                insert_oauth2_auth_record_tx(
+                    &conn,
+                    &collection,
+                    collection_name,
+                    &profile,
+                    create_data,
+                )?,
+                true,
+            )
+        };
+
+        let meta = oauth2_meta_payload(provider, &profile, is_new);
+        upsert_external_auth_account(
+            &conn,
+            collection_name,
+            provider,
+            &profile.provider_id,
+            &record_id,
+            &meta,
+        )?;
+
+        let table_sql = quote_identifier(&record_table_name(collection_name)?);
+        let row = conn
+            .query_row(
+                &format!(
+                    "SELECT id, data, created, updated FROM {table_sql} WHERE id = ?1 LIMIT 1"
+                ),
+                params![&record_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(invalid_credentials)?;
+
+        let (id, data, created, updated) = row;
+        let data = serde_json::from_str::<JsonValue>(&data)?;
+        let (token, expires) = insert_auth_token(
+            &conn,
+            collection_name,
+            &id,
+            auth_token_ttl_millis(&collection),
+        )?;
+
+        Ok((
+            AuthResponse {
+                token,
+                expires,
+                record: record_from_parts(collection_name, id, data, created, updated),
+            },
+            meta,
+        ))
     }
 
     pub fn request_verification(
@@ -2957,17 +3115,32 @@ impl RustyBaseApp {
             ("POST", ["api", "collections", collection, "auth-with-oauth2"]) => {
                 let auth =
                     AuthWithOAuth2Request::from_json(serde_json::from_slice(&request.body)?)?;
-                let collection_config = self.store.auth_collection(collection)?;
-                ensure_oauth2_provider_configured(&collection_config, &auth.provider)?;
-                let _ = (
-                    &auth.code,
-                    &auth.code_verifier,
-                    &auth.redirect_url,
+                let Some(profile) = oauth2_profile_from_code(&auth.code)? else {
+                    let collection_config = self.store.auth_collection(collection)?;
+                    ensure_oauth2_provider_configured(&collection_config, &auth.provider)?;
+                    let _ = (&auth.code_verifier, &auth.redirect_url);
+                    return Err(ServerError::BadRequest(
+                        "OAuth2 provider callback exchange is not implemented yet".to_string(),
+                    ));
+                };
+                let (response, meta) = self.store.auth_with_oauth2_profile(
+                    collection,
+                    &auth.provider,
+                    profile,
                     &auth.create_data,
-                );
-                Err(ServerError::BadRequest(
-                    "OAuth2 auth provider flow is not implemented yet".to_string(),
-                ))
+                )?;
+                let expands = expand_options_from_query(&query)?;
+                let fields = field_options_from_query(&query)?;
+                let payload = oauth2_auth_response_payload(
+                    &self.store,
+                    collection,
+                    response,
+                    meta,
+                    &expands,
+                    &fields,
+                    request_context(&request, &query),
+                )?;
+                Ok(HttpResponse::json(200, payload))
             }
             ("POST", ["api", "collections", collection, "auth-refresh"]) => {
                 let token = bearer_token(&request)
@@ -3782,6 +3955,26 @@ fn auth_response_payload(
     Ok(payload)
 }
 
+fn oauth2_auth_response_payload(
+    store: &Store,
+    collection_name: &str,
+    mut response: AuthResponse,
+    meta: JsonValue,
+    expands: &[String],
+    fields: &[String],
+    context: FilterContext,
+) -> Result<JsonValue, ServerError> {
+    let context = context_with_auth_record_values(context, &response.record);
+    store.expand_record_response(collection_name, &mut response.record, expands, &context)?;
+
+    let mut payload = json!(response);
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("meta".to_string(), meta);
+    }
+    project_json_response(&mut payload, fields)?;
+    Ok(payload)
+}
+
 fn auth_methods_payload(collection: &CollectionConfig) -> Result<JsonValue, ServerError> {
     if collection.collection_type != CollectionType::Auth {
         return Err(ServerError::BadRequest(format!(
@@ -3939,6 +4132,200 @@ fn ensure_oauth2_provider_configured(
             "OAuth2 provider '{provider}' is not configured"
         )))
     }
+}
+
+fn oauth2_profile_from_code(code: &str) -> Result<Option<OAuth2Profile>, ServerError> {
+    let code = code.trim();
+    let Some(payload) = code
+        .strip_prefix("rb_profile:")
+        .or_else(|| code.strip_prefix("profile:"))
+        .or_else(|| code.starts_with('{').then_some(code))
+    else {
+        return Ok(None);
+    };
+
+    let value = serde_json::from_str::<JsonValue>(payload).map_err(|_| {
+        validation_error(
+            AUTH_FORM_VALIDATION_MESSAGE,
+            "code",
+            "validation_invalid_oauth2_profile",
+            "OAuth2 provider profile payload must be a JSON object.",
+        )
+    })?;
+    let object = value.as_object().ok_or_else(|| {
+        validation_error(
+            AUTH_FORM_VALIDATION_MESSAGE,
+            "code",
+            "validation_invalid_oauth2_profile",
+            "OAuth2 provider profile payload must be a JSON object.",
+        )
+    })?;
+    let provider_id = object
+        .get("id")
+        .or_else(|| object.get("providerId"))
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            validation_error(
+                AUTH_FORM_VALIDATION_MESSAGE,
+                "code",
+                "validation_required",
+                "OAuth2 provider profile id is required.",
+            )
+        })?
+        .to_string();
+
+    Ok(Some(OAuth2Profile {
+        provider_id,
+        name: optional_json_string(object, "name"),
+        username: optional_json_string(object, "username"),
+        email: optional_json_string(object, "email"),
+        avatar_url: optional_json_string(object, "avatarURL")
+            .or_else(|| optional_json_string(object, "avatarUrl")),
+        raw_user: object
+            .get("rawUser")
+            .cloned()
+            .unwrap_or_else(|| value.clone()),
+        access_token: optional_json_string(object, "accessToken"),
+        refresh_token: optional_json_string(object, "refreshToken"),
+        expiry: optional_json_string(object, "expiry"),
+    }))
+}
+
+fn optional_json_string(object: &Map<String, JsonValue>, field: &str) -> Option<String> {
+    object
+        .get(field)
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn insert_oauth2_auth_record_tx(
+    conn: &Connection,
+    collection: &CollectionConfig,
+    collection_name: &str,
+    profile: &OAuth2Profile,
+    create_data: &JsonValue,
+) -> Result<String, ServerError> {
+    let mut data = create_data.clone();
+    let object = data.as_object_mut().ok_or_else(|| {
+        validation_error(
+            AUTH_FORM_VALIDATION_MESSAGE,
+            "createData",
+            "validation_invalid_body",
+            "OAuth2 createData must be a JSON object.",
+        )
+    })?;
+    object.remove("id");
+    object.remove("created");
+    object.remove("updated");
+    object.remove("collectionName");
+    object.remove("password");
+    object.remove("passwordConfirm");
+    object.remove("passwordHash");
+
+    insert_profile_field(object, collection, "email", profile.email.as_deref());
+    insert_profile_field(object, collection, "username", profile.username.as_deref());
+    insert_profile_field(object, collection, "name", profile.name.as_deref());
+    if collection_has_field(collection, "verified") {
+        object.insert("verified".to_string(), JsonValue::Bool(true));
+    }
+    if collection_has_field(collection, "emailVisibility") {
+        object.insert("emailVisibility".to_string(), JsonValue::Bool(false));
+    }
+
+    validate_record_fields(collection, object)?;
+    let id = generate_id();
+    let resolver = RecordResolver::new(collection);
+    if let Some(rule) = non_empty_rule(collection.create_rule.as_deref()) {
+        let context = context_with_body_values(FilterContext::default(), &data);
+        let compiled = compile_filter_with_resolver_and_context(rule, &resolver, context)?;
+        let params = filter_params_to_sqlite(compiled.params)?;
+        let allowed = conn.query_row(
+            &format!("SELECT CASE WHEN ({}) THEN 1 ELSE 0 END", compiled.sql),
+            params_from_iter(params.iter()),
+            |row| row.get::<_, i64>(0),
+        )? != 0;
+        if !allowed {
+            return Err(forbidden("create", &collection.name));
+        }
+    }
+
+    let now = now_timestamp();
+    let table_sql = quote_identifier(&record_table_name(collection_name)?);
+    conn.execute(
+        &format!("INSERT INTO {table_sql} (id, data, created, updated) VALUES (?1, ?2, ?3, ?3)"),
+        params![&id, serde_json::to_string(&data)?, now],
+    )?;
+    Ok(id)
+}
+
+fn insert_profile_field(
+    object: &mut Map<String, JsonValue>,
+    collection: &CollectionConfig,
+    field: &str,
+    value: Option<&str>,
+) {
+    if object.contains_key(field) || !collection_has_field(collection, field) {
+        return;
+    }
+    if let Some(value) = value {
+        object.insert(field.to_string(), JsonValue::String(value.to_string()));
+    }
+}
+
+fn collection_has_field(collection: &CollectionConfig, field: &str) -> bool {
+    collection
+        .fields
+        .iter()
+        .any(|candidate| candidate.name == field)
+}
+
+fn oauth2_meta_payload(provider: &str, profile: &OAuth2Profile, is_new: bool) -> JsonValue {
+    json!({
+        "provider": provider,
+        "id": profile.provider_id,
+        "name": profile.name,
+        "username": profile.username,
+        "email": profile.email,
+        "isNew": is_new,
+        "avatarURL": profile.avatar_url,
+        "rawUser": profile.raw_user,
+        "accessToken": profile.access_token,
+        "refreshToken": profile.refresh_token,
+        "expiry": profile.expiry,
+    })
+}
+
+fn upsert_external_auth_account(
+    conn: &Connection,
+    collection_name: &str,
+    provider: &str,
+    provider_id: &str,
+    record_id: &str,
+    data: &JsonValue,
+) -> Result<(), ServerError> {
+    let now = now_timestamp();
+    conn.execute(
+        r#"
+        INSERT INTO "_rb_auth_external_accounts"
+            (collection_name, provider, provider_id, record_id, data, created, updated)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+        ON CONFLICT(collection_name, provider, provider_id)
+        DO UPDATE SET record_id = excluded.record_id, data = excluded.data, updated = excluded.updated
+        "#,
+        params![
+            collection_name,
+            provider,
+            provider_id,
+            record_id,
+            serde_json::to_string(data)?,
+            now
+        ],
+    )?;
+    Ok(())
 }
 
 fn record_payload_from_request(

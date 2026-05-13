@@ -237,13 +237,15 @@ Exit criteria:
 - Added PocketBase-style `request-otp` and `auth-with-otp` MVP backed by
   short-lived one-time action tokens.
 - Added persisted auth collection options for password identities, token
-  durations, OTP, MFA, and OAuth2 provider metadata, plus an `auth-with-oauth2`
-  validation/placeholder route for configured providers.
+  durations, OTP, MFA, and OAuth2 provider metadata.
+- Added the first `auth-with-oauth2` provider profile account-linking path,
+  including external account persistence, existing-record matching by email, and
+  auth response `meta` output.
 
 ## Next Sprint
 
-1. Replace the OAuth2 placeholder with the first real provider callback
-   exchange and account-linking flow.
+1. Add remote OAuth2 provider callback exchange on top of the account-linking
+   core.
 2. Expand compatibility fixtures around placeholder-like wildcard cases.
 3. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 4. Add relation compatibility fixtures copied from PocketBase-style access-rule
