@@ -267,12 +267,13 @@ Exit criteria:
   and `autogeneratePattern`, including import/export preservation.
 - Added record create/update enforcement for `required`, text `min`/`max`/
   common regex-like `pattern` constraints, email shape, basic bool/number/array
-  shapes, and relation `maxSelect` against the final record state.
+  shapes, relation `maxSelect`, and relation target existence against the final
+  record state.
 
 ## Next Sprint
 
-1. Expand collection field option enforcement to relation target existence,
-   number bounds, select/options parity, and JSON/date edge cases.
+1. Expand collection field option enforcement to number bounds, select/options
+   parity, and JSON/date edge cases.
 2. Expand OAuth2 provider presets and harden callback validation around
    redirect URLs and provider-specific response edge cases.
 3. Expand compatibility fixtures around placeholder-like wildcard cases.

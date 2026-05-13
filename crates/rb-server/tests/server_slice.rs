@@ -3627,6 +3627,20 @@ fn enforces_non_text_field_option_shapes_on_records() {
         "validation_invalid_relation"
     );
 
+    let missing_relation_target = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": true, "tags": "tag_missing"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(missing_relation_target.status, 400);
+    assert_eq!(
+        missing_relation_target.body["data"]["tags"]["code"],
+        "validation_invalid_relation"
+    );
+
     let too_many_relations = app.handle(
         HttpRequest::json(
             "POST",
@@ -3667,6 +3681,20 @@ fn enforces_non_text_field_option_shapes_on_records() {
     assert_eq!(
         invalid_patch.body["data"]["published"]["code"],
         "validation_invalid_bool"
+    );
+
+    let invalid_relation_patch = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1",
+            json!({"tags": "tag_missing"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_relation_patch.status, 400);
+    assert_eq!(
+        invalid_relation_patch.body["data"]["tags"]["code"],
+        "validation_invalid_relation"
     );
 
     let valid_patch = app.handle(

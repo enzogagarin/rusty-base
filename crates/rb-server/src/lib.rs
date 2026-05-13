@@ -2031,6 +2031,7 @@ impl Store {
         validate_record_fields(&collection, object)?;
         prepare_auth_password(&collection, object, true)?;
         validate_record_field_options(&collection, object)?;
+        self.validate_record_relations_exist(&collection, object)?;
 
         let id = object
             .remove("id")
@@ -2266,6 +2267,7 @@ impl Store {
             }
         }
         validate_record_field_options(&collection, existing_object)?;
+        self.validate_record_relations_exist(&collection, existing_object)?;
 
         let now = now_timestamp();
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
@@ -3513,6 +3515,58 @@ impl Store {
         )
         .optional()?
         .ok_or_else(|| ServerError::NotFound(format!("record '{id}' not found")))
+    }
+
+    fn record_exists(&self, collection_identifier: &str, id: &str) -> Result<bool, ServerError> {
+        validate_record_id(id)?;
+        let collection = self.get_collection(collection_identifier)?;
+        let table_sql = quote_identifier(&record_table_name(&collection.name)?);
+        let conn = self.connection()?;
+        let count = conn.query_row(
+            &format!("SELECT COUNT(*) FROM {table_sql} WHERE id = ?1"),
+            params![id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    fn validate_record_relations_exist(
+        &self,
+        collection: &CollectionConfig,
+        object: &Map<String, JsonValue>,
+    ) -> Result<(), ServerError> {
+        for field in &collection.fields {
+            if field.kind != CollectionFieldKind::Relation {
+                continue;
+            }
+            let Some(target_collection) = field
+                .collection
+                .as_deref()
+                .map(str::trim)
+                .filter(|target| !target.is_empty())
+            else {
+                continue;
+            };
+            let Some(value) = object.get(&field.name) else {
+                continue;
+            };
+            if is_empty_record_value(value) {
+                continue;
+            }
+
+            let ids = relation_field_ids(field, value)?;
+            for id in ids {
+                match self.record_exists(target_collection, id) {
+                    Ok(true) => {}
+                    Ok(false) | Err(ServerError::NotFound(_)) => {
+                        return Err(invalid_relation_target_value(field));
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn enforce_incoming_record_rule(
@@ -8534,6 +8588,14 @@ fn validate_relation_field_value(
     field: &CollectionField,
     value: &JsonValue,
 ) -> Result<(), ServerError> {
+    relation_field_ids(field, value)?;
+    Ok(())
+}
+
+fn relation_field_ids<'a>(
+    field: &CollectionField,
+    value: &'a JsonValue,
+) -> Result<Vec<&'a str>, ServerError> {
     let max_select = field.max_select.unwrap_or(1).max(1);
     let ids = match value {
         JsonValue::String(id) => vec![id.as_str()],
@@ -8574,13 +8636,13 @@ fn validate_relation_field_value(
         ));
     }
 
-    for id in ids {
+    for id in &ids {
         if validate_record_id(id).is_err() {
             return Err(invalid_relation_field_value(field));
         }
     }
 
-    Ok(())
+    Ok(ids)
 }
 
 fn invalid_relation_field_value(field: &CollectionField) -> ServerError {
@@ -8592,6 +8654,15 @@ fn invalid_relation_field_value(field: &CollectionField) -> ServerError {
             "Field '{}' must be a relation id or relation id array.",
             field.name
         ),
+    )
+}
+
+fn invalid_relation_target_value(field: &CollectionField) -> ServerError {
+    validation_error(
+        "Failed to validate record.",
+        &field.name,
+        "validation_invalid_relation",
+        format!("Field '{}' references a missing record.", field.name),
     )
 }
 
