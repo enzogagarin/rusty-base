@@ -27,6 +27,27 @@ fn compiles_filter_with_schema_file() {
 }
 
 #[test]
+fn compiles_select_filter_with_schema_file() {
+    let schema_path = write_temp_schema(r#"{"fields":[{"name":"status","kind":"select"}]}"#);
+
+    let output = rusty_base()
+        .args([
+            "compile-filter",
+            "--schema",
+            schema_path.to_str().unwrap(),
+            "status = 'draft'",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "sql: \"status\" = ?\nparams: [string:draft]\n"
+    );
+}
+
+#[test]
 fn compiles_json_path_filter_with_schema_file() {
     let schema_path = write_temp_schema(r#"{"fields":[{"name":"profile","kind":"json"}]}"#);
 

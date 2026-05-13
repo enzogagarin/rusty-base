@@ -100,12 +100,13 @@ Responsibility:
   or name;
 - persist collection field IDs and return PocketBase-style `type` metadata
   while preserving `kind` as accepted legacy input;
-- preserve first common/text field option metadata used by the admin UI,
+- preserve first common/text/select field option metadata used by the admin UI,
   including visibility, required/presentable, text bounds, pattern, and
-  autogeneration settings;
+  autogeneration/select settings;
 - enforce required fields, text bounds/pattern constraints, basic scalar/array
-  shapes, email shape, number bounds, relation `maxSelect`, and relation target
-  existence for record create/update against the final stored record shape;
+  shapes, email shape, number bounds, select `values`/`maxSelect`, relation
+  `maxSelect`, and relation target existence for record create/update against
+  the final stored record shape;
 - list records with PocketBase-style filtering, pagination, `skipTotal`,
   sorting, expand, and response projection;
 - execute JSON `/api/batch` record create/update/upsert/delete requests inside

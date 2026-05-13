@@ -189,8 +189,8 @@ sql: "age" >= ? AND EXISTS (SELECT 1 FROM json_each("tags") WHERE json_each.valu
 params: [number:30, string:rust]
 ```
 
-Supported schema field kinds: `text`, `number`, `bool`, `datetime`, `array`,
-`json`, `relation`.
+Supported schema field kinds: `text`, `select`, `number`, `bool`, `datetime`,
+`array`, `json`, `relation`.
 
 Run the current HTTP/SQLite slice:
 
@@ -300,13 +300,14 @@ The first server slice supports:
   responses;
 - persisted collection field IDs with PocketBase-style `type` field metadata
   output while still accepting legacy Rusty Base `kind` input;
-- first common/text field option metadata parity for `required`, `hidden`,
-  `system`, `presentable`, `primaryKey`, `min`, `max`, `pattern`, and
-  `autogeneratePattern`;
+- first common/text/select field option metadata parity for `required`,
+  `hidden`, `system`, `presentable`, `primaryKey`, `min`, `max`, `pattern`,
+  `autogeneratePattern`, `values`, and `maxSelect`;
 - record create/update enforcement for `required`, text `min`/`max`/common
   regex-like `pattern` constraints, email shape, basic bool/number/array
-  shapes, number `min`/`max`, relation `maxSelect`, and relation target
-  existence, evaluated against the final record state on updates;
+  shapes, number `min`/`max`, select `values`/`maxSelect`, relation
+  `maxSelect`, and relation target existence, evaluated against the final
+  record state on updates;
 - `GET /api/collections/meta/scaffolds` for PocketBase-style collection type
   scaffolds;
 - `GET /api/collections/meta/export` as a Rusty Base import-ready metadata

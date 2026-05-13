@@ -262,18 +262,18 @@ Exit criteria:
 - Added persisted collection field IDs, PocketBase-style `type` field metadata
   responses, export/import field ID preservation, and backwards-compatible
   `kind` input parsing.
-- Added first common/text field option metadata parity for `required`,
+- Added first common/text/select field option metadata parity for `required`,
   `hidden`, `system`, `presentable`, `primaryKey`, `min`, `max`, `pattern`,
-  and `autogeneratePattern`, including import/export preservation.
+  `autogeneratePattern`, `values`, and `maxSelect`, including import/export
+  preservation.
 - Added record create/update enforcement for `required`, text `min`/`max`/
   common regex-like `pattern` constraints, email shape, basic bool/number/array
-  shapes, number `min`/`max`, relation `maxSelect`, and relation target
-  existence against the final record state.
+  shapes, number `min`/`max`, select `values`/`maxSelect`, relation
+  `maxSelect`, and relation target existence against the final record state.
 
 ## Next Sprint
 
-1. Expand collection field option enforcement to select/options parity and
-   JSON/date edge cases.
+1. Expand collection field option enforcement to JSON/date edge cases.
 2. Expand OAuth2 provider presets and harden callback validation around
    redirect URLs and provider-specific response edge cases.
 3. Expand compatibility fixtures around placeholder-like wildcard cases.

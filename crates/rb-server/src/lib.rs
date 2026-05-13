@@ -364,6 +364,8 @@ pub struct CollectionField {
     pub mime_types: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub thumbs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<String>,
     #[serde(default)]
     pub required: bool,
     #[serde(default)]
@@ -393,6 +395,7 @@ impl CollectionField {
             autogenerate_pattern: None,
             mime_types: Vec::new(),
             thumbs: Vec::new(),
+            values: Vec::new(),
             required: false,
             system: false,
             hidden: false,
@@ -416,6 +419,7 @@ impl CollectionField {
             autogenerate_pattern: None,
             mime_types: Vec::new(),
             thumbs: Vec::new(),
+            values: Vec::new(),
             required: false,
             system: false,
             hidden: false,
@@ -444,6 +448,7 @@ pub enum CollectionFieldKind {
     Array,
     Json,
     Relation,
+    Select,
 }
 
 impl From<CollectionFieldKind> for FieldKind {
@@ -458,6 +463,7 @@ impl From<CollectionFieldKind> for FieldKind {
             CollectionFieldKind::Array => Self::Array,
             CollectionFieldKind::Json => Self::Json,
             CollectionFieldKind::Relation => Self::Relation,
+            CollectionFieldKind::Select => Self::Text,
         }
     }
 }
@@ -4727,12 +4733,15 @@ impl<'a> RecordResolver<'a> {
         Self { collection }
     }
 
-    fn custom_field_kind(&self, field: &str) -> Option<CollectionFieldKind> {
+    fn custom_field(&self, field: &str) -> Option<&CollectionField> {
         self.collection
             .fields
             .iter()
             .find(|candidate| candidate.name == field)
-            .map(|field| field.kind)
+    }
+
+    fn custom_field_kind(&self, field: &str) -> Option<CollectionFieldKind> {
+        self.custom_field(field).map(|field| field.kind)
     }
 
     fn json_root_kind(&self, field: &str) -> Option<CollectionFieldKind> {
@@ -4760,10 +4769,10 @@ impl FieldResolver for RecordResolver<'_> {
             _ => {}
         }
 
-        if let Some(kind) = self.custom_field_kind(field) {
+        if let Some(custom_field) = self.custom_field(field) {
             return Ok(ResolvedField::with_kind(
                 json_data_extract(field),
-                FieldKind::from(kind),
+                filter_field_kind(custom_field),
             ));
         }
 
@@ -4787,12 +4796,15 @@ impl<'a> IncomingRecordResolver<'a> {
         Self { collection }
     }
 
-    fn custom_field_kind(&self, field: &str) -> Option<CollectionFieldKind> {
+    fn custom_field(&self, field: &str) -> Option<&CollectionField> {
         self.collection
             .fields
             .iter()
             .find(|candidate| candidate.name == field)
-            .map(|field| field.kind)
+    }
+
+    fn custom_field_kind(&self, field: &str) -> Option<CollectionFieldKind> {
+        self.custom_field(field).map(|field| field.kind)
     }
 
     fn json_root_kind(&self, field: &str) -> Option<CollectionFieldKind> {
@@ -4820,10 +4832,10 @@ impl FieldResolver for IncomingRecordResolver<'_> {
             _ => {}
         }
 
-        if let Some(kind) = self.custom_field_kind(field) {
+        if let Some(custom_field) = self.custom_field(field) {
             return Ok(ResolvedField::with_kind(
                 incoming_json_extract(field),
-                FieldKind::from(kind),
+                filter_field_kind(custom_field),
             ));
         }
 
@@ -4835,6 +4847,14 @@ impl FieldResolver for IncomingRecordResolver<'_> {
             rb_filter_engine::FilterErrorKind::UnknownField,
             format!("unknown field '{field}'"),
         ))
+    }
+}
+
+fn filter_field_kind(field: &CollectionField) -> FieldKind {
+    if field.kind == CollectionFieldKind::Select && field.max_select.unwrap_or(1) > 1 {
+        FieldKind::Array
+    } else {
+        FieldKind::from(field.kind)
     }
 }
 
@@ -6087,6 +6107,16 @@ fn multipart_text_value(
                     format!("Field '{name}' must be a number."),
                 )
             }),
+        CollectionFieldKind::Select if field.max_select.unwrap_or(1) > 1 => {
+            serde_json::from_str(&value).map_err(|_| {
+                validation_error(
+                    "Failed to validate record.",
+                    name,
+                    "validation_invalid_select",
+                    format!("Field '{name}' must be a select value array."),
+                )
+            })
+        }
         CollectionFieldKind::Array | CollectionFieldKind::Json => serde_json::from_str(&value)
             .map_err(|_| {
                 validation_error(
@@ -7420,6 +7450,9 @@ fn collection_field_export_value(field: CollectionField) -> JsonValue {
     if !field.thumbs.is_empty() {
         value.insert("thumbs".to_string(), json!(field.thumbs));
     }
+    if !field.values.is_empty() {
+        value.insert("values".to_string(), json!(field.values));
+    }
     value.insert("required".to_string(), JsonValue::Bool(field.required));
     value.insert("system".to_string(), JsonValue::Bool(field.system));
     value.insert("hidden".to_string(), JsonValue::Bool(field.hidden));
@@ -7591,6 +7624,15 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
                 field.name
             )));
         }
+        if field.kind != CollectionFieldKind::Select && !field.values.is_empty() {
+            return Err(ServerError::BadRequest(format!(
+                "field '{}' declares select values but is not a select field",
+                field.name
+            )));
+        }
+        if field.kind == CollectionFieldKind::Select {
+            validate_select_field_settings(field)?;
+        }
         let is_text_like = matches!(
             field.kind,
             CollectionFieldKind::Text | CollectionFieldKind::Email
@@ -7641,6 +7683,33 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
     }
 
     validate_auth_options(collection)?;
+
+    Ok(())
+}
+
+fn validate_select_field_settings(field: &CollectionField) -> Result<(), ServerError> {
+    if field.values.is_empty() {
+        return Err(ServerError::BadRequest(format!(
+            "field '{}' select values must not be empty",
+            field.name
+        )));
+    }
+
+    let mut seen = HashSet::new();
+    for value in &field.values {
+        if value.trim().is_empty() {
+            return Err(ServerError::BadRequest(format!(
+                "field '{}' select values must not contain empty options",
+                field.name
+            )));
+        }
+        if !seen.insert(value) {
+            return Err(ServerError::BadRequest(format!(
+                "field '{}' select values must be unique",
+                field.name
+            )));
+        }
+    }
 
     Ok(())
 }
@@ -8515,6 +8584,7 @@ fn validate_record_field_options(
                 }
             }
             CollectionFieldKind::Relation => validate_relation_field_value(field, value)?,
+            CollectionFieldKind::Select => validate_select_field_value(field, value)?,
             CollectionFieldKind::Json | CollectionFieldKind::File => {}
         }
     }
@@ -8561,6 +8631,60 @@ fn validate_number_field_value(
     }
 
     Ok(())
+}
+
+fn validate_select_field_value(
+    field: &CollectionField,
+    value: &JsonValue,
+) -> Result<(), ServerError> {
+    let max_select = field.max_select.unwrap_or(1).max(1);
+    if max_select <= 1 {
+        let Some(option) = value.as_str() else {
+            return Err(invalid_select_field_value(field));
+        };
+        if !field.values.iter().any(|value| value == option) {
+            return Err(invalid_select_field_value(field));
+        }
+        return Ok(());
+    }
+
+    let JsonValue::Array(options) = value else {
+        return Err(invalid_select_field_value(field));
+    };
+    if options.len() as u64 > max_select {
+        return Err(validation_error(
+            "Failed to validate record.",
+            &field.name,
+            "validation_max_select",
+            format!(
+                "Field '{}' accepts at most {} selected value(s).",
+                field.name, max_select
+            ),
+        ));
+    }
+
+    for option in options {
+        let Some(option) = option.as_str() else {
+            return Err(invalid_select_field_value(field));
+        };
+        if !field.values.iter().any(|value| value == option) {
+            return Err(invalid_select_field_value(field));
+        }
+    }
+
+    Ok(())
+}
+
+fn invalid_select_field_value(field: &CollectionField) -> ServerError {
+    validation_error(
+        "Failed to validate record.",
+        &field.name,
+        "validation_invalid_select",
+        format!(
+            "Field '{}' must be one of the configured select values.",
+            field.name
+        ),
+    )
 }
 
 fn validate_text_field_value(
@@ -9068,6 +9192,7 @@ fn field_kind_id_prefix(kind: CollectionFieldKind) -> &'static str {
         CollectionFieldKind::Array => "array",
         CollectionFieldKind::Json => "json",
         CollectionFieldKind::Relation => "relation",
+        CollectionFieldKind::Select => "select",
     }
 }
 

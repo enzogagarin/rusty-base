@@ -72,6 +72,7 @@ fn load_schema(path: impl AsRef<Path>) -> Result<FilterSchema, String> {
 fn parse_field_kind(kind: &str) -> Result<FieldKind, String> {
     match kind {
         "text" => Ok(FieldKind::Text),
+        "select" => Ok(FieldKind::Text),
         "number" => Ok(FieldKind::Number),
         "bool" => Ok(FieldKind::Bool),
         "datetime" => Ok(FieldKind::DateTime),
@@ -79,7 +80,7 @@ fn parse_field_kind(kind: &str) -> Result<FieldKind, String> {
         "json" => Ok(FieldKind::Json),
         "relation" => Ok(FieldKind::Relation),
         other => Err(format!(
-            "unknown field kind '{other}' (expected text, number, bool, datetime, array, json, or relation)"
+            "unknown field kind '{other}' (expected text, select, number, bool, datetime, array, json, or relation)"
         )),
     }
 }

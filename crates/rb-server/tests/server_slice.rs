@@ -3321,6 +3321,11 @@ fn persists_pocketbase_style_field_options() {
                         "max": 10
                     },
                     {
+                        "name": "status",
+                        "type": "select",
+                        "values": ["draft", "published"]
+                    },
+                    {
                         "name": "published",
                         "kind": "bool",
                         "required": true
@@ -3345,8 +3350,13 @@ fn persists_pocketbase_style_field_options() {
     assert_eq!(created.body["fields"][1]["type"], "number");
     assert_eq!(created.body["fields"][1]["min"], 1);
     assert_eq!(created.body["fields"][1]["max"], 10);
-    assert_eq!(created.body["fields"][2]["required"], true);
-    assert!(created.body["fields"][2].get("min").is_none());
+    assert_eq!(created.body["fields"][2]["type"], "select");
+    assert_eq!(
+        created.body["fields"][2]["values"],
+        json!(["draft", "published"])
+    );
+    assert_eq!(created.body["fields"][3]["required"], true);
+    assert!(created.body["fields"][3].get("min").is_none());
 
     let patched = app.handle(
         HttpRequest::json(
@@ -3411,6 +3421,32 @@ fn persists_pocketbase_style_field_options() {
         .unwrap(),
     );
     assert_eq!(invalid_min_kind.status, 400);
+
+    let invalid_select_values = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "bad_select_values",
+                "fields": [{"name": "status", "type": "select", "values": []}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_select_values.status, 400);
+
+    let invalid_select_values_kind = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "bad_select_values_kind",
+                "fields": [{"name": "title", "type": "text", "values": ["draft"]}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_select_values_kind.status, 400);
 
     let invalid_kind = app.handle(
         HttpRequest::json(
@@ -3578,6 +3614,8 @@ fn enforces_non_text_field_option_shapes_on_records() {
                     {"name": "published", "type": "bool", "required": true},
                     {"name": "score", "type": "number", "min": 1, "max": 20},
                     {"name": "contact", "type": "email"},
+                    {"name": "status", "type": "select", "values": ["draft", "published"]},
+                    {"name": "roles", "type": "select", "values": ["reader", "writer", "admin"], "maxSelect": 2},
                     {"name": "tags", "type": "relation", "collection": "tags", "maxSelect": 1},
                     {"name": "scopes", "type": "array"},
                     {"name": "payload", "type": "json"}
@@ -3597,6 +3635,8 @@ fn enforces_non_text_field_option_shapes_on_records() {
                 "published": true,
                 "score": 10,
                 "contact": "burak@example.com",
+                "status": "draft",
+                "roles": ["reader"],
                 "tags": "tag_1",
                 "scopes": ["read"],
                 "payload": {"ok": true}
@@ -3605,6 +3645,14 @@ fn enforces_non_text_field_option_shapes_on_records() {
         .unwrap(),
     );
     assert_eq!(valid.status, 200);
+
+    let select_filter = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts/records?filter=status%20%3D%20%27draft%27%20%26%26%20roles%20%3F%3D%20%27reader%27",
+    ));
+    assert_eq!(select_filter.status, 200);
+    assert_eq!(select_filter.body["totalItems"], 1);
+    assert_eq!(select_filter.body["items"][0]["id"], "post_1");
 
     let invalid_bool = app.handle(
         HttpRequest::json(
@@ -3674,6 +3722,76 @@ fn enforces_non_text_field_option_shapes_on_records() {
     assert_eq!(
         invalid_array.body["data"]["scopes"]["code"],
         "validation_invalid_array"
+    );
+
+    let invalid_select_shape = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": true, "status": ["draft"]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_select_shape.status, 400);
+    assert_eq!(
+        invalid_select_shape.body["data"]["status"]["code"],
+        "validation_invalid_select"
+    );
+
+    let invalid_select_value = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": true, "status": "archived"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_select_value.status, 400);
+    assert_eq!(
+        invalid_select_value.body["data"]["status"]["code"],
+        "validation_invalid_select"
+    );
+
+    let invalid_multi_select_shape = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": true, "roles": "reader"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_multi_select_shape.status, 400);
+    assert_eq!(
+        invalid_multi_select_shape.body["data"]["roles"]["code"],
+        "validation_invalid_select"
+    );
+
+    let invalid_multi_select_value = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": true, "roles": ["reader", "ghost"]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_multi_select_value.status, 400);
+    assert_eq!(
+        invalid_multi_select_value.body["data"]["roles"]["code"],
+        "validation_invalid_select"
+    );
+
+    let too_many_select_values = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"published": true, "roles": ["reader", "writer", "admin"]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(too_many_select_values.status, 400);
+    assert_eq!(
+        too_many_select_values.body["data"]["roles"]["code"],
+        "validation_max_select"
     );
 
     let invalid_relation_shape = app.handle(
@@ -3774,17 +3892,33 @@ fn enforces_non_text_field_option_shapes_on_records() {
         "validation_max_number_constraint"
     );
 
+    let invalid_select_patch = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1",
+            json!({"status": "archived"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_select_patch.status, 400);
+    assert_eq!(
+        invalid_select_patch.body["data"]["status"]["code"],
+        "validation_invalid_select"
+    );
+
     let valid_patch = app.handle(
         HttpRequest::json(
             "PATCH",
             "/api/collections/posts/records/post_1",
-            json!({"score": 11}),
+            json!({"score": 11, "status": "published", "roles": ["reader", "writer"]}),
         )
         .unwrap(),
     );
     assert_eq!(valid_patch.status, 200);
     assert_eq!(valid_patch.body["published"], true);
     assert_eq!(valid_patch.body["score"], 11);
+    assert_eq!(valid_patch.body["status"], "published");
+    assert_eq!(valid_patch.body["roles"], json!(["reader", "writer"]));
 }
 
 #[test]
