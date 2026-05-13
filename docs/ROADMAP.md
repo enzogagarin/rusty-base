@@ -222,8 +222,10 @@ Exit criteria:
 - Added `/api/files/token` and protected `file` field support so protected
   downloads can satisfy target record `viewRule` checks through short-lived file
   tokens.
-- Added `download=1` attachment headers for file responses and pinned current
-  `thumb` fallback behavior until real thumbnail generation is introduced.
+- Added `download=1` attachment headers for file responses.
+- Added first real `thumb` generation for PNG/JPEG/GIF/WebP files with bounded
+  source bytes/pixels and PocketBase-style size modes (`WxH`, `WxHt`, `WxHb`,
+  `WxHf`, `0xH`, `Wx0`).
 
 ## Next Sprint
 
@@ -231,7 +233,7 @@ Exit criteria:
 2. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 3. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.
-4. Add real file thumbnails and uploaded/protected-file compatibility fixtures
+4. Add file option parity and uploaded/protected-file compatibility fixtures
    around edge cases.
 5. Add auth route coverage beyond password/refresh/reset: email change, OTP,
    and OAuth placeholders where useful.

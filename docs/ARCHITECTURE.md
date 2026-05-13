@@ -61,6 +61,8 @@ Responsibility:
 - issue short-lived protected file tokens that populate `@request.auth.*` for
   protected file downloads;
 - expose file download attachment headers for `download=1` requests;
+- generate the first bounded image thumbnails for `thumb` requests against
+  PNG/JPEG/GIF/WebP uploads;
 - support auth collections with Argon2 password hashes and expiring bearer
   tokens;
 - expose a first public auth-methods summary for auth collections;
@@ -89,8 +91,9 @@ Non-responsibility:
 - its server-side `auth-logout` route is a Rusty Base extension rather than a
   PocketBase-compatible route;
 - it does not implement OAuth providers or full auth settings yet;
-- it does not own thumbnails, S3/local filesystem adapters, realtime, admin UI,
-  protected-file edge parity, or migration compatibility yet.
+- it does not own full file field option parity, S3/local filesystem adapters,
+  realtime, admin UI, protected-file edge parity, or migration compatibility
+  yet.
 
 Current integration shape:
 

@@ -7,6 +7,7 @@ use rusqlite::{params, Connection};
 use serde_json::json;
 use std::{
     env, fs,
+    io::Cursor,
     path::PathBuf,
     process,
     time::{SystemTime, UNIX_EPOCH},
@@ -1224,6 +1225,88 @@ fn uploads_and_serves_file_fields() {
 }
 
 #[test]
+fn generates_image_file_thumbnails() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let collection_response = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "images",
+                "fields": [
+                    {"name": "public", "kind": "bool"},
+                    {"name": "photo", "type": "file", "maxSelect": 1}
+                ],
+                "viewRule": "public = true"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(collection_response.status, 200);
+
+    let image = png_fixture(4, 2);
+    let created = app.handle(multipart_request(
+        "POST",
+        "/api/collections/images/records",
+        "rb-image-boundary",
+        vec![
+            multipart_field("id", "image_1"),
+            multipart_field("public", "true"),
+            multipart_file_bytes("photo", "photo.png", "image/png", image.clone()),
+        ],
+    ));
+    assert_eq!(created.status, 200);
+    let photo = created.body["photo"].as_str().unwrap().to_string();
+
+    let original = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/images/image_1/{photo}"),
+    ));
+    assert_eq!(original.status, 200);
+    assert_eq!(original.content_type, "image/png");
+    assert_eq!(original.raw_body, image);
+
+    let proportional = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/images/image_1/{photo}?thumb=2x0"),
+    ));
+    assert_eq!(proportional.status, 200);
+    assert_eq!(proportional.content_type, "image/png");
+    assert_eq!(image_dimensions(&proportional.raw_body), (2, 1));
+
+    let height_only = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/images/image_1/{photo}?thumb=0x1"),
+    ));
+    assert_eq!(height_only.status, 200);
+    assert_eq!(image_dimensions(&height_only.raw_body), (2, 1));
+
+    let fitted = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/images/image_1/{photo}?thumb=2x2f"),
+    ));
+    assert_eq!(fitted.status, 200);
+    assert_eq!(image_dimensions(&fitted.raw_body), (2, 1));
+
+    let cropped = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/images/image_1/{photo}?thumb=1x1t"),
+    ));
+    assert_eq!(cropped.status, 200);
+    assert_eq!(cropped.content_type, "image/png");
+    assert_eq!(image_dimensions(&cropped.raw_body), (1, 1));
+    assert_ne!(cropped.raw_body, original.raw_body);
+
+    let invalid_thumb = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/images/image_1/{photo}?thumb=bad"),
+    ));
+    assert_eq!(invalid_thumb.status, 200);
+    assert_eq!(invalid_thumb.raw_body, original.raw_body);
+}
+
+#[test]
 fn generates_file_tokens_for_protected_file_access() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
@@ -2140,6 +2223,20 @@ fn multipart_file(
     }
 }
 
+fn multipart_file_bytes(
+    name: &'static str,
+    filename: &'static str,
+    content_type: &'static str,
+    data: Vec<u8>,
+) -> MultipartTestPart {
+    MultipartTestPart {
+        name,
+        filename: Some(filename),
+        content_type: Some(content_type),
+        data,
+    }
+}
+
 fn multipart_request(
     method: &'static str,
     path: &'static str,
@@ -2177,6 +2274,26 @@ fn multipart_request(
     );
     request.body = body;
     request
+}
+
+fn png_fixture(width: u32, height: u32) -> Vec<u8> {
+    let mut image = image::RgbaImage::new(width, height);
+    for (x, y, pixel) in image.enumerate_pixels_mut() {
+        let red = (x * 40).min(255) as u8;
+        let green = (y * 80).min(255) as u8;
+        *pixel = image::Rgba([red, green, 180, 255]);
+    }
+
+    let mut output = Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut output, image::ImageFormat::Png)
+        .unwrap();
+    output.into_inner()
+}
+
+fn image_dimensions(data: &[u8]) -> (u32, u32) {
+    let image = image::load_from_memory(data).unwrap();
+    (image.width(), image.height())
 }
 
 fn posts_collection() -> CollectionConfig {

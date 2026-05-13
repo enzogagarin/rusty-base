@@ -9,6 +9,7 @@ description = "Minimal PocketBase-style HTTP and SQLite slice for Rusty Base"
 
 [dependencies]
 argon2 = "0.5"
+image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 rb-filter-engine = { path = "../rb-filter-engine" }
 rand_core = { version = "0.6", features = ["getrandom"] }
 rusqlite = "0.32"

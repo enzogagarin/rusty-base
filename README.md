@@ -305,9 +305,9 @@ The first server slice supports:
   downloads backed by the first SQLite file store;
 - `POST /api/files/token` and protected `file` fields, with short-lived file
   tokens populating `@request.auth.*` for protected downloads;
-- `download=1` file responses with `Content-Disposition: attachment`, while
-  `thumb` currently falls back to the original file until thumbnail generation
-  lands;
+- `download=1` file responses with `Content-Disposition: attachment`;
+- first `thumb` image thumbnail generation for PNG/JPEG/GIF/WebP inputs,
+  including crop, top/bottom crop, fit, width-only, and height-only formats;
 - PocketBase-style uploaded-file modifiers for replace, append, prepend,
   delete-by-name, and zero-value clearing on file fields;
 - PocketBase-like list response shape with `page`, `perPage`, `totalItems`,
@@ -359,8 +359,9 @@ Not implemented yet:
 
 - full PocketBase `fexpr` grammar compatibility;
 - full PocketBase modifier compatibility for relation-edge cases;
-- file thumbnails, S3/local filesystem adapters, large-file streaming, and
-  deeper protected-file compatibility beyond the current SQLite-backed file MVP;
+- full file field option parity, S3/local filesystem adapters, large-file
+  streaming, and deeper protected-file compatibility beyond the current
+  SQLite-backed file MVP;
 - cross-collection identifiers such as `@collection.*`;
 - full PocketBase auth provider/settings parity beyond the current
   password/verification/reset token flow;
