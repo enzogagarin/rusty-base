@@ -56,6 +56,8 @@ Responsibility:
 - store record data in per-collection SQLite tables;
 - store the first uploaded file blobs in SQLite for the current MVP and serve
   them through `/api/files/:collection/:record/:filename`;
+- support the first PocketBase-style file field mutations for replace, append,
+  prepend, delete-by-name, and clearing;
 - support auth collections with Argon2 password hashes and expiring bearer
   tokens;
 - expose a first public auth-methods summary for auth collections;

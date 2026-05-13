@@ -303,6 +303,8 @@ The first server slice supports:
 - PocketBase-style `file` collection field input, multipart record
   create/update uploads, and `GET /api/files/:collection/:record/:filename`
   downloads backed by the first SQLite file store;
+- PocketBase-style uploaded-file modifiers for replace, append, prepend,
+  delete-by-name, and zero-value clearing on file fields;
 - PocketBase-like list response shape with `page`, `perPage`, `totalItems`,
   `totalPages`, and `items`;
 - first `?expand=relation,nested.relation` support for relation record
@@ -351,8 +353,7 @@ id IS NULL OR (status = TRUE AND score >= ?)
 Not implemented yet:
 
 - full PocketBase `fexpr` grammar compatibility;
-- full PocketBase modifier compatibility for uploaded files and relation-edge
-  cases;
+- full PocketBase modifier compatibility for relation-edge cases;
 - file thumbnails, protected files, S3/local filesystem adapters, and large-file
   streaming beyond the current SQLite-backed file MVP;
 - cross-collection identifiers such as `@collection.*`;

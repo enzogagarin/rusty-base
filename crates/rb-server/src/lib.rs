@@ -300,6 +300,29 @@ struct StoredFile {
     data: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileMutationKind {
+    Set,
+    Append,
+    Prepend,
+    Delete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct FileFieldMutation {
+    explicit_set: Option<JsonValue>,
+    set_uploads: Vec<FileUpload>,
+    append_uploads: Vec<FileUpload>,
+    prepend_uploads: Vec<FileUpload>,
+    delete_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct PreparedFileChanges {
+    store_files: Vec<StoredFileInput>,
+    delete_files: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct AuthWithPasswordRequest {
     identity: String,
@@ -846,7 +869,7 @@ impl Store {
     ) -> Result<JsonValue, ServerError> {
         let collection = self.get_collection(collection_name)?;
         let object = data_object_mut(&mut data)?;
-        let stored_files = prepare_file_uploads(&collection, object, uploads)?;
+        let file_changes = prepare_file_changes(&collection, object, uploads, None)?;
         validate_record_fields(&collection, object)?;
         prepare_auth_password(&collection, object, true)?;
 
@@ -883,7 +906,7 @@ impl Store {
             ),
             params![id, data_json, now],
         )?;
-        store_file_uploads(&conn, collection_name, &id, &stored_files)?;
+        store_file_uploads(&conn, collection_name, &id, &file_changes.store_files)?;
         drop(conn);
 
         self.read_record(collection_name, &id)
@@ -1031,9 +1054,10 @@ impl Store {
         validate_record_id(id)?;
         let collection = self.get_collection(collection_name)?;
         let mut patch = patch;
+        let mut existing = self.read_record(collection_name, id)?;
         let stored_files = {
             let patch_object = data_object_mut(&mut patch)?;
-            prepare_file_uploads(&collection, patch_object, uploads)?
+            prepare_file_changes(&collection, patch_object, uploads, Some(&existing))?
         };
         {
             let patch_object = data_object_mut(&mut patch)?;
@@ -1041,7 +1065,6 @@ impl Store {
             prepare_auth_password(&collection, patch_object, false)?;
         }
 
-        let mut existing = self.read_record(collection_name, id)?;
         let context = context_with_body_values_and_changes(context, &patch, Some(&existing));
         self.enforce_existing_record_rule(
             collection_name,
@@ -1072,7 +1095,7 @@ impl Store {
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
         let data_json = serde_json::to_string(&existing)?;
         let conn = self.connection()?;
-        delete_replaced_file_fields(&conn, collection_name, id, &stored_files)?;
+        delete_file_names(&conn, collection_name, id, &stored_files.delete_files)?;
         let affected = conn.execute(
             &format!("UPDATE {table_sql} SET data = ?1, updated = ?2 WHERE id = ?3"),
             params![data_json, now, id],
@@ -1080,7 +1103,7 @@ impl Store {
         if affected == 0 {
             return Err(ServerError::NotFound(format!("record '{id}' not found")));
         }
-        store_file_uploads(&conn, collection_name, id, &stored_files)?;
+        store_file_uploads(&conn, collection_name, id, &stored_files.store_files)?;
         drop(conn);
 
         self.read_record(collection_name, id)
@@ -1792,7 +1815,13 @@ impl RustyBaseApp {
             )),
             ("GET", ["api", "files", collection, record_id, filename]) => {
                 let context = self.request_context(&request, &query)?;
-                self.store.get_record(collection, record_id, context)?;
+                let collection_config = self.store.get_collection(collection)?;
+                let record = self.store.get_record(collection, record_id, context)?;
+                if !record_references_file(&collection_config, &record, filename)? {
+                    return Err(ServerError::NotFound(format!(
+                        "file '{filename}' not found"
+                    )));
+                }
                 let file = self.store.get_file(collection, record_id, filename)?;
                 Ok(HttpResponse::bytes(200, file.content_type, file.data))
             }
@@ -3616,21 +3645,69 @@ fn validate_field_name(name: &str) -> Result<(), ServerError> {
     }
 }
 
-fn prepare_file_uploads(
+fn prepare_file_changes(
     collection: &CollectionConfig,
     object: &mut Map<String, JsonValue>,
     uploads: Vec<FileUpload>,
-) -> Result<Vec<StoredFileInput>, ServerError> {
-    let mut grouped: HashMap<String, Vec<FileUpload>> = HashMap::new();
-    for upload in uploads {
-        grouped
-            .entry(upload.field_name.clone())
-            .or_default()
-            .push(upload);
+    existing: Option<&JsonValue>,
+) -> Result<PreparedFileChanges, ServerError> {
+    let mut mutations: HashMap<String, FileFieldMutation> = HashMap::new();
+    let keys = object.keys().cloned().collect::<Vec<_>>();
+
+    for key in keys {
+        let Some((field_name, kind)) = parse_file_mutation_key(collection, &key) else {
+            continue;
+        };
+        let value = object.remove(&key).unwrap_or(JsonValue::Null);
+        let mutation = mutations.entry(field_name).or_default();
+        match kind {
+            FileMutationKind::Set => {
+                mutation.explicit_set = Some(value);
+            }
+            FileMutationKind::Delete => {
+                mutation.delete_names.extend(file_names_from_value(&value)?);
+            }
+            FileMutationKind::Append | FileMutationKind::Prepend => {
+                if !is_empty_file_value(&value) {
+                    return Err(validation_error(
+                        "Failed to validate record.",
+                        key,
+                        "validation_invalid_file_modifier",
+                        "File append/prepend modifiers require uploaded file parts.",
+                    ));
+                }
+            }
+        }
     }
 
-    let mut stored = Vec::new();
-    for (field_name, uploads) in grouped {
+    for upload in uploads {
+        let raw_field_name = upload.field_name.clone();
+        let Some((field_name, kind)) = parse_file_mutation_key(collection, &raw_field_name) else {
+            return Err(validation_error(
+                "Failed to validate record.",
+                raw_field_name,
+                "validation_unknown_field",
+                format!("Unknown field for collection '{}'.", collection.name),
+            ));
+        };
+        let mutation = mutations.entry(field_name).or_default();
+        match kind {
+            FileMutationKind::Set => mutation.set_uploads.push(upload),
+            FileMutationKind::Append => mutation.append_uploads.push(upload),
+            FileMutationKind::Prepend => mutation.prepend_uploads.push(upload),
+            FileMutationKind::Delete => {
+                return Err(validation_error(
+                    "Failed to validate record.",
+                    raw_field_name,
+                    "validation_invalid_file_modifier",
+                    "File delete modifiers require filename values.",
+                ))
+            }
+        }
+    }
+
+    let mut changes = PreparedFileChanges::default();
+    for (field_name, mutation) in mutations {
         let field = collection
             .fields
             .iter()
@@ -3653,7 +3730,56 @@ fn prepare_file_uploads(
         }
 
         let max_select = field.max_select.unwrap_or(1).max(1);
-        if uploads.len() as u64 > max_select {
+        let existing_names = existing
+            .and_then(JsonValue::as_object)
+            .and_then(|object| object.get(&field_name))
+            .map(file_names_from_value)
+            .transpose()?
+            .unwrap_or_default();
+
+        let mut final_names = if let Some(value) = mutation.explicit_set {
+            file_names_from_value(&value)?
+        } else {
+            existing_names.clone()
+        };
+
+        if !mutation.delete_names.is_empty() {
+            let delete_names = mutation
+                .delete_names
+                .iter()
+                .cloned()
+                .collect::<HashSet<_>>();
+            final_names.retain(|name| !delete_names.contains(name));
+            changes.delete_files.extend(
+                existing_names
+                    .iter()
+                    .filter(|name| delete_names.contains(*name))
+                    .cloned(),
+            );
+        }
+
+        if !mutation.set_uploads.is_empty() {
+            changes.delete_files.extend(existing_names.iter().cloned());
+            final_names.clear();
+            let uploaded = prepare_uploaded_files(&field_name, mutation.set_uploads, &mut changes)?;
+            final_names.extend(uploaded);
+        }
+
+        if !mutation.prepend_uploads.is_empty() {
+            let uploaded =
+                prepare_uploaded_files(&field_name, mutation.prepend_uploads, &mut changes)?;
+            let mut combined = uploaded;
+            combined.extend(final_names);
+            final_names = combined;
+        }
+
+        if !mutation.append_uploads.is_empty() {
+            let uploaded =
+                prepare_uploaded_files(&field_name, mutation.append_uploads, &mut changes)?;
+            final_names.extend(uploaded);
+        }
+
+        if final_names.len() as u64 > max_select {
             return Err(validation_error(
                 "Failed to validate record.",
                 &field_name,
@@ -3662,31 +3788,138 @@ fn prepare_file_uploads(
             ));
         }
 
-        let mut filenames = Vec::new();
-        for upload in uploads {
-            let filename = stored_file_name(&upload.original_name);
-            validate_file_name(&filename)?;
-            filenames.push(JsonValue::String(filename.clone()));
-            stored.push(StoredFileInput {
-                field_name: field_name.clone(),
-                filename,
-                content_type: normalize_content_type(&upload.content_type),
-                data: upload.data,
-            });
-        }
-
-        let value = if max_select <= 1 {
-            filenames
-                .into_iter()
-                .next()
-                .unwrap_or(JsonValue::String(String::new()))
-        } else {
-            JsonValue::Array(filenames)
-        };
-        object.insert(field_name, value);
+        changes.delete_files.extend(
+            existing_names
+                .iter()
+                .filter(|name| !final_names.contains(*name))
+                .cloned(),
+        );
+        dedupe_strings(&mut changes.delete_files);
+        object.insert(
+            field_name.clone(),
+            file_field_value(&final_names, max_select),
+        );
     }
 
-    Ok(stored)
+    Ok(changes)
+}
+
+fn prepare_uploaded_files(
+    field_name: &str,
+    uploads: Vec<FileUpload>,
+    changes: &mut PreparedFileChanges,
+) -> Result<Vec<String>, ServerError> {
+    let mut filenames = Vec::new();
+    for upload in uploads {
+        let filename = stored_file_name(&upload.original_name);
+        validate_file_name(&filename)?;
+        filenames.push(filename.clone());
+        changes.store_files.push(StoredFileInput {
+            field_name: field_name.to_string(),
+            filename,
+            content_type: normalize_content_type(&upload.content_type),
+            data: upload.data,
+        });
+    }
+
+    Ok(filenames)
+}
+
+fn parse_file_mutation_key(
+    collection: &CollectionConfig,
+    key: &str,
+) -> Option<(String, FileMutationKind)> {
+    if let Some(field) = key
+        .strip_prefix('+')
+        .and_then(|name| file_field(collection, name))
+    {
+        return Some((field.name.clone(), FileMutationKind::Prepend));
+    }
+    if let Some(field) = key
+        .strip_suffix('+')
+        .and_then(|name| file_field(collection, name))
+    {
+        return Some((field.name.clone(), FileMutationKind::Append));
+    }
+    if let Some(field) = key
+        .strip_suffix('-')
+        .and_then(|name| file_field(collection, name))
+    {
+        return Some((field.name.clone(), FileMutationKind::Delete));
+    }
+    file_field(collection, key).map(|field| (field.name.clone(), FileMutationKind::Set))
+}
+
+fn file_field<'a>(collection: &'a CollectionConfig, name: &str) -> Option<&'a CollectionField> {
+    collection
+        .fields
+        .iter()
+        .find(|field| field.name == name && field.kind == CollectionFieldKind::File)
+}
+
+fn file_names_from_value(value: &JsonValue) -> Result<Vec<String>, ServerError> {
+    match value {
+        JsonValue::String(value) if value.trim().is_empty() => Ok(Vec::new()),
+        JsonValue::String(value) => Ok(vec![value.clone()]),
+        JsonValue::Array(values) => values
+            .iter()
+            .map(|value| {
+                value.as_str().map(str::to_string).ok_or_else(|| {
+                    ServerError::BadRequest("file names must be strings".to_string())
+                })
+            })
+            .filter(|result| result.as_ref().map_or(true, |name| !name.trim().is_empty()))
+            .collect(),
+        JsonValue::Null => Ok(Vec::new()),
+        _ => Err(ServerError::BadRequest(
+            "file field value must be a string or string array".to_string(),
+        )),
+    }
+}
+
+fn is_empty_file_value(value: &JsonValue) -> bool {
+    match value {
+        JsonValue::String(value) => value.is_empty(),
+        JsonValue::Array(values) => values.is_empty(),
+        JsonValue::Null => true,
+        _ => false,
+    }
+}
+
+fn file_field_value(names: &[String], max_select: u64) -> JsonValue {
+    if max_select <= 1 {
+        JsonValue::String(names.first().cloned().unwrap_or_default())
+    } else {
+        JsonValue::Array(names.iter().cloned().map(JsonValue::String).collect())
+    }
+}
+
+fn record_references_file(
+    collection: &CollectionConfig,
+    record: &JsonValue,
+    filename: &str,
+) -> Result<bool, ServerError> {
+    let Some(object) = record.as_object() else {
+        return Ok(false);
+    };
+
+    for field in collection
+        .fields
+        .iter()
+        .filter(|field| field.kind == CollectionFieldKind::File)
+    {
+        let Some(value) = object.get(&field.name) else {
+            continue;
+        };
+        if file_names_from_value(value)?
+            .iter()
+            .any(|name| name == filename)
+        {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 fn store_file_uploads(
@@ -3718,27 +3951,28 @@ fn store_file_uploads(
     Ok(())
 }
 
-fn delete_replaced_file_fields(
+fn delete_file_names(
     conn: &Connection,
     collection_name: &str,
     record_id: &str,
-    files: &[StoredFileInput],
+    filenames: &[String],
 ) -> Result<(), ServerError> {
-    let fields = files
-        .iter()
-        .map(|file| file.field_name.as_str())
-        .collect::<HashSet<_>>();
-    for field in fields {
+    for filename in filenames {
         conn.execute(
             r#"
             DELETE FROM "_rb_files"
-            WHERE collection_name = ?1 AND record_id = ?2 AND field_name = ?3
+            WHERE collection_name = ?1 AND record_id = ?2 AND filename = ?3
             "#,
-            params![collection_name, record_id, field],
+            params![collection_name, record_id, filename],
         )?;
     }
 
     Ok(())
+}
+
+fn dedupe_strings(values: &mut Vec<String>) {
+    let mut seen = HashSet::new();
+    values.retain(|value| seen.insert(value.clone()));
 }
 
 fn stored_file_name(original: &str) -> String {

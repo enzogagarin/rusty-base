@@ -216,6 +216,9 @@ Exit criteria:
   multipart record create/update uploads, SQLite-backed file blob storage,
   filename sanitization/suffixing, and `/api/files/:collection/:record/:file`
   downloads gated by the target record `viewRule`.
+- Added PocketBase-style uploaded-file field modifiers for replace, append
+  (`field+`), prepend (`+field`), delete-by-name (`field-`), and zero-value
+  clearing.
 
 ## Next Sprint
 
@@ -223,7 +226,7 @@ Exit criteria:
 2. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 3. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.
-4. Expand PocketBase-compatible uploaded-file modifiers (`field+`, `+field`,
-   `field-`), thumbnails, and protected-file fixtures.
+4. Add file thumbnails, protected-file tokens, and uploaded-file compatibility
+   fixtures around edge cases.
 5. Add auth route coverage beyond password/refresh/reset: email change, OTP,
    and OAuth placeholders where useful.

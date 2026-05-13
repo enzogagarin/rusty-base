@@ -1071,7 +1071,10 @@ fn uploads_and_serves_file_fields() {
     let attachment = created.body["attachment"].as_str().unwrap().to_string();
     assert!(attachment.starts_with("hello_"));
     assert!(attachment.ends_with(".txt"));
-    assert_eq!(created.body["documents"].as_array().unwrap().len(), 2);
+    let created_documents = created.body["documents"].as_array().unwrap();
+    assert_eq!(created_documents.len(), 2);
+    let first_document = created_documents[0].as_str().unwrap().to_string();
+    let second_document = created_documents[1].as_str().unwrap().to_string();
 
     let file = app.handle(HttpRequest::new(
         "GET",
@@ -1111,6 +1114,81 @@ fn uploads_and_serves_file_fields() {
     assert_eq!(updated_file.status, 200);
     assert_eq!(updated_file.content_type, "text/markdown");
     assert_eq!(updated_file.raw_body, b"# updated");
+
+    let appended = app.handle(multipart_request(
+        "PATCH",
+        "/api/collections/docs/records/doc_1",
+        "rb-boundary-3",
+        vec![multipart_file(
+            "documents+",
+            "three.txt",
+            "text/plain",
+            b"three",
+        )],
+    ));
+    assert_eq!(appended.status, 200);
+    let appended_documents = appended.body["documents"].as_array().unwrap();
+    assert_eq!(appended_documents.len(), 3);
+    assert_eq!(appended_documents[0], first_document);
+    assert_eq!(appended_documents[1], second_document);
+    let third_document = appended_documents[2].as_str().unwrap().to_string();
+    assert!(third_document.starts_with("three_"));
+
+    let removed = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/docs/records/doc_1",
+            json!({"documents-": [second_document.clone()]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(removed.status, 200);
+    let removed_documents = removed.body["documents"].as_array().unwrap();
+    assert_eq!(removed_documents.len(), 2);
+    assert_eq!(removed_documents[0], first_document);
+    assert_eq!(removed_documents[1], third_document);
+
+    let removed_file = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/docs/doc_1/{second_document}"),
+    ));
+    assert_eq!(removed_file.status, 404);
+
+    let prepended = app.handle(multipart_request(
+        "PATCH",
+        "/api/collections/docs/records/doc_1",
+        "rb-boundary-4",
+        vec![multipart_file(
+            "+documents",
+            "zero.txt",
+            "text/plain",
+            b"zero",
+        )],
+    ));
+    assert_eq!(prepended.status, 200);
+    let prepended_documents = prepended.body["documents"].as_array().unwrap();
+    assert_eq!(prepended_documents.len(), 3);
+    let zero_document = prepended_documents[0].as_str().unwrap().to_string();
+    assert!(zero_document.starts_with("zero_"));
+    assert_eq!(prepended_documents[1], first_document);
+    assert_eq!(prepended_documents[2], third_document);
+
+    let cleared = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/docs/records/doc_1",
+            json!({"documents": []}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(cleared.status, 200);
+    assert_eq!(cleared.body["documents"], json!([]));
+
+    let cleared_file = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/docs/doc_1/{zero_document}"),
+    ));
+    assert_eq!(cleared_file.status, 404);
 
     let private = app.handle(
         HttpRequest::json(
