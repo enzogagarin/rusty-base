@@ -126,6 +126,17 @@ Target capabilities:
 │   └── rb-server
 │       ├── Cargo.toml
 │       ├── src/lib.rs
+│       ├── src/server
+│       │   ├── app.rs
+│       │   ├── auth.rs
+│       │   ├── collections.rs
+│       │   ├── files.rs
+│       │   ├── http.rs
+│       │   ├── realtime.rs
+│       │   ├── records.rs
+│       │   ├── settings.rs
+│       │   ├── storage.rs
+│       │   └── validation.rs
 │       ├── src/main.rs
 │       └── tests/server_slice.rs
 ├── docs
@@ -137,6 +148,10 @@ Target capabilities:
 ```
 
 ## Quick start
+
+Rusty Base currently requires Rust 1.88 or newer. The locked dependency graph
+uses `image 0.25.x`, whose current transitive stack includes crates that require
+Cargo/Rust support newer than 1.84.
 
 ```bash
 cargo test

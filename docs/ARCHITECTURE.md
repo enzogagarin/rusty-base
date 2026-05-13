@@ -172,6 +172,18 @@ rb-filter-engine for filter/rule predicates
 parameterized SQLite query
 ```
 
+Internal layout:
+
+- `rb-server/src/lib.rs` is a small public re-export layer.
+- `rb-server/src/server/app.rs` owns request routing orchestration.
+- `rb-server/src/server/http.rs` owns the minimal HTTP server/request/response
+  surface.
+- `rb-server/src/server/storage.rs` owns `Store` initialization and SQLite
+  connection helpers.
+- `collections.rs`, `records.rs`, `auth.rs`, `files.rs`, `realtime.rs`,
+  `settings.rs`, and `validation.rs` keep PocketBase-style server behavior
+  grouped by domain instead of accumulating in one monolithic server file.
+
 ### rb-media-engine, planned
 
 Responsibility:

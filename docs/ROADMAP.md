@@ -299,6 +299,10 @@ Exit criteria:
 - Added a first read-only `view` collection MVP with persisted `viewQuery`,
   SELECT-backed list/view records, filter/sort support through `rb-filter-engine`,
   and mutation endpoints rejected as read-only.
+- Split the former 10k+ line `rb-server/src/lib.rs` MVP monolith into focused
+  `server/*` modules, kept `lib.rs` as the public re-export layer, raised the
+  declared workspace Rust minimum to 1.88 for the locked `image 0.25.x`
+  dependency graph, and cleaned the workspace so fmt/check/clippy/test pass.
 
 ## Next Sprint
 

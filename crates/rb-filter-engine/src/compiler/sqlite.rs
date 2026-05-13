@@ -1131,7 +1131,7 @@ impl<'a> SqlCompiler<'a> {
         let Some(field) = base_name.strip_prefix("@request.body.") else {
             return Err(FilterError::with_kind(
                 FilterErrorKind::InvalidLiteral,
-                format!("request modifier ':each' is only supported for @request.body.*"),
+                "request modifier ':each' is only supported for @request.body.*".to_string(),
             ));
         };
         if !is_safe_identifier_path(field) {
