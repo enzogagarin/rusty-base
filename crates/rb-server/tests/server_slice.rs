@@ -348,6 +348,177 @@ fn hashes_auth_passwords_and_uses_login_tokens_for_rules() {
 }
 
 #[test]
+fn superusers_manage_collections_and_bypass_record_rules() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let superusers = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "_superusers",
+                "type": "auth",
+                "fields": [{"name": "email", "kind": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(superusers.status, 200);
+
+    let first_superuser = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/_superusers/records",
+            json!({
+                "id": "su_1",
+                "email": "root@example.com",
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(first_superuser.status, 200);
+
+    let blocked_collections = app.handle(HttpRequest::new("GET", "/api/collections"));
+    assert_eq!(blocked_collections.status, 403);
+    assert!(blocked_collections.body["message"]
+        .as_str()
+        .unwrap()
+        .contains("missing superuser auth token"));
+
+    let blocked_superuser_create = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/_superusers/records",
+            json!({
+                "email": "other@example.com",
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(blocked_superuser_create.status, 403);
+
+    let login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/_superusers/auth-with-password",
+            json!({"identity": "root@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(login.status, 200);
+    let superuser_token = login.body["token"].as_str().unwrap().to_string();
+
+    let collection_list = app.handle(
+        HttpRequest::new("GET", "/api/collections")
+            .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(collection_list.status, 200);
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [{"name": "title", "kind": "text"}],
+                "listRule": "id = 'never'",
+                "viewRule": "id = 'never'",
+                "createRule": "title = 'rule-allowed'",
+                "updateRule": "title = 'rule-allowed'",
+                "deleteRule": "title = 'rule-allowed'"
+            }),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(posts.status, 200);
+
+    let denied_create = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"id": "post_1", "title": "Super Created"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(denied_create.status, 403);
+
+    let created = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"id": "post_1", "title": "Super Created"}),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(created.status, 200);
+    assert_eq!(created.body["title"], "Super Created");
+
+    let anonymous_list = app.handle(HttpRequest::new("GET", "/api/collections/posts/records"));
+    assert_eq!(anonymous_list.status, 200);
+    assert_eq!(anonymous_list.body["totalItems"], 0);
+
+    let superuser_list = app.handle(
+        HttpRequest::new("GET", "/api/collections/posts/records")
+            .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(superuser_list.status, 200);
+    assert_eq!(superuser_list.body["totalItems"], 1);
+
+    let anonymous_view = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts/records/post_1",
+    ));
+    assert_eq!(anonymous_view.status, 404);
+
+    let superuser_view = app.handle(
+        HttpRequest::new("GET", "/api/collections/posts/records/post_1")
+            .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(superuser_view.status, 200);
+    assert_eq!(superuser_view.body["title"], "Super Created");
+
+    let denied_update = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1",
+            json!({"title": "Anonymous Update"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(denied_update.status, 403);
+
+    let updated = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1",
+            json!({"title": "Super Updated"}),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(updated.status, 200);
+    assert_eq!(updated.body["title"], "Super Updated");
+
+    let denied_delete = app.handle(HttpRequest::new(
+        "DELETE",
+        "/api/collections/posts/records/post_1",
+    ));
+    assert_eq!(denied_delete.status, 403);
+
+    let deleted = app.handle(
+        HttpRequest::new("DELETE", "/api/collections/posts/records/post_1")
+            .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(deleted.status, 204);
+}
+
+#[test]
 fn auth_responses_support_expand_and_response_fields() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 

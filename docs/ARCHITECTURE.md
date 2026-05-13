@@ -69,6 +69,8 @@ Responsibility:
   create/update/delete events through collection or record subscriptions;
 - support auth collections with Argon2 password hashes and expiring bearer
   tokens;
+- support a first `_superusers` bootstrap flow, superuser-protected collection
+  metadata management, and superuser rule bypass for record access;
 - expose a first public auth-methods summary for auth collections, including
   password, OTP, MFA, OAuth2, and legacy SDK compatibility fields;
 - persist normalized auth collection options for password identity fields,
@@ -97,8 +99,8 @@ Non-responsibility:
 - it is not a complete PocketBase API surface yet;
 - its server-side `auth-logout` route is a Rusty Base extension rather than a
   PocketBase-compatible route;
-- it does not implement a broad OAuth provider matrix, admin UI OAuth setting
-  flows, or full auth settings yet;
+- it does not implement a broad OAuth provider matrix, a full admin API/admin
+  UI, admin UI OAuth setting flows, or full auth settings yet;
 - it does not own full file field option parity, S3/local filesystem adapters,
   complete realtime parity, admin UI, protected-file edge parity, or migration
   compatibility yet.

@@ -33,6 +33,7 @@ const PASSWORD_RESET_TOKEN_TTL_MILLIS: u128 = 30 * 60 * 1000;
 const EMAIL_CHANGE_TOKEN_TTL_MILLIS: u128 = 30 * 60 * 1000;
 const OTP_TOKEN_TTL_MILLIS: u128 = 3 * 60 * 1000;
 const AUTH_FORM_VALIDATION_MESSAGE: &str = "An error occurred while validating the submitted data.";
+const SUPERUSERS_COLLECTION: &str = "_superusers";
 const MAX_THUMB_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_THUMB_SOURCE_PIXELS: u64 = 16_000_000;
 const MAX_THUMB_EDGE: u32 = 2048;
@@ -1466,14 +1467,17 @@ impl Store {
         if let Some(object) = rule_data.as_object_mut() {
             object.insert("id".to_string(), JsonValue::String(id.clone()));
         }
+        let is_superuser = is_superuser_context(&context);
         let context = context_with_body_values(context, &data);
-        self.enforce_incoming_record_rule(
-            &collection,
-            collection.create_rule.as_deref(),
-            &rule_data,
-            context,
-            "create",
-        )?;
+        if !is_superuser {
+            self.enforce_incoming_record_rule(
+                &collection,
+                collection.create_rule.as_deref(),
+                &rule_data,
+                context,
+                "create",
+            )?;
+        }
 
         let now = now_timestamp();
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
@@ -1503,14 +1507,16 @@ impl Store {
         let mut params = vec![SqlValue::Text(id.to_string())];
         let mut where_parts = vec!["id = ?".to_string()];
 
-        if let Some(rule) = collection
-            .view_rule
-            .as_deref()
-            .filter(|rule| !rule.trim().is_empty())
-        {
-            let compiled = compile_filter_with_resolver_and_context(rule, &resolver, context)?;
-            where_parts.push(format!("({})", compiled.sql));
-            params.extend(filter_params_to_sqlite(compiled.params)?);
+        if !is_superuser_context(&context) {
+            if let Some(rule) = collection
+                .view_rule
+                .as_deref()
+                .filter(|rule| !rule.trim().is_empty())
+            {
+                let compiled = compile_filter_with_resolver_and_context(rule, &resolver, context)?;
+                where_parts.push(format!("({})", compiled.sql));
+                params.extend(filter_params_to_sqlite(compiled.params)?);
+            }
         }
 
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
@@ -1644,15 +1650,18 @@ impl Store {
             prepare_auth_password(&collection, patch_object, false)?;
         }
 
+        let is_superuser = is_superuser_context(&context);
         let context = context_with_body_values_and_changes(context, &patch, Some(&existing));
-        self.enforce_existing_record_rule(
-            collection_name,
-            &collection,
-            collection.update_rule.as_deref(),
-            id,
-            context,
-            "update",
-        )?;
+        if !is_superuser {
+            self.enforce_existing_record_rule(
+                collection_name,
+                &collection,
+                collection.update_rule.as_deref(),
+                id,
+                context,
+                "update",
+            )?;
+        }
 
         let existing_object = existing.as_object_mut().ok_or_else(|| {
             ServerError::BadRequest("record response must be a JSON object".to_string())
@@ -1701,14 +1710,16 @@ impl Store {
         validate_record_id(id)?;
         let collection = self.get_collection(collection_name)?;
         self.read_record(collection_name, id)?;
-        self.enforce_existing_record_rule(
-            collection_name,
-            &collection,
-            collection.delete_rule.as_deref(),
-            id,
-            context,
-            "delete",
-        )?;
+        if !is_superuser_context(&context) {
+            self.enforce_existing_record_rule(
+                collection_name,
+                &collection,
+                collection.delete_rule.as_deref(),
+                id,
+                context,
+                "delete",
+            )?;
+        }
 
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
         let conn = self.connection()?;
@@ -2537,6 +2548,32 @@ impl Store {
         Ok(context_with_auth_record_values(context, &record))
     }
 
+    pub fn superuser_auth_is_required(&self) -> Result<bool, ServerError> {
+        match self.get_collection(SUPERUSERS_COLLECTION) {
+            Ok(_) => {}
+            Err(ServerError::NotFound(_)) => return Ok(false),
+            Err(err) => return Err(err),
+        }
+
+        let table_sql = quote_identifier(&record_table_name(SUPERUSERS_COLLECTION)?);
+        let conn = self.connection()?;
+        let count = conn.query_row(&format!("SELECT COUNT(*) FROM {table_sql}"), [], |row| {
+            row.get::<_, u64>(0)
+        })?;
+
+        Ok(count > 0)
+    }
+
+    pub fn is_superuser_token(&self, token: &str) -> Result<bool, ServerError> {
+        let (collection_name, record_id) = self.valid_token_subject(token)?;
+        if collection_name != SUPERUSERS_COLLECTION {
+            return Ok(false);
+        }
+
+        self.read_record(SUPERUSERS_COLLECTION, &record_id)?;
+        Ok(true)
+    }
+
     pub fn create_file_token(&self, auth_token: &str) -> Result<String, ServerError> {
         let (collection_name, record_id) = self.valid_token_subject(auth_token)?;
         let collection = self.auth_collection(&collection_name)?;
@@ -2861,6 +2898,10 @@ impl Store {
         id: &str,
         context: FilterContext,
     ) -> Result<bool, ServerError> {
+        if is_superuser_context(&context) {
+            return Ok(true);
+        }
+
         let Some(rule) = non_empty_rule(rule) else {
             return Ok(true);
         };
@@ -2989,24 +3030,29 @@ impl RustyBaseApp {
                 Ok(response)
             }
             ("GET", ["api", "collections"]) => {
+                self.require_superuser_admin(&request)?;
                 let collections = self.store.list_collections()?;
                 Ok(HttpResponse::json(200, json!({"items": collections})))
             }
             ("POST", ["api", "collections"]) => {
+                self.require_superuser_admin(&request)?;
                 let collection: CollectionConfig = serde_json::from_slice(&request.body)?;
                 let collection = self.store.create_collection(collection)?;
                 Ok(HttpResponse::json(200, json!(collection)))
             }
             ("PUT", ["api", "collections", "import"]) => {
+                self.require_superuser_admin(&request)?;
                 let request =
                     CollectionImportRequest::from_json(serde_json::from_slice(&request.body)?)?;
                 self.store.import_collections(request)?;
                 Ok(HttpResponse::json(204, JsonValue::Null))
             }
             ("GET", ["api", "collections", "meta", "scaffolds"]) => {
+                self.require_superuser_admin(&request)?;
                 Ok(HttpResponse::json(200, collection_scaffolds()))
             }
             ("GET", ["api", "collections", "meta", "export"]) => {
+                self.require_superuser_admin(&request)?;
                 let collections = self.store.list_collections()?;
                 Ok(HttpResponse::json(
                     200,
@@ -3014,19 +3060,23 @@ impl RustyBaseApp {
                 ))
             }
             ("GET", ["api", "collections", collection]) => {
+                self.require_superuser_admin(&request)?;
                 let collection = self.store.get_collection(collection)?;
                 Ok(HttpResponse::json(200, json!(collection)))
             }
             ("PATCH", ["api", "collections", collection]) => {
+                self.require_superuser_admin(&request)?;
                 let patch: CollectionPatch = serde_json::from_slice(&request.body)?;
                 let collection = self.store.update_collection(collection, patch)?;
                 Ok(HttpResponse::json(200, json!(collection)))
             }
             ("DELETE", ["api", "collections", collection]) => {
+                self.require_superuser_admin(&request)?;
                 self.store.delete_collection(collection)?;
                 Ok(HttpResponse::json(204, JsonValue::Null))
             }
             ("DELETE", ["api", "collections", collection, "truncate"]) => {
+                self.require_superuser_admin(&request)?;
                 self.store.truncate_collection(collection)?;
                 Ok(HttpResponse::json(204, JsonValue::Null))
             }
@@ -3175,12 +3225,14 @@ impl RustyBaseApp {
                 Ok(HttpResponse::json(204, JsonValue::Null))
             }
             ("GET", ["api", "collections", collection, "records"]) => {
+                self.require_superuser_record_access(collection, &request)?;
                 let options =
                     list_options_from_query(&query, self.request_context(&request, &query)?)?;
                 let list = self.store.list_records(collection, options)?;
                 Ok(HttpResponse::json(200, json!(list)))
             }
             ("POST", ["api", "collections", collection, "records"]) => {
+                self.require_superuser_record_access(collection, &request)?;
                 let collection_config = self.store.get_collection(collection)?;
                 let (data, uploads) = record_payload_from_request(&request, &collection_config)?;
                 let context = self.request_context(&request, &query)?;
@@ -3200,6 +3252,7 @@ impl RustyBaseApp {
                 Ok(HttpResponse::json(200, record))
             }
             ("GET", ["api", "collections", collection, "records", id]) => {
+                self.require_superuser_record_access(collection, &request)?;
                 let context = self.request_context(&request, &query)?;
                 let mut record = self.store.get_record(collection, id, context.clone())?;
                 let expands = expand_options_from_query(&query)?;
@@ -3210,6 +3263,7 @@ impl RustyBaseApp {
                 Ok(HttpResponse::json(200, record))
             }
             ("PATCH", ["api", "collections", collection, "records", id]) => {
+                self.require_superuser_record_access(collection, &request)?;
                 let collection_config = self.store.get_collection(collection)?;
                 let (patch, uploads) = record_payload_from_request(&request, &collection_config)?;
                 let context = self.request_context(&request, &query)?;
@@ -3230,6 +3284,7 @@ impl RustyBaseApp {
                 Ok(HttpResponse::json(200, record))
             }
             ("DELETE", ["api", "collections", collection, "records", id]) => {
+                self.require_superuser_record_access(collection, &request)?;
                 let realtime_record = self.store.read_record(collection, id).ok();
                 let realtime_deliveries = realtime_record
                     .as_ref()
@@ -3248,6 +3303,34 @@ impl RustyBaseApp {
                 request.method, request.path
             ))),
         }
+    }
+
+    fn require_superuser_admin(&self, request: &HttpRequest) -> Result<(), ServerError> {
+        if !self.store.superuser_auth_is_required()? {
+            return Ok(());
+        }
+
+        let token = bearer_token(request)
+            .ok_or_else(|| ServerError::Forbidden("missing superuser auth token".to_string()))?;
+        if self.store.is_superuser_token(token)? {
+            Ok(())
+        } else {
+            Err(ServerError::Forbidden(
+                "superuser auth token is required".to_string(),
+            ))
+        }
+    }
+
+    fn require_superuser_record_access(
+        &self,
+        collection: &str,
+        request: &HttpRequest,
+    ) -> Result<(), ServerError> {
+        if collection == SUPERUSERS_COLLECTION {
+            self.require_superuser_admin(request)?;
+        }
+
+        Ok(())
     }
 
     fn request_context(
@@ -3738,12 +3821,14 @@ fn compile_list_predicate(
     let mut sql = Vec::new();
     let mut params = Vec::new();
 
-    if let Some(rule) = collection
-        .list_rule
-        .as_deref()
-        .filter(|rule| !rule.trim().is_empty())
-    {
-        push_compiled_predicate(rule, resolver, &options.context, &mut sql, &mut params)?;
+    if !is_superuser_context(&options.context) {
+        if let Some(rule) = collection
+            .list_rule
+            .as_deref()
+            .filter(|rule| !rule.trim().is_empty())
+        {
+            push_compiled_predicate(rule, resolver, &options.context, &mut sql, &mut params)?;
+        }
     }
 
     if let Some(filter) = options
@@ -5273,6 +5358,13 @@ fn context_with_auth_record_values(
     context
 }
 
+fn is_superuser_context(context: &FilterContext) -> bool {
+    matches!(
+        context.request.auth.get("collectionName"),
+        Some(FilterValue::String(collection)) if collection == SUPERUSERS_COLLECTION
+    )
+}
+
 fn json_to_filter_value(value: &JsonValue) -> FilterValue {
     match value {
         JsonValue::String(value) => FilterValue::String(value.clone()),
@@ -6044,6 +6136,11 @@ fn validate_auth_options(collection: &CollectionConfig) -> Result<(), ServerErro
     }
 
     if let Some(oauth2) = &collection.oauth2 {
+        if collection.name == SUPERUSERS_COLLECTION && oauth2.enabled {
+            return Err(ServerError::BadRequest(
+                "superusers collection does not support OAuth2 auth".to_string(),
+            ));
+        }
         for provider in &oauth2.providers {
             if provider.name.trim().is_empty() {
                 return Err(ServerError::BadRequest(

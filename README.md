@@ -298,6 +298,8 @@ The first server slice supports:
   and record table renames;
 - `DELETE /api/collections/:collection` and
   `DELETE /api/collections/:collection/truncate`;
+- first `_superusers` bootstrap and bearer-token guard for collection metadata
+  management after a superuser exists;
 - `GET/POST /api/collections/:collection/records`;
 - `GET/PATCH/DELETE /api/collections/:collection/records/:id`;
 - `GET /api/realtime` SSE connect and `POST /api/realtime` subscriptions for
@@ -341,6 +343,8 @@ The first server slice supports:
 - list/view/create/update/delete rule predicates and client filter predicates
   compiled through
   `rb-filter-engine`;
+- `_superusers` auth tokens bypass record access rules and protect subsequent
+  `_superusers` record management;
 - auth collections with Argon2 password hashing;
 - PocketBase-style `email` collection field input, mapped to text-compatible
   filtering for now;

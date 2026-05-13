@@ -247,14 +247,19 @@ Exit criteria:
 - Added PocketBase-style OAuth2 `auth-methods` output with generated state,
   PKCE code verifier/challenge data, provider auth URLs, preset GitHub/Google
   scopes, and custom provider scopes.
+- Added the first `_superusers` bootstrap/guard path: collection metadata routes
+  require a superuser token after bootstrap, `_superusers` records are protected
+  after the first superuser exists, and superuser auth bypasses record rules.
 
 ## Next Sprint
 
-1. Expand OAuth2 provider presets and harden callback validation around
+1. Expand superuser/admin API parity around settings-style endpoints and
+   collection management edge cases.
+2. Expand OAuth2 provider presets and harden callback validation around
    redirect URLs and provider-specific response edge cases.
-2. Expand compatibility fixtures around placeholder-like wildcard cases.
-3. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
-4. Add relation compatibility fixtures copied from PocketBase-style access-rule
+3. Expand compatibility fixtures around placeholder-like wildcard cases.
+4. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
+5. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.
-5. Add file option parity and uploaded/protected-file compatibility fixtures
+6. Add file option parity and uploaded/protected-file compatibility fixtures
    around edge cases.
