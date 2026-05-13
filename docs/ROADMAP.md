@@ -270,8 +270,8 @@ Exit criteria:
   parity for
   `required`, `hidden`, `system`, `presentable`, `primaryKey`, `min`, `max`,
   `pattern`, `autogeneratePattern`, `values`, relation `minSelect`,
-  `maxSelect`, domain allow/deny lists, `onCreate`/`onUpdate`, and JSON/editor
-  `maxSize`, including import/export preservation.
+  `maxSelect`/`cascadeDelete`, domain allow/deny lists, `onCreate`/`onUpdate`,
+  and JSON/editor `maxSize`, including import/export preservation.
 - Added record create/update enforcement for `required`, text `min`/`max`/
   common regex-like `pattern` constraints, email shape, basic bool/number/array
   shapes, URL shape/domain options, PocketBase-style datetime format, geoPoint
@@ -294,6 +294,8 @@ Exit criteria:
   execution to a storage-specific pass.
 - Added relation `minSelect` metadata and create/update validation, including
   missing and too-few relation checks.
+- Added relation `cascadeDelete` metadata and recursive dependent-record
+  cleanup when a referenced target record is deleted.
 
 ## Next Sprint
 

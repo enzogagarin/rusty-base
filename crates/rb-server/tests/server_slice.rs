@@ -4023,6 +4023,134 @@ fn supports_relation_min_select_metadata_and_validation() {
 }
 
 #[test]
+fn cascades_relation_deletes_for_configured_fields() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    for collection in [
+        json!({
+            "name": "posts",
+            "fields": [{"name": "title", "type": "text"}]
+        }),
+        json!({
+            "name": "comments",
+            "fields": [
+                {"name": "body", "type": "text"},
+                {"name": "post", "type": "relation", "collection": "posts", "cascadeDelete": true}
+            ]
+        }),
+        json!({
+            "name": "reactions",
+            "fields": [
+                {"name": "comment", "type": "relation", "collection": "comments", "cascadeDelete": true}
+            ]
+        }),
+        json!({
+            "name": "bookmarks",
+            "fields": [
+                {"name": "post", "type": "relation", "collection": "posts"}
+            ]
+        }),
+    ] {
+        let response =
+            app.handle(HttpRequest::json("POST", "/api/collections", collection).unwrap());
+        assert_eq!(response.status, 200);
+        if response.body["name"] == "comments" {
+            assert_eq!(
+                collection_field(&response.body, "post")["cascadeDelete"],
+                true
+            );
+        }
+    }
+
+    for (collection, record) in [
+        ("posts", json!({"id": "post_1", "title": "Cascade source"})),
+        ("posts", json!({"id": "post_2", "title": "Keep source"})),
+        (
+            "comments",
+            json!({"id": "comment_1", "body": "delete me", "post": "post_1"}),
+        ),
+        (
+            "comments",
+            json!({"id": "comment_2", "body": "delete me too", "post": "post_1"}),
+        ),
+        (
+            "comments",
+            json!({"id": "comment_3", "body": "keep me", "post": "post_2"}),
+        ),
+        (
+            "reactions",
+            json!({"id": "reaction_1", "comment": "comment_1"}),
+        ),
+        ("bookmarks", json!({"id": "bookmark_1", "post": "post_1"})),
+    ] {
+        let response = app.handle(
+            HttpRequest::json(
+                "POST",
+                format!("/api/collections/{collection}/records"),
+                record,
+            )
+            .unwrap(),
+        );
+        assert_eq!(response.status, 200);
+    }
+
+    let exported = app.handle(HttpRequest::new("GET", "/api/collections/meta/export"));
+    assert_eq!(exported.status, 200);
+    let exported_comments = exported.body["collections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|collection| collection["name"] == "comments")
+        .unwrap();
+    let exported_post_field = exported_comments["schema"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|field| field["name"] == "post")
+        .unwrap();
+    assert_eq!(exported_post_field["cascadeDelete"], true);
+
+    let deleted = app.handle(HttpRequest::new(
+        "DELETE",
+        "/api/collections/posts/records/post_1",
+    ));
+    assert_eq!(deleted.status, 204);
+
+    let comments = app.handle(HttpRequest::new("GET", "/api/collections/comments/records"));
+    assert_eq!(comments.status, 200);
+    assert_eq!(comments.body["totalItems"], 1);
+    assert_eq!(comments.body["items"][0]["id"], "comment_3");
+
+    let reactions = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/reactions/records",
+    ));
+    assert_eq!(reactions.status, 200);
+    assert_eq!(reactions.body["totalItems"], 0);
+
+    let bookmarks = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/bookmarks/records",
+    ));
+    assert_eq!(bookmarks.status, 200);
+    assert_eq!(bookmarks.body["totalItems"], 1);
+    assert_eq!(bookmarks.body["items"][0]["id"], "bookmark_1");
+
+    let invalid_kind = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "bad_cascade_kind",
+                "fields": [{"name": "title", "type": "text", "cascadeDelete": true}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_kind.status, 400);
+}
+
+#[test]
 fn enforces_required_and_text_field_options_on_records() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 

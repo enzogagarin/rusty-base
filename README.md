@@ -310,8 +310,8 @@ The first server slice supports:
 - first common/text/select/url/editor/autodate field option metadata parity for
   `required`, `hidden`, `system`, `presentable`, `primaryKey`, `min`, `max`,
   `pattern`, `autogeneratePattern`, `values`, relation `minSelect`,
-  `maxSelect`, domain allow/deny lists, `onCreate`/`onUpdate`, and
-  JSON/editor `maxSize`;
+  `maxSelect`/`cascadeDelete`, domain allow/deny lists, `onCreate`/`onUpdate`,
+  and JSON/editor `maxSize`;
 - record create/update enforcement for `required`, text `min`/`max`/common
   regex-like `pattern` constraints, email shape, basic bool/number/array
   shapes, URL shape/domain options, PocketBase-style datetime format, geoPoint
@@ -321,6 +321,8 @@ The first server slice supports:
   the final record state on updates;
 - PocketBase-style record value modifiers for number add/subtract and
   multi-select/relation append, prepend, and remove operations;
+- relation `cascadeDelete` support for deleting dependent records when their
+  referenced target record is deleted;
 - `GET /api/collections/meta/scaffolds` for PocketBase-style collection type
   scaffolds;
 - `GET /api/collections/meta/export` as a Rusty Base import-ready metadata

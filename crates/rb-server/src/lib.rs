@@ -390,6 +390,8 @@ pub struct CollectionField {
     #[serde(default, skip_serializing_if = "is_false")]
     pub protected: bool,
     #[serde(default, skip_serializing_if = "is_false")]
+    pub cascade_delete: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
     pub on_create: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub on_update: bool,
@@ -420,6 +422,7 @@ impl CollectionField {
             presentable: false,
             primary_key: false,
             protected: false,
+            cascade_delete: false,
             on_create: false,
             on_update: false,
         }
@@ -449,6 +452,7 @@ impl CollectionField {
             presentable: false,
             primary_key: false,
             protected: false,
+            cascade_delete: false,
             on_create: false,
             on_update: false,
         }
@@ -1449,6 +1453,11 @@ pub struct Store {
     conn: Mutex<Connection>,
 }
 
+struct CascadeDeleteTarget {
+    collection_name: String,
+    record_id: String,
+}
+
 impl Store {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ServerError> {
         let conn = Connection::open(path)?;
@@ -2364,17 +2373,34 @@ impl Store {
         id: &str,
         context: FilterContext,
     ) -> Result<(), ServerError> {
+        self.delete_record_internal(collection_name, id, &context, &mut HashSet::new(), true)
+    }
+
+    fn delete_record_internal(
+        &self,
+        collection_identifier: &str,
+        id: &str,
+        context: &FilterContext,
+        visited: &mut HashSet<(String, String)>,
+        enforce_rule: bool,
+    ) -> Result<(), ServerError> {
         validate_record_id(id)?;
-        let collection = self.get_collection(collection_name)?;
+        let collection = self.get_collection(collection_identifier)?;
         let collection_name = collection.name.as_str();
+        let collection_id = record_collection_id(&collection);
+        let record_key = (collection_name.to_string(), id.to_string());
+        if !visited.insert(record_key) {
+            return Ok(());
+        }
+
         self.read_record(collection_name, id)?;
-        if !is_superuser_context(&context) {
+        if enforce_rule && !is_superuser_context(context) {
             self.enforce_existing_record_rule(
                 collection_name,
                 &collection,
                 collection.delete_rule.as_deref(),
                 id,
-                context,
+                context.clone(),
                 "delete",
             )?;
         }
@@ -2410,8 +2436,76 @@ impl Store {
                 params![collection_name, id],
             )?;
         }
+        drop(conn);
+
+        let cascade_targets = self.cascade_delete_targets(collection_name, &collection_id, id)?;
+        for target in cascade_targets {
+            self.delete_record_internal(
+                &target.collection_name,
+                &target.record_id,
+                context,
+                visited,
+                false,
+            )?;
+        }
 
         Ok(())
+    }
+
+    fn cascade_delete_targets(
+        &self,
+        source_collection_name: &str,
+        source_collection_id: &str,
+        source_record_id: &str,
+    ) -> Result<Vec<CascadeDeleteTarget>, ServerError> {
+        let collections = self.list_collections()?;
+        let conn = self.connection()?;
+        let mut targets = Vec::new();
+        let mut seen = HashSet::new();
+
+        for collection in collections {
+            let fields = collection
+                .fields
+                .iter()
+                .filter(|field| {
+                    field.kind == CollectionFieldKind::Relation
+                        && field.cascade_delete
+                        && field.collection.as_deref().is_some_and(|target| {
+                            target == source_collection_name || target == source_collection_id
+                        })
+                })
+                .collect::<Vec<_>>();
+            if fields.is_empty() {
+                continue;
+            }
+
+            let table_sql = quote_identifier(&record_table_name(&collection.name)?);
+            let mut stmt = conn.prepare(&format!("SELECT id, data FROM {table_sql}"))?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+
+            for row in rows {
+                let (record_id, data) = row?;
+                let data = serde_json::from_str::<JsonValue>(&data)?;
+                let Some(object) = data.as_object() else {
+                    continue;
+                };
+                let references_source = fields.iter().any(|field| {
+                    object
+                        .get(&field.name)
+                        .is_some_and(|value| relation_value_contains(value, source_record_id))
+                });
+                if references_source && seen.insert((collection.name.clone(), record_id.clone())) {
+                    targets.push(CascadeDeleteTarget {
+                        collection_name: collection.name.clone(),
+                        record_id,
+                    });
+                }
+            }
+        }
+
+        Ok(targets)
     }
 
     pub fn auth_with_password(
@@ -6758,6 +6852,8 @@ fn is_response_only_collection_field(field: &CollectionField) -> bool {
                 && !field.hidden
                 && !field.presentable
                 && field.primary_key
+                && !field.protected
+                && !field.cascade_delete
                 && field.min == Some(15)
                 && field.max == Some(15)
                 && field.pattern.as_deref() == Some("^[a-z0-9]+$")
@@ -6771,6 +6867,8 @@ fn is_response_only_collection_field(field: &CollectionField) -> bool {
                 && !field.hidden
                 && !field.presentable
                 && !field.primary_key
+                && !field.protected
+                && !field.cascade_delete
                 && field.on_create
                 && !field.on_update
         }
@@ -6782,6 +6880,8 @@ fn is_response_only_collection_field(field: &CollectionField) -> bool {
                 && !field.hidden
                 && !field.presentable
                 && !field.primary_key
+                && !field.protected
+                && !field.cascade_delete
                 && field.on_create
                 && field.on_update
         }
@@ -7703,6 +7803,9 @@ fn collection_field_export_value(field: CollectionField) -> JsonValue {
     if field.protected {
         value.insert("protected".to_string(), JsonValue::Bool(true));
     }
+    if field.cascade_delete {
+        value.insert("cascadeDelete".to_string(), JsonValue::Bool(true));
+    }
 
     JsonValue::Object(value)
 }
@@ -7858,6 +7961,12 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
         if field.kind != CollectionFieldKind::Relation && field.min_select.is_some() {
             return Err(ServerError::BadRequest(format!(
                 "field '{}' declares minSelect but is not a relation field",
+                field.name
+            )));
+        }
+        if field.kind != CollectionFieldKind::Relation && field.cascade_delete {
+            return Err(ServerError::BadRequest(format!(
+                "field '{}' declares cascadeDelete but is not a relation field",
                 field.name
             )));
         }
@@ -9719,6 +9828,16 @@ fn relation_field_ids<'a>(
     }
 
     Ok(ids)
+}
+
+fn relation_value_contains(value: &JsonValue, id: &str) -> bool {
+    match value {
+        JsonValue::String(value) => value == id,
+        JsonValue::Array(values) => values
+            .iter()
+            .any(|value| value.as_str().is_some_and(|value| value == id)),
+        _ => false,
+    }
 }
 
 fn relation_min_select(field: &CollectionField) -> u64 {

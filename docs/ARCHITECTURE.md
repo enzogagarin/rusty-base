@@ -110,8 +110,8 @@ Responsibility:
 - preserve first common/text/select/url/editor/autodate field option metadata
   used by the admin UI, including visibility, required/presentable, text
   bounds, pattern, autogeneration/select settings, domain allow/deny lists, and
-  relation `minSelect`, `onCreate`/`onUpdate` autodate flags, and JSON/editor
-  size limits;
+  relation `minSelect`/`cascadeDelete`, `onCreate`/`onUpdate` autodate flags,
+  and JSON/editor size limits;
 - enforce required fields, text bounds/pattern constraints, basic scalar/array
   shapes, email shape, URL shape/domain options, PocketBase-style datetime
   format, geoPoint lon/lat shape, number bounds, select `values`/`maxSelect`,
@@ -121,6 +121,8 @@ Responsibility:
 - apply first record value modifiers for number add/subtract and multi-select/
   relation append, prepend, and remove operations before rule and validation
   checks;
+- cascade-delete dependent relation records when a relation field opts into
+  `cascadeDelete`;
 - list records with PocketBase-style filtering, pagination, `skipTotal`,
   sorting, expand, and response projection;
 - execute JSON `/api/batch` record create/update/upsert/delete requests inside
