@@ -57,14 +57,18 @@ Responsibility:
 - support auth collections with Argon2 password hashes and expiring bearer
   tokens;
 - rotate valid auth tokens through `auth-refresh`;
+- revoke valid bearer tokens through `auth-logout`;
+- return PocketBase-like API error bodies with `code`, `message`, and `data`;
+- include field-level validation `data` for initial auth and record form errors;
 - translate collection schemas into `rb-filter-engine` field resolvers;
 - apply list/view/create/update/delete filters with request context.
 
 Non-responsibility:
 
 - it is not a complete PocketBase API surface yet;
-- it does not implement OAuth providers, public logout/revoke routes, or full
-  auth settings yet;
+- its server-side `auth-logout` route is a Rusty Base extension rather than a
+  PocketBase-compatible route;
+- it does not implement OAuth providers or full auth settings yet;
 - it does not own files, realtime, admin UI, or migration compatibility yet.
 
 Current integration shape:

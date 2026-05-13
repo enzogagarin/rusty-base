@@ -177,6 +177,13 @@ Exit criteria:
   boolean presence checks and is enforced by server create rules.
 - Added `:lower` and `:length` modifier support for field expressions and
   request-body rule checks.
+- Added public auth token revocation with
+  `POST /api/collections/:collection/auth-logout` as a Rusty Base extension.
+- Aligned the first API error response shape with PocketBase-style `code`,
+  `message`, and `data` fields and changed failed password authentication to a
+  generic 400 response.
+- Added field-level validation `data` details for initial auth form and record
+  form failures.
 
 ## Next Sprint
 
@@ -184,6 +191,5 @@ Exit criteria:
 2. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 3. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.
-4. Add public logout/token revocation and align auth response/error shape more
-   closely with PocketBase.
-5. Add the remaining request/field modifiers such as `:changed` and `:each`.
+4. Add the remaining request/field modifiers such as `:changed` and `:each`.
+5. Start collection update/migration APIs for changing schemas after creation.

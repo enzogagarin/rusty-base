@@ -126,7 +126,10 @@ fn hashes_auth_passwords_and_uses_login_tokens_for_rules() {
         )
         .unwrap(),
     );
-    assert_eq!(denied_login.status, 403);
+    assert_eq!(denied_login.status, 400);
+    assert_eq!(denied_login.body["code"], 400);
+    assert_eq!(denied_login.body["message"], "Failed to authenticate.");
+    assert_eq!(denied_login.body["data"], json!({}));
 
     let login = app.handle(
         HttpRequest::json(
@@ -166,6 +169,13 @@ fn hashes_auth_passwords_and_uses_login_tokens_for_rules() {
             .with_header("Authorization", format!("Bearer {token}")),
     );
     assert_eq!(wrong_collection_refresh.status, 403);
+    assert_eq!(wrong_collection_refresh.body["data"], json!({}));
+
+    let wrong_collection_logout = app.handle(
+        HttpRequest::new("POST", "/api/collections/admins/auth-logout")
+            .with_header("Authorization", format!("Bearer {token}")),
+    );
+    assert_eq!(wrong_collection_logout.status, 403);
 
     let refresh = app.handle(
         HttpRequest::new("POST", "/api/collections/users/auth-refresh")
@@ -223,16 +233,122 @@ fn hashes_auth_passwords_and_uses_login_tokens_for_rules() {
     assert_eq!(authorized.body["totalItems"], 1);
     assert_eq!(authorized.body["items"][0]["title"], "Token visible");
 
-    app.store().expire_token(&refreshed_token).unwrap();
-    let expired = app.handle(
+    let logout = app.handle(
+        HttpRequest::new("POST", "/api/collections/users/auth-logout")
+            .with_header("Authorization", format!("Bearer {refreshed_token}")),
+    );
+    assert_eq!(logout.status, 204);
+
+    let logged_out = app.handle(
         HttpRequest::new("GET", "/api/collections/posts/records")
             .with_header("Authorization", format!("Bearer {refreshed_token}")),
+    );
+    assert_eq!(logged_out.status, 403);
+    assert!(logged_out.body["message"]
+        .as_str()
+        .unwrap()
+        .contains("invalid auth token"));
+
+    let second_login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "burak@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(second_login.status, 200);
+    let expiring_token = second_login.body["token"].as_str().unwrap().to_string();
+
+    app.store().expire_token(&expiring_token).unwrap();
+    let expired = app.handle(
+        HttpRequest::new("GET", "/api/collections/posts/records")
+            .with_header("Authorization", format!("Bearer {expiring_token}")),
     );
     assert_eq!(expired.status, 403);
     assert!(expired.body["message"]
         .as_str()
         .unwrap()
         .contains("expired auth token"));
+}
+
+#[test]
+fn returns_validation_data_for_auth_and_record_forms() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [{"name": "email", "kind": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(users.status, 200);
+
+    let missing_login_password = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "burak@example.com"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(missing_login_password.status, 400);
+    assert_eq!(
+        missing_login_password.body["message"],
+        "Failed to authenticate."
+    );
+    assert_eq!(
+        missing_login_password.body["data"]["password"]["code"],
+        "validation_required"
+    );
+
+    let missing_signup_password = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({"email": "burak@example.com"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(missing_signup_password.status, 400);
+    assert_eq!(
+        missing_signup_password.body["data"]["password"]["code"],
+        "validation_required"
+    );
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [{"name": "title", "kind": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(posts.status, 200);
+
+    let unknown_field = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Rusty Base", "role": "admin"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(unknown_field.status, 400);
+    assert_eq!(unknown_field.body["message"], "Failed to validate record.");
+    assert_eq!(
+        unknown_field.body["data"]["role"]["code"],
+        "validation_unknown_field"
+    );
 }
 
 #[test]

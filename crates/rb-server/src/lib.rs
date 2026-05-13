@@ -29,6 +29,7 @@ const AUTH_TOKEN_TTL_MILLIS: u128 = 7 * 24 * 60 * 60 * 1000;
 #[derive(Debug)]
 pub enum ServerError {
     BadRequest(String),
+    BadRequestData { message: String, data: JsonValue },
     Forbidden(String),
     NotFound(String),
     Storage(rusqlite::Error),
@@ -41,6 +42,7 @@ impl fmt::Display for ServerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::BadRequest(message) => write!(f, "{message}"),
+            Self::BadRequestData { message, .. } => write!(f, "{message}"),
             Self::Forbidden(message) => write!(f, "{message}"),
             Self::NotFound(message) => write!(f, "{message}"),
             Self::Storage(err) => write!(f, "{err}"),
@@ -242,6 +244,24 @@ pub struct AuthResponse {
 struct AuthWithPasswordRequest {
     identity: String,
     password: String,
+}
+
+impl AuthWithPasswordRequest {
+    fn from_json(value: JsonValue) -> Result<Self, ServerError> {
+        let object = value.as_object().ok_or_else(|| {
+            validation_error(
+                "Failed to authenticate.",
+                "body",
+                "validation_invalid_body",
+                "Request body must be a JSON object.",
+            )
+        })?;
+
+        Ok(Self {
+            identity: required_form_string(object, "identity", "Failed to authenticate.")?,
+            password: required_form_string(object, "password", "Failed to authenticate.")?,
+        })
+    }
 }
 
 pub struct Store {
@@ -698,6 +718,24 @@ impl Store {
         })
     }
 
+    pub fn revoke_auth_token(&self, collection_name: &str, token: &str) -> Result<(), ServerError> {
+        let (token_collection_name, _) = self.valid_token_subject(token)?;
+        if token_collection_name != collection_name {
+            return Err(ServerError::Forbidden("invalid auth token".to_string()));
+        }
+
+        let conn = self.connection()?;
+        let affected = conn.execute(
+            r#"DELETE FROM "_rb_auth_tokens" WHERE token = ?1"#,
+            params![token],
+        )?;
+        if affected == 0 {
+            return Err(ServerError::Forbidden("invalid auth token".to_string()));
+        }
+
+        Ok(())
+    }
+
     pub fn context_for_token(
         &self,
         token: &str,
@@ -886,7 +924,8 @@ impl RustyBaseApp {
                 Ok(HttpResponse::json(200, json!(collection)))
             }
             ("POST", ["api", "collections", collection, "auth-with-password"]) => {
-                let auth: AuthWithPasswordRequest = serde_json::from_slice(&request.body)?;
+                let auth =
+                    AuthWithPasswordRequest::from_json(serde_json::from_slice(&request.body)?)?;
                 let response =
                     self.store
                         .auth_with_password(collection, &auth.identity, &auth.password)?;
@@ -897,6 +936,12 @@ impl RustyBaseApp {
                     .ok_or_else(|| ServerError::Forbidden("missing auth token".to_string()))?;
                 let response = self.store.auth_refresh(collection, token)?;
                 Ok(HttpResponse::json(200, json!(response)))
+            }
+            ("POST", ["api", "collections", collection, "auth-logout"]) => {
+                let token = bearer_token(&request)
+                    .ok_or_else(|| ServerError::Forbidden("missing auth token".to_string()))?;
+                self.store.revoke_auth_token(collection, token)?;
+                Ok(HttpResponse::json(204, JsonValue::Null))
             }
             ("GET", ["api", "collections", collection, "records"]) => {
                 let options =
@@ -1449,7 +1494,27 @@ fn forbidden(action: &str, collection_name: &str) -> ServerError {
 }
 
 fn invalid_credentials() -> ServerError {
-    ServerError::Forbidden("invalid auth credentials".to_string())
+    ServerError::BadRequest("Failed to authenticate.".to_string())
+}
+
+fn validation_error(
+    message: impl Into<String>,
+    field: impl Into<String>,
+    code: impl Into<String>,
+    field_message: impl Into<String>,
+) -> ServerError {
+    let mut data = Map::new();
+    data.insert(
+        field.into(),
+        json!({
+            "code": code.into(),
+            "message": field_message.into(),
+        }),
+    );
+    ServerError::BadRequestData {
+        message: message.into(),
+        data: JsonValue::Object(data),
+    }
 }
 
 fn ensure_auth_token_expires_column(conn: &Connection) -> Result<(), ServerError> {
@@ -1586,10 +1651,12 @@ fn validate_record_fields(
         }
 
         if collection.fields.iter().all(|field| field.name != *key) {
-            return Err(ServerError::BadRequest(format!(
-                "unknown field '{key}' for collection '{}'",
-                collection.name
-            )));
+            return Err(validation_error(
+                "Failed to validate record.",
+                key,
+                "validation_unknown_field",
+                format!("Unknown field for collection '{}'.", collection.name),
+            ));
         }
     }
 
@@ -1611,15 +1678,23 @@ fn prepare_auth_password(
 
     let Some(password) = password else {
         return if require_password {
-            Err(ServerError::BadRequest("password is required".to_string()))
+            Err(validation_error(
+                "Failed to validate record.",
+                "password",
+                "validation_required",
+                "Password is required.",
+            ))
         } else {
             Ok(())
         };
     };
 
     if password.len() < 8 {
-        return Err(ServerError::BadRequest(
-            "password must be at least 8 characters".to_string(),
+        return Err(validation_error(
+            "Failed to validate record.",
+            "password",
+            "validation_min_text_constraint",
+            "Password must be at least 8 characters.",
         ));
     }
 
@@ -1627,8 +1702,11 @@ fn prepare_auth_password(
         .as_deref()
         .is_some_and(|confirm| confirm != password)
     {
-        return Err(ServerError::BadRequest(
-            "passwordConfirm does not match password".to_string(),
+        return Err(validation_error(
+            "Failed to validate record.",
+            "passwordConfirm",
+            "validation_values_mismatch",
+            "Password confirmation does not match.",
         ));
     }
 
@@ -1646,12 +1724,51 @@ fn take_string_field(
     object
         .remove(field)
         .map(|value| {
-            value
-                .as_str()
-                .map(str::to_string)
-                .ok_or_else(|| ServerError::BadRequest(format!("field '{field}' must be a string")))
+            value.as_str().map(str::to_string).ok_or_else(|| {
+                validation_error(
+                    "Failed to validate record.",
+                    field,
+                    "validation_invalid_string",
+                    format!("Field '{field}' must be a string."),
+                )
+            })
         })
         .transpose()
+}
+
+fn required_form_string(
+    object: &Map<String, JsonValue>,
+    field: &str,
+    message: &str,
+) -> Result<String, ServerError> {
+    let Some(value) = object.get(field) else {
+        return Err(validation_error(
+            message,
+            field,
+            "validation_required",
+            format!("Field '{field}' is required."),
+        ));
+    };
+
+    let Some(value) = value.as_str() else {
+        return Err(validation_error(
+            message,
+            field,
+            "validation_invalid_string",
+            format!("Field '{field}' must be a string."),
+        ));
+    };
+
+    if value.trim().is_empty() {
+        return Err(validation_error(
+            message,
+            field,
+            "validation_required",
+            format!("Field '{field}' is required."),
+        ));
+    }
+
+    Ok(value.to_string())
 }
 
 fn data_object(value: &JsonValue) -> Result<&Map<String, JsonValue>, ServerError> {
@@ -1834,11 +1951,18 @@ fn normalize_http_header_name(name: &str) -> String {
 }
 
 fn error_response(err: ServerError) -> HttpResponse {
-    let status = match err {
-        ServerError::BadRequest(_) | ServerError::Json(_) | ServerError::Filter(_) => 400,
+    let status = match &err {
+        ServerError::BadRequest(_)
+        | ServerError::BadRequestData { .. }
+        | ServerError::Json(_)
+        | ServerError::Filter(_) => 400,
         ServerError::Forbidden(_) => 403,
         ServerError::NotFound(_) => 404,
         ServerError::Storage(_) | ServerError::Io(_) => 500,
+    };
+    let data = match &err {
+        ServerError::BadRequestData { data, .. } => data.clone(),
+        _ => json!({}),
     };
 
     HttpResponse::json(
@@ -1846,6 +1970,7 @@ fn error_response(err: ServerError) -> HttpResponse {
         json!({
             "code": status,
             "message": err.to_string(),
+            "data": data,
         }),
     )
 }

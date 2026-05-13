@@ -214,6 +214,9 @@ TOKEN=$(curl -s http://127.0.0.1:8090/api/collections/users/auth-refresh \
   -H "authorization: Bearer $TOKEN" \
   | jq -r '.token')
 
+curl -s -X POST http://127.0.0.1:8090/api/collections/users/auth-logout \
+  -H "authorization: Bearer $TOKEN"
+
 curl -s http://127.0.0.1:8090/api/collections \
   -H 'content-type: application/json' \
   -d '{"name":"posts","fields":[{"name":"title","kind":"text"},{"name":"published","kind":"bool"},{"name":"owner","kind":"text"}],"listRule":"owner = @request.auth.id"}'
@@ -225,6 +228,10 @@ curl -s http://127.0.0.1:8090/api/collections/posts/records \
 curl -s 'http://127.0.0.1:8090/api/collections/posts/records?filter=published%20%3D%20true' \
   -H "authorization: Bearer $TOKEN"
 ```
+
+`auth-logout` is a Rusty Base server-side token revocation extension. PocketBase
+itself treats auth tokens as stateless and client logout usually means clearing
+the local auth store.
 
 Example:
 
@@ -282,12 +289,15 @@ The first server slice supports:
 - `GET/PATCH/DELETE /api/collections/:collection/records/:id`;
 - PocketBase-like list response shape with `page`, `perPage`, `totalItems`,
   `totalPages`, and `items`;
+- PocketBase-like error response shape with `code`, `message`, and `data`;
+- field-level validation `data` for the first auth and record form failures;
 - list/view/create/update/delete rule predicates and client filter predicates
   compiled through
   `rb-filter-engine`;
 - auth collections with Argon2 password hashing;
 - `auth-with-password` login with opaque bearer tokens and expiration metadata;
 - `auth-refresh` token rotation for authenticated auth records;
+- `auth-logout` public bearer-token revocation;
 - bearer-token expiration checks before `@request.auth.*` is populated;
 - `Authorization: Bearer ...` request context population for `@request.auth.*`;
 - a temporary `x-rb-auth-id` compatibility header for tests and early manual
@@ -312,7 +322,8 @@ Not implemented yet:
 - full PocketBase `fexpr` grammar compatibility;
 - remaining request/field modifiers such as `:changed` and `:each`;
 - cross-collection identifiers such as `@collection.*`;
-- full PocketBase auth provider/settings parity and public logout/revoke routes;
+- full PocketBase auth provider/settings parity beyond the current password-token
+  flow;
 - exact PocketBase admin API/import-export compatibility;
 - files, realtime, and admin UI;
 - Go FFI bindings;
