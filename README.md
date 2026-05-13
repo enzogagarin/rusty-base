@@ -307,10 +307,14 @@ The first server slice supports:
   `DELETE /api/collections/:collection/truncate`;
 - first `_superusers` bootstrap and bearer-token guard for collection metadata
   management after a superuser exists;
+- `GET/PATCH /api/settings` for superuser-managed PocketBase-style app
+  settings, including persisted meta/logs/batch/smtp/s3/backups/rate limit and
+  trusted proxy sections with secret redaction;
 - `GET/POST /api/collections/:collection/records`;
 - `GET/PATCH/DELETE /api/collections/:collection/records/:id`;
 - JSON `POST /api/batch` for transactional record create/update/upsert/delete
-  request batches;
+  request batches, honoring the persisted batch `enabled`, `maxRequests`, and
+  `maxBodySize` settings;
 - `GET /api/realtime` SSE connect and `POST /api/realtime` subscriptions for
   first record create/update/delete events;
 - PocketBase-style `file` collection field input, multipart record
@@ -394,8 +398,9 @@ Not implemented yet:
   streaming, and deeper protected-file compatibility beyond the current
   SQLite-backed file MVP;
 - cross-collection identifiers such as `@collection.*`;
-- full PocketBase auth provider/settings parity beyond the current
-  password/verification/reset token flow;
+- full PocketBase auth provider/settings parity beyond the current persisted
+  settings surface, password/verification/reset token flow, and first OAuth2
+  path;
 - exact PocketBase admin API/export compatibility;
 - complete relation `expand` edge-case parity and relation permission fixtures;
 - complete realtime parity, including subscription options, SDK edge cases, and

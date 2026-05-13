@@ -544,6 +544,187 @@ fn superusers_manage_collections_and_bypass_record_rules() {
 }
 
 #[test]
+fn manages_settings_and_applies_batch_limits() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let public_defaults = app.handle(HttpRequest::new("GET", "/api/settings"));
+    assert_eq!(public_defaults.status, 200);
+    assert_eq!(public_defaults.body["meta"]["appName"], "Rusty Base");
+    assert_eq!(public_defaults.body["batch"]["maxRequests"], 50);
+
+    let superusers = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "_superusers",
+                "type": "auth",
+                "fields": [{"name": "email", "kind": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(superusers.status, 200);
+
+    let first_superuser = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/_superusers/records",
+            json!({
+                "id": "su_1",
+                "email": "root@example.com",
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(first_superuser.status, 200);
+
+    let blocked = app.handle(HttpRequest::new("GET", "/api/settings"));
+    assert_eq!(blocked.status, 403);
+
+    let login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/_superusers/auth-with-password",
+            json!({"identity": "root@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(login.status, 200);
+    let superuser_token = login.body["token"].as_str().unwrap().to_string();
+
+    let settings = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/settings",
+            json!({
+                "meta": {
+                    "appName": "Acme",
+                    "appURL": "https://example.com"
+                },
+                "batch": {
+                    "maxRequests": 1,
+                    "maxBodySize": 0
+                },
+                "smtp": {
+                    "enabled": true,
+                    "host": "smtp.example.com",
+                    "port": 2525,
+                    "password": "smtp-secret"
+                },
+                "s3": {
+                    "enabled": true,
+                    "bucket": "assets",
+                    "region": "auto",
+                    "endpoint": "https://s3.example.com",
+                    "accessKey": "access",
+                    "secret": "s3-secret"
+                }
+            }),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(settings.status, 200);
+    assert_eq!(settings.body["meta"]["appName"], "Acme");
+    assert_eq!(settings.body["meta"]["appURL"], "https://example.com");
+    assert_eq!(settings.body["batch"]["maxRequests"], 1);
+    assert_eq!(settings.body["smtp"]["password"], "******");
+    assert_eq!(settings.body["s3"]["secret"], "******");
+
+    let redacted_patch = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/settings?fields=smtp.password,s3.secret,batch.maxRequests",
+            json!({
+                "smtp": {"password": "******"},
+                "s3": {"secret": "******"},
+                "batch": {"maxRequests": 2}
+            }),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(redacted_patch.status, 200);
+    assert_eq!(redacted_patch.body["smtp"]["password"], "******");
+    assert_eq!(redacted_patch.body["s3"]["secret"], "******");
+    assert_eq!(redacted_patch.body["batch"]["maxRequests"], 2);
+    let stored_settings = app.store().get_settings().unwrap();
+    assert_eq!(stored_settings.smtp.password, "smtp-secret");
+    assert_eq!(stored_settings.s3.secret, "s3-secret");
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [{"name": "title", "kind": "text"}]
+            }),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(posts.status, 200);
+
+    let limited = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/settings",
+            json!({"batch": {"maxRequests": 1}}),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(limited.status, 200);
+
+    let too_many = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/batch",
+            json!({
+                "requests": [
+                    {
+                        "method": "POST",
+                        "url": "/api/collections/posts/records",
+                        "body": {"id": "post_1", "title": "One"}
+                    },
+                    {
+                        "method": "POST",
+                        "url": "/api/collections/posts/records",
+                        "body": {"id": "post_2", "title": "Two"}
+                    }
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(too_many.status, 400);
+    assert_eq!(
+        too_many.body["data"]["requests"]["code"],
+        "validation_max_items"
+    );
+
+    let disabled = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/settings",
+            json!({"batch": {"enabled": false}}),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(disabled.status, 200);
+
+    let disabled_batch =
+        app.handle(HttpRequest::json("POST", "/api/batch", json!({"requests": []})).unwrap());
+    assert_eq!(disabled_batch.status, 400);
+    assert_eq!(disabled_batch.body["message"], "Batch API is disabled.");
+}
+
+#[test]
 fn superusers_impersonate_auth_records_with_nonrenewable_tokens() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 

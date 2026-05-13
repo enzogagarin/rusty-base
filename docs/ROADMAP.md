@@ -252,10 +252,14 @@ Exit criteria:
   after the first superuser exists, and superuser auth bypasses record rules.
 - Added PocketBase-style paginated collection list output with collection
   metadata filtering, sorting, and response `fields` projection.
+- Added superuser-only `GET/PATCH /api/settings` with persisted
+  PocketBase-style meta/logs/batch/smtp/s3/backups/rate limit/trusted proxy
+  sections, secret redaction, and batch `enabled`/`maxRequests`/`maxBodySize`
+  enforcement.
 
 ## Next Sprint
 
-1. Expand superuser/admin API parity around settings-style endpoints and
+1. Expand superuser/admin API parity around settings test helper routes and
    collection management edge cases.
 2. Expand OAuth2 provider presets and harden callback validation around
    redirect URLs and provider-specific response edge cases.

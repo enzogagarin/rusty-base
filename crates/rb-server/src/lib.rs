@@ -33,11 +33,15 @@ const PASSWORD_RESET_TOKEN_TTL_MILLIS: u128 = 30 * 60 * 1000;
 const EMAIL_CHANGE_TOKEN_TTL_MILLIS: u128 = 30 * 60 * 1000;
 const OTP_TOKEN_TTL_MILLIS: u128 = 3 * 60 * 1000;
 const AUTH_FORM_VALIDATION_MESSAGE: &str = "An error occurred while validating the submitted data.";
+const SETTINGS_FORM_VALIDATION_MESSAGE: &str = "An error occurred while submitting the form.";
 const SUPERUSERS_COLLECTION: &str = "_superusers";
 const MAX_THUMB_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_THUMB_SOURCE_PIXELS: u64 = 16_000_000;
 const MAX_THUMB_EDGE: u32 = 2048;
 const REALTIME_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const DEFAULT_BATCH_MAX_REQUESTS: u64 = 50;
+const DEFAULT_BATCH_TIMEOUT_SECONDS: u64 = 3;
+const SETTINGS_SECRET_REDACTION: &str = "******";
 
 #[derive(Debug)]
 pub enum ServerError {
@@ -451,6 +455,233 @@ pub struct CollectionListOptions {
     pub fields: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettings {
+    #[serde(default)]
+    pub meta: AppMetaSettings,
+    #[serde(default)]
+    pub logs: LogSettings,
+    #[serde(default)]
+    pub batch: BatchSettings,
+    #[serde(default)]
+    pub smtp: SmtpSettings,
+    #[serde(default)]
+    pub s3: S3Settings,
+    #[serde(default)]
+    pub backups: BackupSettings,
+    #[serde(default)]
+    pub rate_limits: RateLimitSettings,
+    #[serde(default)]
+    pub trusted_proxy: TrustedProxySettings,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            meta: AppMetaSettings::default(),
+            logs: LogSettings::default(),
+            batch: BatchSettings::default(),
+            smtp: SmtpSettings::default(),
+            s3: S3Settings::default(),
+            backups: BackupSettings::default(),
+            rate_limits: RateLimitSettings::default(),
+            trusted_proxy: TrustedProxySettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppMetaSettings {
+    #[serde(default = "default_app_name")]
+    pub app_name: String,
+    #[serde(default, alias = "appUrl", rename = "appURL")]
+    pub app_url: String,
+    #[serde(default)]
+    pub sender_name: String,
+    #[serde(default)]
+    pub sender_address: String,
+    #[serde(default)]
+    pub hide_controls: bool,
+}
+
+impl Default for AppMetaSettings {
+    fn default() -> Self {
+        Self {
+            app_name: default_app_name(),
+            app_url: String::new(),
+            sender_name: String::new(),
+            sender_address: String::new(),
+            hide_controls: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogSettings {
+    #[serde(default = "default_log_max_days")]
+    pub max_days: u64,
+    #[serde(default)]
+    pub min_level: i64,
+    #[serde(default = "default_true")]
+    pub log_ip: bool,
+    #[serde(default)]
+    pub log_auth_id: bool,
+}
+
+impl Default for LogSettings {
+    fn default() -> Self {
+        Self {
+            max_days: default_log_max_days(),
+            min_level: 0,
+            log_ip: true,
+            log_auth_id: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchSettings {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_batch_max_requests")]
+    pub max_requests: u64,
+    #[serde(default = "default_batch_timeout")]
+    pub timeout: u64,
+    #[serde(default)]
+    pub max_body_size: u64,
+}
+
+impl Default for BatchSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_requests: DEFAULT_BATCH_MAX_REQUESTS,
+            timeout: DEFAULT_BATCH_TIMEOUT_SECONDS,
+            max_body_size: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SmtpSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_smtp_port")]
+    pub port: u64,
+    #[serde(default)]
+    pub host: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub password: String,
+    #[serde(default)]
+    pub auth_method: String,
+    #[serde(default = "default_true")]
+    pub tls: bool,
+    #[serde(default)]
+    pub local_name: String,
+}
+
+impl Default for SmtpSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_smtp_port(),
+            host: String::new(),
+            username: String::new(),
+            password: String::new(),
+            auth_method: String::new(),
+            tls: true,
+            local_name: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct S3Settings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub bucket: String,
+    #[serde(default)]
+    pub region: String,
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default)]
+    pub access_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub secret: String,
+    #[serde(default)]
+    pub force_path_style: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupSettings {
+    #[serde(default)]
+    pub cron: String,
+    #[serde(default = "default_backup_cron_max_keep")]
+    pub cron_max_keep: u64,
+    #[serde(default)]
+    pub s3: S3Settings,
+}
+
+impl Default for BackupSettings {
+    fn default() -> Self {
+        Self {
+            cron: String::new(),
+            cron_max_keep: default_backup_cron_max_keep(),
+            s3: S3Settings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RateLimitSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_rate_limit_rules")]
+    pub rules: Vec<RateLimitRule>,
+}
+
+impl Default for RateLimitSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            rules: default_rate_limit_rules(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RateLimitRule {
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub audience: String,
+    #[serde(default)]
+    pub duration: u64,
+    #[serde(default)]
+    pub max_requests: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustedProxySettings {
+    #[serde(default)]
+    pub headers: Vec<String>,
+    #[serde(default)]
+    pub use_leftmost_ip: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordList {
@@ -845,7 +1076,7 @@ impl ImpersonateRequest {
 }
 
 impl BatchRequestBody {
-    fn from_json(value: JsonValue) -> Result<Self, ServerError> {
+    fn from_json(value: JsonValue, max_requests: usize) -> Result<Self, ServerError> {
         let object = value.as_object().ok_or_else(|| {
             validation_error(
                 "Something went wrong while processing your request.",
@@ -862,12 +1093,12 @@ impl BatchRequestBody {
                 "Field 'requests' is required.",
             ));
         };
-        if requests.len() > 50 {
+        if requests.len() > max_requests {
             return Err(validation_error(
                 "Something went wrong while processing your request.",
                 "requests",
                 "validation_max_items",
-                "Batch requests cannot contain more than 50 items.",
+                format!("Batch requests cannot contain more than {max_requests} items."),
             ));
         }
 
@@ -1193,6 +1424,11 @@ impl Store {
                 created TEXT NOT NULL,
                 PRIMARY KEY (collection_name, record_id, filename)
             );
+            CREATE TABLE IF NOT EXISTS "_rb_settings" (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL,
+                updated TEXT NOT NULL
+            );
             "#,
         )?;
         ensure_auth_token_columns(&conn)?;
@@ -1257,6 +1493,54 @@ impl Store {
             conn.prepare(r#"SELECT schema_json FROM "_rb_collections" ORDER BY name ASC"#)?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+    }
+
+    pub fn get_settings(&self) -> Result<AppSettings, ServerError> {
+        let conn = self.connection()?;
+        let value = conn
+            .query_row(
+                r#"SELECT value FROM "_rb_settings" WHERE key = 'app' LIMIT 1"#,
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        let settings = match value {
+            Some(value) => serde_json::from_str(&value)?,
+            None => AppSettings::default(),
+        };
+        validate_app_settings(&settings)?;
+        Ok(settings)
+    }
+
+    pub fn update_settings(&self, patch: JsonValue) -> Result<AppSettings, ServerError> {
+        if !patch.is_object() {
+            return Err(validation_error(
+                SETTINGS_FORM_VALIDATION_MESSAGE,
+                "body",
+                "validation_invalid_body",
+                "Request body must be a JSON object.",
+            ));
+        }
+
+        let mut value = serde_json::to_value(self.get_settings()?)?;
+        merge_settings_patch(&mut value, &patch, &mut Vec::new());
+        let settings: AppSettings = serde_json::from_value(value)?;
+        validate_app_settings(&settings)?;
+
+        let now = now_timestamp();
+        let settings_json = serde_json::to_string(&settings)?;
+        let conn = self.connection()?;
+        conn.execute(
+            r#"
+            INSERT INTO "_rb_settings" (key, value, updated)
+            VALUES ('app', ?1, ?2)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated = excluded.updated
+            "#,
+            params![settings_json, now],
+        )?;
+
+        Ok(settings)
     }
 
     pub fn list_collection_page(
@@ -3307,6 +3591,21 @@ impl RustyBaseApp {
                 Ok(HttpResponse::json(204, JsonValue::Null))
             }
             ("POST", ["api", "batch"]) => self.handle_batch(request),
+            ("GET", ["api", "settings"]) => {
+                self.require_superuser_admin(&request)?;
+                let mut payload = settings_response_payload(self.store.get_settings()?)?;
+                let fields = field_options_from_query(&query)?;
+                project_json_response(&mut payload, &fields)?;
+                Ok(HttpResponse::json(200, payload))
+            }
+            ("PATCH", ["api", "settings"]) => {
+                self.require_superuser_admin(&request)?;
+                let body = json_body_or_empty(&request.body)?;
+                let mut payload = settings_response_payload(self.store.update_settings(body)?)?;
+                let fields = field_options_from_query(&query)?;
+                project_json_response(&mut payload, &fields)?;
+                Ok(HttpResponse::json(200, payload))
+            }
             ("POST", ["api", "files", "token"]) => {
                 let auth_token = bearer_token(&request)
                     .ok_or_else(|| ServerError::Forbidden("missing auth token".to_string()))?;
@@ -3674,7 +3973,28 @@ impl RustyBaseApp {
     }
 
     fn handle_batch(&self, request: HttpRequest) -> Result<HttpResponse, ServerError> {
-        let batch = BatchRequestBody::from_json(serde_json::from_slice(&request.body)?)?;
+        let settings = self.store.get_settings()?;
+        if !settings.batch.enabled {
+            return Err(ServerError::BadRequest(
+                "Batch API is disabled.".to_string(),
+            ));
+        }
+        if settings.batch.max_body_size > 0
+            && request.body.len() as u64 > settings.batch.max_body_size
+        {
+            return Err(validation_error(
+                "Something went wrong while processing your request.",
+                "body",
+                "validation_max_size",
+                format!(
+                    "Batch request body cannot exceed {} bytes.",
+                    settings.batch.max_body_size
+                ),
+            ));
+        }
+        let max_requests = usize::try_from(settings.batch.max_requests).unwrap_or(usize::MAX);
+        let batch =
+            BatchRequestBody::from_json(serde_json::from_slice(&request.body)?, max_requests)?;
         self.store.begin_batch_transaction()?;
 
         let mut responses = Vec::with_capacity(batch.requests.len());
@@ -6151,6 +6471,161 @@ fn validation_error(
     }
 }
 
+fn settings_response_payload(settings: AppSettings) -> Result<JsonValue, ServerError> {
+    let mut value = serde_json::to_value(settings)?;
+    redact_settings_secrets(&mut value);
+    Ok(value)
+}
+
+fn redact_settings_secrets(value: &mut JsonValue) {
+    redact_object_string(value, &["smtp", "password"]);
+    redact_object_string(value, &["s3", "secret"]);
+    redact_object_string(value, &["backups", "s3", "secret"]);
+}
+
+fn redact_object_string(value: &mut JsonValue, path: &[&str]) {
+    let Some((head, tail)) = path.split_first() else {
+        return;
+    };
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    if tail.is_empty() {
+        if object
+            .get(*head)
+            .and_then(JsonValue::as_str)
+            .is_some_and(|value| !value.is_empty())
+        {
+            object.insert(
+                (*head).to_string(),
+                JsonValue::String(SETTINGS_SECRET_REDACTION.to_string()),
+            );
+        }
+        return;
+    }
+
+    if let Some(child) = object.get_mut(*head) {
+        redact_object_string(child, tail);
+    }
+}
+
+fn merge_settings_patch(target: &mut JsonValue, patch: &JsonValue, path: &mut Vec<String>) {
+    if let (Some(target), Some(patch)) = (target.as_object_mut(), patch.as_object()) {
+        for (key, value) in patch {
+            path.push(key.clone());
+            if is_redacted_settings_secret(path, value) {
+                path.pop();
+                continue;
+            }
+
+            if let Some(existing) = target.get_mut(key) {
+                merge_settings_patch(existing, value, path);
+            } else {
+                target.insert(key.clone(), value.clone());
+            }
+            path.pop();
+        }
+    } else {
+        *target = patch.clone();
+    }
+}
+
+fn is_redacted_settings_secret(path: &[String], value: &JsonValue) -> bool {
+    value.as_str() == Some(SETTINGS_SECRET_REDACTION)
+        && path
+            .last()
+            .is_some_and(|field| matches!(field.as_str(), "password" | "secret"))
+}
+
+fn validate_app_settings(settings: &AppSettings) -> Result<(), ServerError> {
+    if settings.meta.app_name.trim().is_empty() {
+        return Err(settings_required("meta.appName"));
+    }
+    if settings.batch.max_requests == 0 {
+        return Err(settings_invalid_number(
+            "batch.maxRequests",
+            "Batch maxRequests must be greater than zero.",
+        ));
+    }
+    if settings.batch.timeout == 0 {
+        return Err(settings_invalid_number(
+            "batch.timeout",
+            "Batch timeout must be greater than zero.",
+        ));
+    }
+    if settings.smtp.enabled {
+        if settings.smtp.host.trim().is_empty() {
+            return Err(settings_required("smtp.host"));
+        }
+        if settings.smtp.port == 0 {
+            return Err(settings_invalid_number(
+                "smtp.port",
+                "SMTP port must be greater than zero.",
+            ));
+        }
+    }
+
+    validate_s3_settings("s3", &settings.s3)?;
+    validate_s3_settings("backups.s3", &settings.backups.s3)?;
+    for (index, rule) in settings.rate_limits.rules.iter().enumerate() {
+        if rule.label.trim().is_empty() {
+            return Err(settings_required(format!("rateLimits.rules.{index}.label")));
+        }
+        if rule.duration == 0 {
+            return Err(settings_invalid_number(
+                format!("rateLimits.rules.{index}.duration"),
+                "Rate limit duration must be greater than zero.",
+            ));
+        }
+        if rule.max_requests == 0 {
+            return Err(settings_invalid_number(
+                format!("rateLimits.rules.{index}.maxRequests"),
+                "Rate limit maxRequests must be greater than zero.",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_s3_settings(field: &str, settings: &S3Settings) -> Result<(), ServerError> {
+    if !settings.enabled {
+        return Ok(());
+    }
+
+    for (name, value) in [
+        ("bucket", settings.bucket.as_str()),
+        ("region", settings.region.as_str()),
+        ("endpoint", settings.endpoint.as_str()),
+        ("accessKey", settings.access_key.as_str()),
+        ("secret", settings.secret.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(settings_required(format!("{field}.{name}")));
+        }
+    }
+
+    Ok(())
+}
+
+fn settings_required(field: impl Into<String>) -> ServerError {
+    validation_error(
+        SETTINGS_FORM_VALIDATION_MESSAGE,
+        field,
+        "validation_required",
+        "Missing required value.",
+    )
+}
+
+fn settings_invalid_number(field: impl Into<String>, message: impl Into<String>) -> ServerError {
+    validation_error(
+        SETTINGS_FORM_VALIDATION_MESSAGE,
+        field,
+        "validation_invalid_number",
+        message,
+    )
+}
+
 fn ensure_auth_token_columns(conn: &Connection) -> Result<(), ServerError> {
     let mut stmt = conn.prepare(r#"PRAGMA table_info("_rb_auth_tokens")"#)?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -7990,6 +8465,59 @@ fn content_disposition_attachment(filename: &str) -> String {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn default_app_name() -> String {
+    "Rusty Base".to_string()
+}
+
+fn default_log_max_days() -> u64 {
+    7
+}
+
+fn default_batch_max_requests() -> u64 {
+    DEFAULT_BATCH_MAX_REQUESTS
+}
+
+fn default_batch_timeout() -> u64 {
+    DEFAULT_BATCH_TIMEOUT_SECONDS
+}
+
+fn default_smtp_port() -> u64 {
+    587
+}
+
+fn default_backup_cron_max_keep() -> u64 {
+    3
+}
+
+fn default_rate_limit_rules() -> Vec<RateLimitRule> {
+    vec![
+        RateLimitRule {
+            label: "*:auth".to_string(),
+            audience: String::new(),
+            duration: 3,
+            max_requests: 2,
+        },
+        RateLimitRule {
+            label: "*:create".to_string(),
+            audience: String::new(),
+            duration: 5,
+            max_requests: 20,
+        },
+        RateLimitRule {
+            label: "/api/batch".to_string(),
+            audience: String::new(),
+            duration: 1,
+            max_requests: 3,
+        },
+        RateLimitRule {
+            label: "/api/".to_string(),
+            audience: String::new(),
+            duration: 10,
+            max_requests: 300,
+        },
+    ]
 }
 
 fn default_true() -> bool {

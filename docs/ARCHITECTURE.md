@@ -99,7 +99,11 @@ Responsibility:
 - list records with PocketBase-style filtering, pagination, `skipTotal`,
   sorting, expand, and response projection;
 - execute JSON `/api/batch` record create/update/upsert/delete requests inside
-  one SQLite transaction;
+  one SQLite transaction while honoring persisted batch enablement and size
+  limits;
+- persist and expose the first PocketBase-style application settings surface
+  through superuser-only `GET/PATCH /api/settings`, including redacted SMTP/S3
+  secrets;
 - expose collection type scaffolds for admin UI style flows;
 - import collection metadata in bulk with optional deletion of missing
   collections and fields;
@@ -118,7 +122,8 @@ Non-responsibility:
 - its server-side `auth-logout` route is a Rusty Base extension rather than a
   PocketBase-compatible route;
 - it does not implement a broad OAuth provider matrix, a full admin API/admin
-  UI, admin UI OAuth setting flows, or full auth settings yet;
+  UI, settings test helper routes, admin UI OAuth setting flows, or full auth
+  settings yet;
 - it does not own full file field option parity, S3/local filesystem adapters,
   complete realtime parity, admin UI, protected-file edge parity, or migration
   compatibility yet.
