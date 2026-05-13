@@ -421,6 +421,7 @@ pub struct ListOptions {
     pub per_page: u64,
     pub filter: Option<String>,
     pub sort: Option<String>,
+    pub skip_total: bool,
     pub expand: Vec<String>,
     pub fields: Vec<String>,
     pub context: FilterContext,
@@ -433,6 +434,7 @@ impl Default for ListOptions {
             per_page: 30,
             filter: None,
             sort: None,
+            skip_total: false,
             expand: Vec::new(),
             fields: Vec::new(),
             context: FilterContext::default(),
@@ -454,8 +456,8 @@ pub struct CollectionListOptions {
 pub struct RecordList {
     pub page: u64,
     pub per_page: u64,
-    pub total_items: u64,
-    pub total_pages: u64,
+    pub total_items: i64,
+    pub total_pages: i64,
     pub items: Vec<JsonValue>,
 }
 
@@ -1244,8 +1246,8 @@ impl Store {
         let mut payload = json!(RecordList {
             page: options.page,
             per_page: options.per_page,
-            total_items,
-            total_pages,
+            total_items: total_items.min(i64::MAX as u64) as i64,
+            total_pages: total_pages.min(i64::MAX as u64) as i64,
             items,
         });
         project_json_response(&mut payload, &options.fields)?;
@@ -1664,12 +1666,16 @@ impl Store {
 
         let (total_items, mut items) = {
             let conn = self.connection()?;
-            let count_sql = format!("SELECT COUNT(*) FROM {table_sql}{where_sql}");
-            let total_items: u64 = conn.query_row(
-                &count_sql,
-                params_from_iter(predicate.params.iter()),
-                |row| row.get::<_, u64>(0),
-            )?;
+            let total_items = if options.skip_total {
+                -1
+            } else {
+                let count_sql = format!("SELECT COUNT(*) FROM {table_sql}{where_sql}");
+                conn.query_row(
+                    &count_sql,
+                    params_from_iter(predicate.params.iter()),
+                    |row| row.get::<_, i64>(0),
+                )?
+            };
 
             let list_sql = format!(
                 "SELECT id, data, created, updated FROM {table_sql}{where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?"
@@ -1693,10 +1699,13 @@ impl Store {
             project_record_responses(&mut items, &options.fields)?;
         }
 
-        let total_pages = if total_items == 0 {
+        let total_pages = if options.skip_total {
+            -1
+        } else if total_items == 0 {
             0
         } else {
-            total_items.div_ceil(options.per_page)
+            let per_page = options.per_page as i64;
+            (total_items + per_page - 1) / per_page
         };
 
         Ok(RecordList {
@@ -4267,6 +4276,7 @@ fn list_options_from_query(
         per_page,
         filter: query.get("filter").cloned(),
         sort: query.get("sort").cloned(),
+        skip_total: truthy_query_value(query, "skipTotal"),
         expand: expand_options_from_query(query)?,
         fields: field_options_from_query(query)?,
         context,

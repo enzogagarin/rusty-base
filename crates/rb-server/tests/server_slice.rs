@@ -2178,6 +2178,19 @@ fn handles_pocketbase_style_records_http_routes() {
     assert_eq!(sorted_asc.body["items"][0]["title"], "Lower Score");
     assert_eq!(sorted_asc.body["items"][1]["title"], "Rusty Base");
 
+    let skipped_total = app.handle(
+        HttpRequest::new(
+            "GET",
+            "/api/collections/posts/records?filter=published%20%3D%20true&sort=score&skipTotal=true",
+        )
+        .with_header("X-RB-Auth-ID", "user_1"),
+    );
+
+    assert_eq!(skipped_total.status, 200);
+    assert_eq!(skipped_total.body["totalItems"], -1);
+    assert_eq!(skipped_total.body["totalPages"], -1);
+    assert_eq!(skipped_total.body["items"].as_array().unwrap().len(), 2);
+
     let invalid_sort = app.handle(
         HttpRequest::new("GET", "/api/collections/posts/records?sort=title%3Bdrop")
             .with_header("X-RB-Auth-ID", "user_1"),

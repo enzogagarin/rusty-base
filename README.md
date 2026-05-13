@@ -325,6 +325,8 @@ The first server slice supports:
   delete-by-name, and zero-value clearing on file fields;
 - PocketBase-like list response shape with `page`, `perPage`, `totalItems`,
   `totalPages`, and `items`;
+- record list `skipTotal` support to skip count queries and return `-1`
+  counters;
 - record list `sort` support for system fields, collection fields, nested JSON
   paths, `@random`, and `@rowid`;
 - first `?expand=relation,nested.relation` support for relation record
