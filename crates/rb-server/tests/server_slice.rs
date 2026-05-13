@@ -3291,6 +3291,107 @@ fn manages_collections_by_id_and_projects_collection_responses() {
 }
 
 #[test]
+fn persists_pocketbase_style_field_options() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let created = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {
+                        "id": "title_field",
+                        "name": "title",
+                        "type": "text",
+                        "required": true,
+                        "hidden": true,
+                        "presentable": true,
+                        "primaryKey": false,
+                        "min": 3,
+                        "max": 80,
+                        "pattern": "^[A-Z].+",
+                        "autogeneratePattern": "[A-Z]{4}"
+                    },
+                    {
+                        "name": "published",
+                        "kind": "bool",
+                        "required": true
+                    }
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created.status, 200);
+    assert_eq!(created.body["fields"][0]["id"], "title_field");
+    assert_eq!(created.body["fields"][0]["type"], "text");
+    assert_eq!(created.body["fields"][0]["required"], true);
+    assert_eq!(created.body["fields"][0]["hidden"], true);
+    assert_eq!(created.body["fields"][0]["presentable"], true);
+    assert_eq!(created.body["fields"][0]["primaryKey"], false);
+    assert_eq!(created.body["fields"][0]["min"], 3);
+    assert_eq!(created.body["fields"][0]["max"], 80);
+    assert_eq!(created.body["fields"][0]["pattern"], "^[A-Z].+");
+    assert_eq!(created.body["fields"][0]["autogeneratePattern"], "[A-Z]{4}");
+    assert!(created.body["fields"][0].get("kind").is_none());
+    assert_eq!(created.body["fields"][1]["required"], true);
+    assert!(created.body["fields"][1].get("min").is_none());
+
+    let patched = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts",
+            json!({
+                "fields": [
+                    {
+                        "name": "title",
+                        "type": "text",
+                        "required": true,
+                        "min": 5,
+                        "max": 100
+                    }
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(patched.status, 200);
+    assert_eq!(patched.body["fields"][0]["id"], "title_field");
+    assert_eq!(patched.body["fields"][0]["min"], 5);
+    assert_eq!(patched.body["fields"][0]["max"], 100);
+    assert_eq!(patched.body["fields"][0]["pattern"], "");
+    assert_eq!(patched.body["fields"][0]["autogeneratePattern"], "");
+
+    let invalid_range = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "bad_ranges",
+                "fields": [{"name": "title", "type": "text", "min": 10, "max": 2}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_range.status, 400);
+
+    let invalid_kind = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "bad_kind",
+                "fields": [{"name": "published", "type": "bool", "pattern": "yes"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_kind.status, 400);
+}
+
+#[test]
 fn truncates_and_deletes_collections() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 

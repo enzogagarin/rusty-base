@@ -300,6 +300,9 @@ The first server slice supports:
   responses;
 - persisted collection field IDs with PocketBase-style `type` field metadata
   output while still accepting legacy Rusty Base `kind` input;
+- first common/text field option metadata parity for `required`, `hidden`,
+  `system`, `presentable`, `primaryKey`, `min`, `max`, `pattern`, and
+  `autogeneratePattern`;
 - `GET /api/collections/meta/scaffolds` for PocketBase-style collection type
   scaffolds;
 - `GET /api/collections/meta/export` as a Rusty Base import-ready metadata

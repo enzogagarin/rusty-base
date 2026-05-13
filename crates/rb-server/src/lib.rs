@@ -352,10 +352,28 @@ pub struct CollectionField {
     pub max_select: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autogenerate_pattern: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mime_types: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub thumbs: Vec<String>,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub system: bool,
+    #[serde(default)]
+    pub hidden: bool,
+    #[serde(default)]
+    pub presentable: bool,
+    #[serde(default)]
+    pub primary_key: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub protected: bool,
 }
@@ -369,8 +387,17 @@ impl CollectionField {
             collection: None,
             max_select: None,
             max_size: None,
+            min: None,
+            max: None,
+            pattern: None,
+            autogenerate_pattern: None,
             mime_types: Vec::new(),
             thumbs: Vec::new(),
+            required: false,
+            system: false,
+            hidden: false,
+            presentable: false,
+            primary_key: false,
             protected: false,
         }
     }
@@ -383,8 +410,17 @@ impl CollectionField {
             collection: Some(collection.into()),
             max_select: None,
             max_size: None,
+            min: None,
+            max: None,
+            pattern: None,
+            autogenerate_pattern: None,
             mime_types: Vec::new(),
             thumbs: Vec::new(),
+            required: false,
+            system: false,
+            hidden: false,
+            presentable: false,
+            primary_key: false,
             protected: false,
         }
     }
@@ -7052,6 +7088,16 @@ fn normalize_collection_fields(fields: &mut [CollectionField]) {
             .filter(|id| !id.is_empty())
             .map(str::to_string)
             .or_else(|| Some(generate_field_id(field.kind)));
+
+        if matches!(
+            field.kind,
+            CollectionFieldKind::Text | CollectionFieldKind::Email
+        ) {
+            field.min.get_or_insert(0);
+            field.max.get_or_insert(0);
+            field.pattern.get_or_insert_with(String::new);
+            field.autogenerate_pattern.get_or_insert_with(String::new);
+        }
     }
 }
 
@@ -7297,12 +7343,35 @@ fn collection_field_export_value(field: CollectionField) -> JsonValue {
     if let Some(max_size) = field.max_size {
         value.insert("maxSize".to_string(), json!(max_size));
     }
+    if let Some(min) = field.min {
+        value.insert("min".to_string(), json!(min));
+    }
+    if let Some(max) = field.max {
+        value.insert("max".to_string(), json!(max));
+    }
+    if let Some(pattern) = field.pattern {
+        value.insert("pattern".to_string(), JsonValue::String(pattern));
+    }
+    if let Some(autogenerate_pattern) = field.autogenerate_pattern {
+        value.insert(
+            "autogeneratePattern".to_string(),
+            JsonValue::String(autogenerate_pattern),
+        );
+    }
     if !field.mime_types.is_empty() {
         value.insert("mimeTypes".to_string(), json!(field.mime_types));
     }
     if !field.thumbs.is_empty() {
         value.insert("thumbs".to_string(), json!(field.thumbs));
     }
+    value.insert("required".to_string(), JsonValue::Bool(field.required));
+    value.insert("system".to_string(), JsonValue::Bool(field.system));
+    value.insert("hidden".to_string(), JsonValue::Bool(field.hidden));
+    value.insert(
+        "presentable".to_string(),
+        JsonValue::Bool(field.presentable),
+    );
+    value.insert("primaryKey".to_string(), JsonValue::Bool(field.primary_key));
     if field.protected {
         value.insert("protected".to_string(), JsonValue::Bool(true));
     }
@@ -7465,6 +7534,27 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
                 "field '{}' declares file options but is not a file field",
                 field.name
             )));
+        }
+        if field.kind != CollectionFieldKind::Text
+            && field.kind != CollectionFieldKind::Email
+            && (field.min.is_some()
+                || field.max.is_some()
+                || field.pattern.is_some()
+                || field.autogenerate_pattern.is_some()
+                || field.primary_key)
+        {
+            return Err(ServerError::BadRequest(format!(
+                "field '{}' declares text options but is not a text-like field",
+                field.name
+            )));
+        }
+        if let (Some(min), Some(max)) = (field.min, field.max) {
+            if max > 0 && min > max {
+                return Err(ServerError::BadRequest(format!(
+                    "field '{}' min cannot be greater than max",
+                    field.name
+                )));
+            }
         }
         if field.kind == CollectionFieldKind::File {
             for thumb in &field.thumbs {

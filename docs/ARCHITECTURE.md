@@ -100,6 +100,9 @@ Responsibility:
   or name;
 - persist collection field IDs and return PocketBase-style `type` metadata
   while preserving `kind` as accepted legacy input;
+- preserve first common/text field option metadata used by the admin UI,
+  including visibility, required/presentable, text bounds, pattern, and
+  autogeneration settings;
 - list records with PocketBase-style filtering, pagination, `skipTotal`,
   sorting, expand, and response projection;
 - execute JSON `/api/batch` record create/update/upsert/delete requests inside
