@@ -4094,6 +4094,130 @@ fn enforces_json_field_options_on_records() {
 }
 
 #[test]
+fn applies_number_select_and_relation_record_modifiers() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let tags = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "tags",
+                "fields": [{"name": "label", "type": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(tags.status, 200);
+    for record in [
+        json!({"id": "tag_1", "label": "rust"}),
+        json!({"id": "tag_2", "label": "sqlite"}),
+    ] {
+        let response =
+            app.handle(HttpRequest::json("POST", "/api/collections/tags/records", record).unwrap());
+        assert_eq!(response.status, 200);
+    }
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "score", "type": "number"},
+                    {"name": "roles", "type": "select", "values": ["reader", "writer", "admin", "owner"], "maxSelect": 3},
+                    {"name": "tags", "type": "relation", "collection": "tags", "maxSelect": 3}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(posts.status, 200);
+
+    let created = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({
+                "id": "post_1",
+                "score+": 2,
+                "+roles": ["writer"],
+                "roles+": "reader",
+                "tags+": "tag_1"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created.status, 200);
+    assert_eq!(created.body["score"], 2.0);
+    assert_eq!(created.body["roles"], json!(["writer", "reader"]));
+    assert_eq!(created.body["tags"], json!(["tag_1"]));
+
+    let updated = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1",
+            json!({
+                "score+": 3,
+                "score-": 1,
+                "roles-": "reader",
+                "roles+": "admin",
+                "+tags": "tag_2",
+                "tags-": "tag_1"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(updated.status, 200);
+    assert_eq!(updated.body["score"], 4.0);
+    assert_eq!(updated.body["roles"], json!(["writer", "admin"]));
+    assert_eq!(updated.body["tags"], json!(["tag_2"]));
+
+    let invalid_number = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1",
+            json!({"score+": "bad"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_number.status, 400);
+    assert_eq!(
+        invalid_number.body["data"]["score+"]["code"],
+        "validation_invalid_modifier"
+    );
+
+    let too_many_roles = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1",
+            json!({"roles+": ["reader", "owner"]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(too_many_roles.status, 400);
+    assert_eq!(
+        too_many_roles.body["data"]["roles"]["code"],
+        "validation_max_select"
+    );
+
+    let missing_relation = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_1",
+            json!({"tags+": "tag_missing"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(missing_relation.status, 400);
+    assert_eq!(
+        missing_relation.body["data"]["tags"]["code"],
+        "validation_invalid_relation"
+    );
+}
+
+#[test]
 fn truncates_and_deletes_collections() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 

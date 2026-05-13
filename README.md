@@ -309,6 +309,8 @@ The first server slice supports:
   `values`/`maxSelect`, JSON required/`maxSize`, relation `maxSelect`, and
   relation target existence, evaluated against the final record state on
   updates;
+- PocketBase-style record value modifiers for number add/subtract and
+  multi-select/relation append, prepend, and remove operations;
 - `GET /api/collections/meta/scaffolds` for PocketBase-style collection type
   scaffolds;
 - `GET /api/collections/meta/export` as a Rusty Base import-ready metadata
@@ -343,6 +345,7 @@ The first server slice supports:
 - first file-field `maxSize` and `mimeTypes` upload validation;
 - PocketBase-style uploaded-file modifiers for replace, append, prepend,
   delete-by-name, and zero-value clearing on file fields;
+- PocketBase-style number, select, and relation record value modifiers;
 - PocketBase-like list response shape with `page`, `perPage`, `totalItems`,
   `totalPages`, and `items`;
 - record list `skipTotal` support to skip count queries and return `-1`

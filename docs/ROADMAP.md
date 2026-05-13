@@ -229,6 +229,8 @@ Exit criteria:
   `WxHf`, `0xH`, `Wx0`).
 - Added file-field option validation for `maxSize`, `mimeTypes`, and configured
   `thumbs` so thumbnail requests only generate declared sizes.
+- Added PocketBase-style record value modifiers for number add/subtract and
+  multi-select/relation append, prepend, and remove operations.
 - Added the first realtime MVP: `GET /api/realtime` SSE connect,
   `POST /api/realtime` subscriptions, and record create/update/delete event
   delivery filtered through collection `listRule` or record `viewRule`.

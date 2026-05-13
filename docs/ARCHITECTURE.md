@@ -108,6 +108,9 @@ Responsibility:
   `values`/`maxSelect`, JSON required/size rules, relation `maxSelect`, and
   relation target existence for record create/update against the final stored
   record shape;
+- apply first record value modifiers for number add/subtract and multi-select/
+  relation append, prepend, and remove operations before rule and validation
+  checks;
 - list records with PocketBase-style filtering, pagination, `skipTotal`,
   sorting, expand, and response projection;
 - execute JSON `/api/batch` record create/update/upsert/delete requests inside
