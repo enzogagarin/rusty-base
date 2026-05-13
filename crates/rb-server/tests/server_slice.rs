@@ -1085,6 +1085,60 @@ fn expands_single_multi_and_nested_relation_records() {
     assert_eq!(updated.status, 200);
     assert_eq!(updated.body["title"], "Rusty Base Expanded");
     assert_eq!(updated.body["expand"]["author"]["name"], "Ada");
+
+    let projected_list = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts/records?expand=author.profile,tags&fields=*,expand.author.name,expand.tags.label",
+    ));
+    assert_eq!(projected_list.status, 200);
+    assert_eq!(projected_list.body["items"][0]["id"], "post_1");
+    assert_eq!(
+        projected_list.body["items"][0]["expand"]["author"]["name"],
+        "Ada"
+    );
+    assert!(projected_list.body["items"][0]["expand"]["author"]
+        .get("collectionName")
+        .is_none());
+    assert!(projected_list.body["items"][0]["expand"]["author"]
+        .get("expand")
+        .is_none());
+    assert_eq!(
+        projected_list.body["items"][0]["expand"]["tags"][0]["label"],
+        "rust"
+    );
+    assert!(projected_list.body["items"][0]["expand"]["tags"][0]
+        .get("id")
+        .is_none());
+
+    let projected_record = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts/records/post_1?expand=author.profile&fields=title,expand.author.name,expand.author.expand.profile.bio",
+    ));
+    assert_eq!(projected_record.status, 200);
+    assert_eq!(projected_record.body["title"], "Rusty Base Expanded");
+    assert!(projected_record.body.get("id").is_none());
+    assert_eq!(projected_record.body["expand"]["author"]["name"], "Ada");
+    assert_eq!(
+        projected_record.body["expand"]["author"]["expand"]["profile"]["bio"],
+        "Rust writer"
+    );
+
+    let created_projected = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records?fields=title",
+            json!({
+                "id": "post_2",
+                "title": "Only Title",
+                "author": "author_1",
+                "tags": ["tag_rust"]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created_projected.status, 200);
+    assert_eq!(created_projected.body["title"], "Only Title");
+    assert!(created_projected.body.get("id").is_none());
 }
 
 #[test]

@@ -198,6 +198,8 @@ Exit criteria:
   export helper.
 - Added first relation `expand` support in `rb-server` responses, including
   single, multi, and nested relation expansion.
+- Added first `fields` response projection support for records and expanded
+  relation payloads.
 
 ## Next Sprint
 
@@ -207,4 +209,4 @@ Exit criteria:
    examples.
 4. Expand PocketBase-compatible relation-edge and uploaded-file modifier
    fixtures.
-5. Add `fields` response projection for base records and expanded relations.
+5. Add auth response `fields` support and tighter relation view-rule parity.

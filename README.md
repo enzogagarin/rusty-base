@@ -304,6 +304,8 @@ The first server slice supports:
   `totalPages`, and `items`;
 - first `?expand=relation,nested.relation` support for relation record
   responses;
+- first `?fields=...` response projection support for records and expanded
+  relations, including `*` and nested paths such as `expand.author.name`;
 - PocketBase-like error response shape with `code`, `message`, and `data`;
 - field-level validation `data` for the first auth and record form failures;
 - list/view/create/update/delete rule predicates and client filter predicates
@@ -341,7 +343,8 @@ Not implemented yet:
 - full PocketBase auth provider/settings parity beyond the current password-token
   flow;
 - exact PocketBase admin API/export compatibility;
-- complete relation `expand`, `fields`, and relation permission parity;
+- complete relation `expand`, auth response `fields`, and relation permission
+  parity;
 - files, realtime, and admin UI;
 - Go FFI bindings;
 - `cargo-fuzz` corpus and CI fuzz target;

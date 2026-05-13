@@ -237,6 +237,7 @@ pub struct ListOptions {
     pub per_page: u64,
     pub filter: Option<String>,
     pub expand: Vec<String>,
+    pub fields: Vec<String>,
     pub context: FilterContext,
 }
 
@@ -247,6 +248,7 @@ impl Default for ListOptions {
             per_page: 30,
             filter: None,
             expand: Vec::new(),
+            fields: Vec::new(),
             context: FilterContext::default(),
         }
     }
@@ -772,6 +774,9 @@ impl Store {
 
         if !options.expand.is_empty() {
             self.expand_records(&collection, &mut items, &options.expand, &options.context)?;
+        }
+        if !options.fields.is_empty() {
+            project_record_responses(&mut items, &options.fields)?;
         }
 
         let total_pages = if total_items == 0 {
@@ -1413,6 +1418,8 @@ impl RustyBaseApp {
                 let expands = expand_options_from_query(&query)?;
                 self.store
                     .expand_record_response(collection, &mut record, &expands, &context)?;
+                let fields = field_options_from_query(&query)?;
+                project_record_response(&mut record, &fields)?;
                 Ok(HttpResponse::json(200, record))
             }
             ("GET", ["api", "collections", collection, "records", id]) => {
@@ -1421,6 +1428,8 @@ impl RustyBaseApp {
                 let expands = expand_options_from_query(&query)?;
                 self.store
                     .expand_record_response(collection, &mut record, &expands, &context)?;
+                let fields = field_options_from_query(&query)?;
+                project_record_response(&mut record, &fields)?;
                 Ok(HttpResponse::json(200, record))
             }
             ("PATCH", ["api", "collections", collection, "records", id]) => {
@@ -1435,6 +1444,8 @@ impl RustyBaseApp {
                 let expands = expand_options_from_query(&query)?;
                 self.store
                     .expand_record_response(collection, &mut record, &expands, &context)?;
+                let fields = field_options_from_query(&query)?;
+                project_record_response(&mut record, &fields)?;
                 Ok(HttpResponse::json(200, record))
             }
             ("DELETE", ["api", "collections", collection, "records", id]) => {
@@ -1822,8 +1833,42 @@ fn list_options_from_query(
         per_page,
         filter: query.get("filter").cloned(),
         expand: expand_options_from_query(query)?,
+        fields: field_options_from_query(query)?,
         context,
     })
+}
+
+fn field_options_from_query(query: &HashMap<String, String>) -> Result<Vec<String>, ServerError> {
+    let Some(fields) = query.get("fields") else {
+        return Ok(Vec::new());
+    };
+
+    let mut projections = Vec::new();
+    for path in fields
+        .split(',')
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    {
+        validate_field_projection_path(path)?;
+        if !projections.iter().any(|existing| existing == path) {
+            projections.push(path.to_string());
+        }
+    }
+
+    Ok(projections)
+}
+
+fn validate_field_projection_path(path: &str) -> Result<(), ServerError> {
+    if path
+        .split('.')
+        .any(|part| part != "*" && !is_safe_identifier_part(part))
+    {
+        return Err(ServerError::BadRequest(format!(
+            "invalid fields path '{path}'"
+        )));
+    }
+
+    Ok(())
 }
 
 fn expand_options_from_query(query: &HashMap<String, String>) -> Result<Vec<String>, ServerError> {
@@ -1873,6 +1918,139 @@ fn group_expand_paths(expands: &[String]) -> HashMap<String, Vec<String>> {
     }
 
     grouped
+}
+
+fn project_record_responses(
+    records: &mut [JsonValue],
+    fields: &[String],
+) -> Result<(), ServerError> {
+    for record in records {
+        project_record_response(record, fields)?;
+    }
+
+    Ok(())
+}
+
+fn project_record_response(record: &mut JsonValue, fields: &[String]) -> Result<(), ServerError> {
+    if fields.is_empty() {
+        return Ok(());
+    }
+
+    let source = record.clone();
+    let mut projected = Map::new();
+    let has_expand_projection = fields
+        .iter()
+        .any(|field| field == "expand" || field.starts_with("expand."));
+
+    for field in fields {
+        let parts = field.split('.').collect::<Vec<_>>();
+        project_field_path(&source, &mut projected, &parts, true, has_expand_projection);
+    }
+
+    *record = JsonValue::Object(projected);
+    Ok(())
+}
+
+fn project_field_path(
+    source: &JsonValue,
+    target: &mut Map<String, JsonValue>,
+    parts: &[&str],
+    at_root: bool,
+    has_expand_projection: bool,
+) {
+    let Some((head, tail)) = parts.split_first() else {
+        return;
+    };
+    let Some(source_object) = source.as_object() else {
+        return;
+    };
+
+    if *head == "*" {
+        for (key, value) in source_object {
+            if at_root && has_expand_projection && key == "expand" {
+                continue;
+            }
+
+            let projected = if tail.is_empty() {
+                Some(value.clone())
+            } else {
+                project_value_path(value, tail, has_expand_projection)
+            };
+            if let Some(projected) = projected {
+                merge_projected_value(target, key, projected);
+            }
+        }
+        return;
+    }
+
+    let Some(value) = source_object.get(*head) else {
+        return;
+    };
+    let projected = if tail.is_empty() {
+        Some(value.clone())
+    } else {
+        project_value_path(value, tail, has_expand_projection)
+    };
+    if let Some(projected) = projected {
+        merge_projected_value(target, head, projected);
+    }
+}
+
+fn project_value_path(
+    source: &JsonValue,
+    parts: &[&str],
+    has_expand_projection: bool,
+) -> Option<JsonValue> {
+    if parts.is_empty() {
+        return Some(source.clone());
+    }
+
+    if source.is_object() {
+        let mut projected = Map::new();
+        project_field_path(source, &mut projected, parts, false, has_expand_projection);
+        return (!projected.is_empty()).then_some(JsonValue::Object(projected));
+    }
+
+    if let Some(array) = source.as_array() {
+        return Some(JsonValue::Array(
+            array
+                .iter()
+                .filter_map(|value| project_value_path(value, parts, has_expand_projection))
+                .collect(),
+        ));
+    }
+
+    None
+}
+
+fn merge_projected_value(target: &mut Map<String, JsonValue>, key: &str, value: JsonValue) {
+    if let Some(existing) = target.get_mut(key) {
+        merge_json(existing, value);
+    } else {
+        target.insert(key.to_string(), value);
+    }
+}
+
+fn merge_json(existing: &mut JsonValue, incoming: JsonValue) {
+    match (existing, incoming) {
+        (JsonValue::Object(existing), JsonValue::Object(incoming)) => {
+            for (key, value) in incoming {
+                merge_projected_value(existing, &key, value);
+            }
+        }
+        (JsonValue::Array(existing), JsonValue::Array(incoming)) => {
+            for (index, value) in incoming.into_iter().enumerate() {
+                if let Some(existing) = existing.get_mut(index) {
+                    merge_json(existing, value);
+                } else {
+                    existing.push(value);
+                }
+            }
+        }
+        (existing, incoming) => {
+            *existing = incoming;
+        }
+    }
 }
 
 fn parse_u64_query(

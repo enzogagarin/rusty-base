@@ -67,6 +67,8 @@ Responsibility:
 - export import-ready collection metadata through a Rusty Base helper route;
 - expand first-level and nested relation records into the PocketBase-style
   `expand` response object;
+- project record and expanded relation responses with first-pass `fields`
+  query support;
 - translate collection schemas into `rb-filter-engine` field resolvers;
 - apply list/view/create/update/delete filters with request context.
 
