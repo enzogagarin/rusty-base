@@ -256,11 +256,14 @@ Exit criteria:
   PocketBase-style meta/logs/batch/smtp/s3/backups/rate limit/trusted proxy
   sections, secret redaction, and batch `enabled`/`maxRequests`/`maxBodySize`
   enforcement.
+- Added persisted collection IDs, collection metadata lookup/update/truncate/
+  delete by ID or name, collection `id` filtering/sorting, and `fields`
+  projection on collection create/view/update responses.
 
 ## Next Sprint
 
 1. Expand superuser/admin API parity around settings test helper routes and
-   collection management edge cases.
+   deeper collection management edge cases.
 2. Expand OAuth2 provider presets and harden callback validation around
    redirect URLs and provider-specific response edge cases.
 3. Expand compatibility fixtures around placeholder-like wildcard cases.

@@ -295,6 +295,9 @@ The first server slice supports:
 - per-collection record tables with JSON record data;
 - `GET/POST /api/collections`, with collection list pagination, filtering,
   sorting, and response `fields` projection;
+- persisted collection IDs with collection metadata lookup/update/truncate/delete
+  by either ID or name, plus `fields` projection on create/view/update
+  responses;
 - `GET /api/collections/meta/scaffolds` for PocketBase-style collection type
   scaffolds;
 - `GET /api/collections/meta/export` as a Rusty Base import-ready metadata

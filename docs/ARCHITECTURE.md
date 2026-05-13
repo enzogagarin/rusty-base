@@ -96,6 +96,8 @@ Responsibility:
 - update collection metadata and rename record tables transactionally;
 - list collection metadata with PocketBase-style pagination, sorting, filtering,
   and response projection;
+- persist collection IDs and resolve collection management routes by either ID
+  or name;
 - list records with PocketBase-style filtering, pagination, `skipTotal`,
   sorting, expand, and response projection;
 - execute JSON `/api/batch` record create/update/upsert/delete requests inside

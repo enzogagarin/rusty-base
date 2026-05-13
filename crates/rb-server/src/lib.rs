@@ -99,6 +99,8 @@ impl From<io::Error> for ServerError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollectionConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub name: String,
     #[serde(default, rename = "type")]
     pub collection_type: CollectionType,
@@ -141,6 +143,7 @@ pub struct CollectionConfig {
 impl CollectionConfig {
     pub fn new(name: impl Into<String>, fields: impl IntoIterator<Item = CollectionField>) -> Self {
         Self {
+            id: None,
             name: name.into(),
             collection_type: CollectionType::Base,
             fields: fields.into_iter().collect(),
@@ -1447,6 +1450,10 @@ impl Store {
         let table = record_table_name(&collection.name)?;
         let table_sql = quote_identifier(&table);
         let conn = self.connection()?;
+        ensure_collection_identifier_available(&conn, &collection.name, None)?;
+        if let Some(id) = collection.id.as_deref() {
+            ensure_collection_identifier_available(&conn, id, None)?;
+        }
 
         conn.execute(
             r#"
@@ -1473,11 +1480,19 @@ impl Store {
     }
 
     pub fn get_collection(&self, name: &str) -> Result<CollectionConfig, ServerError> {
-        validate_collection_name(name)?;
+        validate_collection_identifier(name)?;
         let conn = self.connection()?;
         let schema_json = conn
             .query_row(
-                r#"SELECT schema_json FROM "_rb_collections" WHERE name = ?1"#,
+                &format!(
+                    r#"
+                    SELECT schema_json
+                    FROM "_rb_collections"
+                    WHERE name = ?1 OR {} = ?1
+                    LIMIT 1
+                    "#,
+                    collection_id_sql()
+                ),
                 params![name],
                 |row| row.get::<_, String>(0),
             )
@@ -1485,6 +1500,41 @@ impl Store {
             .ok_or_else(|| ServerError::NotFound(format!("collection '{name}' not found")))?;
 
         Ok(serde_json::from_str(&schema_json)?)
+    }
+
+    pub fn get_collection_response(
+        &self,
+        identifier: &str,
+        fields: &[String],
+    ) -> Result<JsonValue, ServerError> {
+        validate_collection_identifier(identifier)?;
+        let conn = self.connection()?;
+        let (name, schema_json, created, updated) = conn
+            .query_row(
+                &format!(
+                    r#"
+                    SELECT name, schema_json, created, updated
+                    FROM "_rb_collections"
+                    WHERE name = ?1 OR {} = ?1
+                    LIMIT 1
+                    "#,
+                    collection_id_sql()
+                ),
+                params![identifier],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| ServerError::NotFound(format!("collection '{identifier}' not found")))?;
+        let mut payload = collection_row_to_value(name, schema_json, created, updated)?;
+        project_json_response(&mut payload, fields)?;
+        Ok(payload)
     }
 
     pub fn list_collections(&self) -> Result<Vec<CollectionConfig>, ServerError> {
@@ -1624,18 +1674,18 @@ impl Store {
 
     pub fn update_collection(
         &self,
-        name: &str,
+        identifier: &str,
         patch: CollectionPatch,
     ) -> Result<CollectionConfig, ServerError> {
-        validate_collection_name(name)?;
-        let mut collection = self.get_collection(name)?;
+        validate_collection_identifier(identifier)?;
+        let mut collection = self.get_collection(identifier)?;
+        let old_name = collection.name.clone();
         apply_collection_patch(&mut collection, patch);
         normalize_collection(&mut collection);
         validate_collection(&collection)?;
 
-        let old_name = name;
         let new_name = collection.name.clone();
-        let old_table = record_table_name(old_name)?;
+        let old_table = record_table_name(&old_name)?;
         let new_table = record_table_name(&new_name)?;
         let schema_json = serde_json::to_string(&collection)?;
         let now = now_timestamp();
@@ -1643,19 +1693,7 @@ impl Store {
         let tx = conn.transaction()?;
 
         if old_name != new_name {
-            let name_taken = tx
-                .query_row(
-                    r#"SELECT 1 FROM "_rb_collections" WHERE name = ?1 LIMIT 1"#,
-                    params![&new_name],
-                    |row| row.get::<_, i64>(0),
-                )
-                .optional()?
-                .is_some();
-            if name_taken {
-                return Err(ServerError::BadRequest(format!(
-                    "collection '{new_name}' already exists"
-                )));
-            }
+            ensure_collection_identifier_available_tx(&tx, &new_name, Some(&old_name))?;
 
             let old_table_sql = quote_identifier(&old_table);
             let new_table_sql = quote_identifier(&new_table);
@@ -1665,23 +1703,23 @@ impl Store {
             )?;
             tx.execute(
                 r#"UPDATE "_rb_auth_tokens" SET collection_name = ?1 WHERE collection_name = ?2"#,
-                params![&new_name, old_name],
+                params![&new_name, &old_name],
             )?;
             tx.execute(
                 r#"UPDATE "_rb_auth_action_tokens" SET collection_name = ?1 WHERE collection_name = ?2"#,
-                params![&new_name, old_name],
+                params![&new_name, &old_name],
             )?;
             tx.execute(
                 r#"UPDATE "_rb_auth_external_accounts" SET collection_name = ?1 WHERE collection_name = ?2"#,
-                params![&new_name, old_name],
+                params![&new_name, &old_name],
             )?;
             tx.execute(
                 r#"UPDATE "_rb_file_tokens" SET collection_name = ?1 WHERE collection_name = ?2"#,
-                params![&new_name, old_name],
+                params![&new_name, &old_name],
             )?;
             tx.execute(
                 r#"UPDATE "_rb_files" SET collection_name = ?1 WHERE collection_name = ?2"#,
-                params![&new_name, old_name],
+                params![&new_name, &old_name],
             )?;
         }
 
@@ -1691,7 +1729,7 @@ impl Store {
             SET name = ?1, schema_json = ?2, updated = ?3
             WHERE name = ?4
             "#,
-            params![&new_name, schema_json, now, old_name],
+            params![&new_name, schema_json, now, &old_name],
         )?;
         if affected == 0 {
             return Err(ServerError::NotFound(format!(
@@ -1703,22 +1741,29 @@ impl Store {
         Ok(collection)
     }
 
-    pub fn import_collections(
-        &self,
-        mut request: CollectionImportRequest,
-    ) -> Result<(), ServerError> {
-        for collection in &mut request.collections {
-            normalize_collection(collection);
-        }
-
+    pub fn import_collections(&self, request: CollectionImportRequest) -> Result<(), ServerError> {
         let mut incoming_names = HashMap::new();
+        let mut incoming_ids = HashMap::new();
         for collection in &request.collections {
-            validate_collection(collection)?;
+            validate_collection_name(&collection.name)?;
             if incoming_names.insert(collection.name.clone(), ()).is_some() {
                 return Err(ServerError::BadRequest(format!(
                     "duplicate collection '{}'",
                     collection.name
                 )));
+            }
+            if let Some(id) = collection
+                .id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+            {
+                validate_collection_id(id)?;
+                if incoming_ids.insert(id.to_string(), ()).is_some() {
+                    return Err(ServerError::BadRequest(format!(
+                        "duplicate collection id '{id}'"
+                    )));
+                }
             }
         }
 
@@ -1763,12 +1808,20 @@ impl Store {
         }
 
         for imported in request.collections {
-            let collection = if let Some(current) = existing.get(&imported.name) {
+            let mut collection = if let Some(current) = existing.get(&imported.name) {
                 merge_imported_collection(current, imported, request.delete_missing)
             } else {
                 imported
             };
+            normalize_collection(&mut collection);
             validate_collection(&collection)?;
+            let existing_name = existing
+                .get(&collection.name)
+                .map(|existing| existing.name.as_str());
+            ensure_collection_identifier_available_tx(&tx, &collection.name, existing_name)?;
+            if let Some(id) = collection.id.as_deref() {
+                ensure_collection_identifier_available_tx(&tx, id, existing_name)?;
+            }
 
             let table_sql = quote_identifier(&record_table_name(&collection.name)?);
             tx.execute(
@@ -1835,37 +1888,38 @@ impl Store {
         Ok(())
     }
 
-    pub fn delete_collection(&self, name: &str) -> Result<(), ServerError> {
-        validate_collection_name(name)?;
-        self.get_collection(name)?;
+    pub fn delete_collection(&self, identifier: &str) -> Result<(), ServerError> {
+        validate_collection_identifier(identifier)?;
+        let collection = self.get_collection(identifier)?;
+        let name = collection.name;
 
-        let table_sql = quote_identifier(&record_table_name(name)?);
+        let table_sql = quote_identifier(&record_table_name(&name)?);
         let mut conn = self.connection()?;
         let tx = conn.transaction()?;
         tx.execute(&format!("DROP TABLE IF EXISTS {table_sql}"), [])?;
         tx.execute(
             r#"DELETE FROM "_rb_auth_tokens" WHERE collection_name = ?1"#,
-            params![name],
+            params![&name],
         )?;
         tx.execute(
             r#"DELETE FROM "_rb_auth_action_tokens" WHERE collection_name = ?1"#,
-            params![name],
+            params![&name],
         )?;
         tx.execute(
             r#"DELETE FROM "_rb_auth_external_accounts" WHERE collection_name = ?1"#,
-            params![name],
+            params![&name],
         )?;
         tx.execute(
             r#"DELETE FROM "_rb_file_tokens" WHERE collection_name = ?1"#,
-            params![name],
+            params![&name],
         )?;
         tx.execute(
             r#"DELETE FROM "_rb_files" WHERE collection_name = ?1"#,
-            params![name],
+            params![&name],
         )?;
         let affected = tx.execute(
             r#"DELETE FROM "_rb_collections" WHERE name = ?1"#,
-            params![name],
+            params![&name],
         )?;
         if affected == 0 {
             return Err(ServerError::NotFound(format!(
@@ -1876,32 +1930,33 @@ impl Store {
         Ok(())
     }
 
-    pub fn truncate_collection(&self, name: &str) -> Result<(), ServerError> {
-        validate_collection_name(name)?;
-        self.get_collection(name)?;
+    pub fn truncate_collection(&self, identifier: &str) -> Result<(), ServerError> {
+        validate_collection_identifier(identifier)?;
+        let collection = self.get_collection(identifier)?;
+        let name = collection.name;
 
-        let table_sql = quote_identifier(&record_table_name(name)?);
+        let table_sql = quote_identifier(&record_table_name(&name)?);
         let conn = self.connection()?;
         conn.execute(&format!("DELETE FROM {table_sql}"), [])?;
         conn.execute(
             r#"DELETE FROM "_rb_auth_tokens" WHERE collection_name = ?1"#,
-            params![name],
+            params![&name],
         )?;
         conn.execute(
             r#"DELETE FROM "_rb_auth_action_tokens" WHERE collection_name = ?1"#,
-            params![name],
+            params![&name],
         )?;
         conn.execute(
             r#"DELETE FROM "_rb_auth_external_accounts" WHERE collection_name = ?1"#,
-            params![name],
+            params![&name],
         )?;
         conn.execute(
             r#"DELETE FROM "_rb_file_tokens" WHERE collection_name = ?1"#,
-            params![name],
+            params![&name],
         )?;
         conn.execute(
             r#"DELETE FROM "_rb_files" WHERE collection_name = ?1"#,
-            params![name],
+            params![&name],
         )?;
         Ok(())
     }
@@ -3654,7 +3709,11 @@ impl RustyBaseApp {
                 self.require_superuser_admin(&request)?;
                 let collection: CollectionConfig = serde_json::from_slice(&request.body)?;
                 let collection = self.store.create_collection(collection)?;
-                Ok(HttpResponse::json(200, json!(collection)))
+                let fields = field_options_from_query(&query)?;
+                let payload = self
+                    .store
+                    .get_collection_response(&collection.name, &fields)?;
+                Ok(HttpResponse::json(200, payload))
             }
             ("PUT", ["api", "collections", "import"]) => {
                 self.require_superuser_admin(&request)?;
@@ -3677,14 +3736,19 @@ impl RustyBaseApp {
             }
             ("GET", ["api", "collections", collection]) => {
                 self.require_superuser_admin(&request)?;
-                let collection = self.store.get_collection(collection)?;
-                Ok(HttpResponse::json(200, json!(collection)))
+                let fields = field_options_from_query(&query)?;
+                let payload = self.store.get_collection_response(collection, &fields)?;
+                Ok(HttpResponse::json(200, payload))
             }
             ("PATCH", ["api", "collections", collection]) => {
                 self.require_superuser_admin(&request)?;
                 let patch: CollectionPatch = serde_json::from_slice(&request.body)?;
                 let collection = self.store.update_collection(collection, patch)?;
-                Ok(HttpResponse::json(200, json!(collection)))
+                let fields = field_options_from_query(&query)?;
+                let payload = self
+                    .store
+                    .get_collection_response(&collection.name, &fields)?;
+                Ok(HttpResponse::json(200, payload))
             }
             ("DELETE", ["api", "collections", collection]) => {
                 self.require_superuser_admin(&request)?;
@@ -4683,7 +4747,11 @@ struct CollectionResolver;
 impl FieldResolver for CollectionResolver {
     fn resolve_field(&self, field: &str) -> Result<ResolvedField, FilterError> {
         match field {
-            "id" | "name" => Ok(ResolvedField::with_kind(
+            "id" => Ok(ResolvedField::with_kind(
+                collection_id_sql(),
+                FieldKind::Text,
+            )),
+            "name" => Ok(ResolvedField::with_kind(
                 quote_identifier("name"),
                 FieldKind::Text,
             )),
@@ -6402,16 +6470,30 @@ fn collection_row_to_value(
     updated: String,
 ) -> Result<JsonValue, ServerError> {
     let collection = serde_json::from_str::<CollectionConfig>(&schema_json)?;
+    let id = collection_id_value(&collection).unwrap_or_else(|| name.clone());
     let mut value = json!(collection);
     let object = value.as_object_mut().ok_or_else(|| {
         ServerError::BadRequest("collection response must be a JSON object".to_string())
     })?;
-    object.insert("id".to_string(), JsonValue::String(name.clone()));
+    object.insert("id".to_string(), JsonValue::String(id));
     object.insert("name".to_string(), JsonValue::String(name.clone()));
     object.insert("created".to_string(), JsonValue::String(created));
     object.insert("updated".to_string(), JsonValue::String(updated));
     object.insert("system".to_string(), JsonValue::Bool(name.starts_with('_')));
     Ok(value)
+}
+
+fn collection_id_value(collection: &CollectionConfig) -> Option<String> {
+    collection
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
+fn collection_id_sql() -> String {
+    r#"COALESCE(NULLIF(json_extract("schema_json", '$.id'), ''), "name")"#.to_string()
 }
 
 fn record_from_parts(
@@ -6626,6 +6708,69 @@ fn settings_invalid_number(field: impl Into<String>, message: impl Into<String>)
     )
 }
 
+fn ensure_collection_identifier_available(
+    conn: &Connection,
+    identifier: &str,
+    excluding_name: Option<&str>,
+) -> Result<(), ServerError> {
+    let owner = conn
+        .query_row(
+            &format!(
+                r#"
+                SELECT name
+                FROM "_rb_collections"
+                WHERE name = ?1 OR {} = ?1
+                LIMIT 1
+                "#,
+                collection_id_sql()
+            ),
+            params![identifier],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    ensure_collection_identifier_owner_available(identifier, owner, excluding_name)
+}
+
+fn ensure_collection_identifier_available_tx(
+    tx: &rusqlite::Transaction<'_>,
+    identifier: &str,
+    excluding_name: Option<&str>,
+) -> Result<(), ServerError> {
+    let owner = tx
+        .query_row(
+            &format!(
+                r#"
+                SELECT name
+                FROM "_rb_collections"
+                WHERE name = ?1 OR {} = ?1
+                LIMIT 1
+                "#,
+                collection_id_sql()
+            ),
+            params![identifier],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    ensure_collection_identifier_owner_available(identifier, owner, excluding_name)
+}
+
+fn ensure_collection_identifier_owner_available(
+    identifier: &str,
+    owner: Option<String>,
+    excluding_name: Option<&str>,
+) -> Result<(), ServerError> {
+    if owner
+        .as_deref()
+        .is_some_and(|owner| Some(owner) != excluding_name)
+    {
+        return Err(ServerError::BadRequest(format!(
+            "collection identifier '{identifier}' already exists"
+        )));
+    }
+
+    Ok(())
+}
+
 fn ensure_auth_token_columns(conn: &Connection) -> Result<(), ServerError> {
     let mut stmt = conn.prepare(r#"PRAGMA table_info("_rb_auth_tokens")"#)?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -6834,6 +6979,8 @@ fn apply_collection_patch(collection: &mut CollectionConfig, patch: CollectionPa
 }
 
 fn normalize_collection(collection: &mut CollectionConfig) {
+    normalize_collection_id(collection);
+
     if collection.collection_type != CollectionType::Auth {
         collection.auth_rule = None;
         collection.manage_rule = None;
@@ -6888,6 +7035,16 @@ fn normalize_collection(collection: &mut CollectionConfig) {
     if otp_missing && !otp.enabled {
         otp.enabled = default_identity_fields.iter().any(|field| field == "email");
     }
+}
+
+fn normalize_collection_id(collection: &mut CollectionConfig) {
+    collection.id = collection
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .or_else(|| Some(generate_collection_id()));
 }
 
 fn collection_scaffolds() -> JsonValue {
@@ -7044,7 +7201,9 @@ fn collection_export_payload(collections: Vec<CollectionConfig>) -> JsonValue {
 }
 
 fn collection_export_value(collection: CollectionConfig) -> JsonValue {
+    let id = collection_id_value(&collection).unwrap_or_else(|| collection.name.clone());
     let mut value = json!({
+        "id": id,
         "name": collection.name,
         "type": collection.collection_type,
         "schema": collection.fields
@@ -7134,6 +7293,16 @@ fn merge_imported_collection(
     mut imported: CollectionConfig,
     delete_missing: bool,
 ) -> CollectionConfig {
+    if imported
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .is_none()
+    {
+        imported.id = current.id.clone();
+    }
+
     if delete_missing {
         return imported;
     }
@@ -7198,6 +7367,9 @@ fn prune_record_fields_tx(
 
 fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError> {
     validate_collection_name(&collection.name)?;
+    if let Some(id) = collection.id.as_deref() {
+        validate_collection_id(id)?;
+    }
     let mut seen = HashMap::new();
 
     if collection.collection_type == CollectionType::Auth
@@ -7379,6 +7551,25 @@ fn validate_collection_name(name: &str) -> Result<(), ServerError> {
     } else {
         Err(ServerError::BadRequest(format!(
             "unsafe collection name '{name}'"
+        )))
+    }
+}
+
+fn validate_collection_identifier(identifier: &str) -> Result<(), ServerError> {
+    validate_collection_name(identifier).or_else(|_| validate_collection_id(identifier))
+}
+
+fn validate_collection_id(id: &str) -> Result<(), ServerError> {
+    if !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    {
+        Ok(())
+    } else {
+        Err(ServerError::BadRequest(format!(
+            "unsafe collection id '{id}'"
         )))
     }
 }
@@ -8286,6 +8477,10 @@ fn generate_id() -> String {
         .chars()
         .take(32)
         .collect()
+}
+
+fn generate_collection_id() -> String {
+    format!("_rbc_{}", generate_id())
 }
 
 fn generate_token() -> String {

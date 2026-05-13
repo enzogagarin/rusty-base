@@ -3185,6 +3185,99 @@ fn updates_collections_and_renames_record_tables() {
 }
 
 #[test]
+fn manages_collections_by_id_and_projects_collection_responses() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let created = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections?fields=id,name,type",
+            json!({
+                "id": "posts_collection",
+                "name": "posts",
+                "fields": [{"name": "title", "kind": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created.status, 200);
+    assert_eq!(created.body["id"], "posts_collection");
+    assert_eq!(created.body["name"], "posts");
+    assert_eq!(created.body["type"], "base");
+    assert!(created.body.get("fields").is_none());
+
+    let by_id = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts_collection?fields=id,name,system",
+    ));
+    assert_eq!(by_id.status, 200);
+    assert_eq!(by_id.body["id"], "posts_collection");
+    assert_eq!(by_id.body["name"], "posts");
+    assert_eq!(by_id.body["system"], false);
+    assert!(by_id.body.get("type").is_none());
+
+    let list_by_id_filter = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections?filter=id%3D%22posts_collection%22",
+    ));
+    assert_eq!(list_by_id_filter.status, 200);
+    assert_eq!(list_by_id_filter.body["totalItems"], 1);
+    assert_eq!(list_by_id_filter.body["items"][0]["name"], "posts");
+
+    let patched = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts_collection?fields=id,name",
+            json!({"name": "articles"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(patched.status, 200);
+    assert_eq!(patched.body["id"], "posts_collection");
+    assert_eq!(patched.body["name"], "articles");
+    assert!(patched.body.get("fields").is_none());
+
+    let old_name = app.handle(HttpRequest::new("GET", "/api/collections/posts"));
+    assert_eq!(old_name.status, 404);
+
+    let by_id_after_rename = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts_collection?fields=id,name",
+    ));
+    assert_eq!(by_id_after_rename.status, 200);
+    assert_eq!(by_id_after_rename.body["name"], "articles");
+
+    let record = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/articles/records",
+            json!({"title": "Keep metadata sharp"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(record.status, 200);
+
+    let truncated = app.handle(HttpRequest::new(
+        "DELETE",
+        "/api/collections/posts_collection/truncate",
+    ));
+    assert_eq!(truncated.status, 204);
+
+    let empty = app.handle(HttpRequest::new("GET", "/api/collections/articles/records"));
+    assert_eq!(empty.status, 200);
+    assert_eq!(empty.body["totalItems"], 0);
+
+    let deleted = app.handle(HttpRequest::new(
+        "DELETE",
+        "/api/collections/posts_collection",
+    ));
+    assert_eq!(deleted.status, 204);
+
+    let gone = app.handle(HttpRequest::new("GET", "/api/collections/posts_collection"));
+    assert_eq!(gone.status, 404);
+}
+
+#[test]
 fn truncates_and_deletes_collections() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
