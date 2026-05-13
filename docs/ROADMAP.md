@@ -226,6 +226,8 @@ Exit criteria:
 - Added first real `thumb` generation for PNG/JPEG/GIF/WebP files with bounded
   source bytes/pixels and PocketBase-style size modes (`WxH`, `WxHt`, `WxHb`,
   `WxHf`, `0xH`, `Wx0`).
+- Added file-field option validation for `maxSize`, `mimeTypes`, and configured
+  `thumbs` so thumbnail requests only generate declared sizes.
 
 ## Next Sprint
 

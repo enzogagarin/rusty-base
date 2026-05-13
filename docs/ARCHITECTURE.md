@@ -63,6 +63,8 @@ Responsibility:
 - expose file download attachment headers for `download=1` requests;
 - generate the first bounded image thumbnails for `thumb` requests against
   PNG/JPEG/GIF/WebP uploads;
+- validate first file-field upload options (`maxSize`, `mimeTypes`, configured
+  `thumbs`);
 - support auth collections with Argon2 password hashes and expiring bearer
   tokens;
 - expose a first public auth-methods summary for auth collections;

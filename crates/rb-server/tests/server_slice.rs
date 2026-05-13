@@ -1236,7 +1236,14 @@ fn generates_image_file_thumbnails() {
                 "name": "images",
                 "fields": [
                     {"name": "public", "kind": "bool"},
-                    {"name": "photo", "type": "file", "maxSelect": 1}
+                    {
+                        "name": "photo",
+                        "type": "file",
+                        "maxSelect": 1,
+                        "maxSize": 4096,
+                        "mimeTypes": ["image/png"],
+                        "thumbs": ["2x0", "0x1", "2x2f", "1x1t"]
+                    }
                 ],
                 "viewRule": "public = true"
             }),
@@ -1244,6 +1251,15 @@ fn generates_image_file_thumbnails() {
         .unwrap(),
     );
     assert_eq!(collection_response.status, 200);
+    assert_eq!(collection_response.body["fields"][1]["maxSize"], 4096);
+    assert_eq!(
+        collection_response.body["fields"][1]["mimeTypes"],
+        json!(["image/png"])
+    );
+    assert_eq!(
+        collection_response.body["fields"][1]["thumbs"],
+        json!(["2x0", "0x1", "2x2f", "1x1t"])
+    );
 
     let image = png_fixture(4, 2);
     let created = app.handle(multipart_request(
@@ -1304,6 +1320,79 @@ fn generates_image_file_thumbnails() {
     ));
     assert_eq!(invalid_thumb.status, 200);
     assert_eq!(invalid_thumb.raw_body, original.raw_body);
+
+    let unconfigured_thumb = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/images/image_1/{photo}?thumb=3x0"),
+    ));
+    assert_eq!(unconfigured_thumb.status, 200);
+    assert_eq!(unconfigured_thumb.raw_body, original.raw_body);
+}
+
+#[test]
+fn validates_file_field_upload_options() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let collection = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "uploads",
+                "fields": [{
+                    "name": "asset",
+                    "type": "file",
+                    "maxSize": 4,
+                    "mimeTypes": ["text/plain"]
+                }]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(collection.status, 200);
+
+    let too_large = app.handle(multipart_request(
+        "POST",
+        "/api/collections/uploads/records",
+        "rb-large-file-boundary",
+        vec![multipart_file("asset", "large.txt", "text/plain", b"large")],
+    ));
+    assert_eq!(too_large.status, 400);
+    assert_eq!(
+        too_large.body["data"]["asset"]["code"],
+        "validation_max_size"
+    );
+
+    let wrong_type = app.handle(multipart_request(
+        "POST",
+        "/api/collections/uploads/records",
+        "rb-mime-file-boundary",
+        vec![multipart_file(
+            "asset",
+            "asset.bin",
+            "application/octet-stream",
+            b"ok",
+        )],
+    ));
+    assert_eq!(wrong_type.status, 400);
+    assert_eq!(
+        wrong_type.body["data"]["asset"]["code"],
+        "validation_mime_type"
+    );
+
+    let accepted = app.handle(multipart_request(
+        "POST",
+        "/api/collections/uploads/records",
+        "rb-good-file-boundary",
+        vec![multipart_file(
+            "asset",
+            "ok.txt",
+            "text/plain; charset=utf-8",
+            b"ok",
+        )],
+    ));
+    assert_eq!(accepted.status, 200);
+    assert!(accepted.body["asset"].as_str().unwrap().starts_with("ok_"));
 }
 
 #[test]

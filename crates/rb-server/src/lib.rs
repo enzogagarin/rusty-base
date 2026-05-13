@@ -184,6 +184,12 @@ pub struct CollectionField {
     pub collection: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_select: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mime_types: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thumbs: Vec<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub protected: bool,
 }
@@ -195,6 +201,9 @@ impl CollectionField {
             kind,
             collection: None,
             max_select: None,
+            max_size: None,
+            mime_types: Vec::new(),
+            thumbs: Vec::new(),
             protected: false,
         }
     }
@@ -205,6 +214,9 @@ impl CollectionField {
             kind: CollectionFieldKind::Relation,
             collection: Some(collection.into()),
             max_select: None,
+            max_size: None,
+            mime_types: Vec::new(),
+            thumbs: Vec::new(),
             protected: false,
         }
     }
@@ -331,6 +343,12 @@ struct ThumbSpec {
     width: u32,
     height: u32,
     mode: ThumbMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct ReferencedFile {
+    protected: bool,
+    thumbs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -1931,14 +1949,13 @@ impl RustyBaseApp {
             ("GET", ["api", "files", collection, record_id, filename]) => {
                 let collection_config = self.store.get_collection(collection)?;
                 let record = self.store.read_record(collection, record_id)?;
-                let Some(protected) =
-                    referenced_file_protection(&collection_config, &record, filename)?
+                let Some(referenced_file) = referenced_file(&collection_config, &record, filename)?
                 else {
                     return Err(ServerError::NotFound(format!(
                         "file '{filename}' not found"
                     )));
                 };
-                if protected {
+                if referenced_file.protected {
                     let context = self.file_request_context(&request, &query)?;
                     let record = self.store.get_record(collection, record_id, context)?;
                     if !record_references_file(&collection_config, &record, filename)? {
@@ -1949,7 +1966,7 @@ impl RustyBaseApp {
                 }
                 let mut file = self.store.get_file(collection, record_id, filename)?;
                 if let Some(thumb) = query.get("thumb").filter(|thumb| !thumb.trim().is_empty()) {
-                    file = thumbnail_file(file, thumb);
+                    file = thumbnail_file(file, thumb, &referenced_file.thumbs);
                 }
                 let mut response = HttpResponse::bytes(200, file.content_type, file.data);
                 if truthy_query_value(&query, "download") {
@@ -3675,6 +3692,15 @@ fn collection_field_export_value(field: CollectionField) -> JsonValue {
     if let Some(max_select) = field.max_select {
         value.insert("maxSelect".to_string(), json!(max_select));
     }
+    if let Some(max_size) = field.max_size {
+        value.insert("maxSize".to_string(), json!(max_size));
+    }
+    if !field.mime_types.is_empty() {
+        value.insert("mimeTypes".to_string(), json!(field.mime_types));
+    }
+    if !field.thumbs.is_empty() {
+        value.insert("thumbs".to_string(), json!(field.thumbs));
+    }
     if field.protected {
         value.insert("protected".to_string(), JsonValue::Bool(true));
     }
@@ -3804,11 +3830,26 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
                 )));
             }
         }
-        if field.protected && field.kind != CollectionFieldKind::File {
+        if field.kind != CollectionFieldKind::File
+            && (field.protected
+                || field.max_size.is_some()
+                || !field.mime_types.is_empty()
+                || !field.thumbs.is_empty())
+        {
             return Err(ServerError::BadRequest(format!(
-                "field '{}' is protected but is not a file field",
+                "field '{}' declares file options but is not a file field",
                 field.name
             )));
+        }
+        if field.kind == CollectionFieldKind::File {
+            for thumb in &field.thumbs {
+                if parse_thumb_spec(thumb).is_none() {
+                    return Err(ServerError::BadRequest(format!(
+                        "field '{}' has invalid thumb size '{}'",
+                        field.name, thumb
+                    )));
+                }
+            }
         }
     }
 
@@ -3964,21 +4005,19 @@ fn prepare_file_changes(
         if !mutation.set_uploads.is_empty() {
             changes.delete_files.extend(existing_names.iter().cloned());
             final_names.clear();
-            let uploaded = prepare_uploaded_files(&field_name, mutation.set_uploads, &mut changes)?;
+            let uploaded = prepare_uploaded_files(field, mutation.set_uploads, &mut changes)?;
             final_names.extend(uploaded);
         }
 
         if !mutation.prepend_uploads.is_empty() {
-            let uploaded =
-                prepare_uploaded_files(&field_name, mutation.prepend_uploads, &mut changes)?;
+            let uploaded = prepare_uploaded_files(field, mutation.prepend_uploads, &mut changes)?;
             let mut combined = uploaded;
             combined.extend(final_names);
             final_names = combined;
         }
 
         if !mutation.append_uploads.is_empty() {
-            let uploaded =
-                prepare_uploaded_files(&field_name, mutation.append_uploads, &mut changes)?;
+            let uploaded = prepare_uploaded_files(field, mutation.append_uploads, &mut changes)?;
             final_names.extend(uploaded);
         }
 
@@ -4008,19 +4047,41 @@ fn prepare_file_changes(
 }
 
 fn prepare_uploaded_files(
-    field_name: &str,
+    field: &CollectionField,
     uploads: Vec<FileUpload>,
     changes: &mut PreparedFileChanges,
 ) -> Result<Vec<String>, ServerError> {
     let mut filenames = Vec::new();
     for upload in uploads {
+        if field
+            .max_size
+            .is_some_and(|max_size| max_size > 0 && upload.data.len() as u64 > max_size)
+        {
+            return Err(validation_error(
+                "Failed to validate record.",
+                &field.name,
+                "validation_max_size",
+                format!("Field '{}' file exceeds the maximum size.", field.name),
+            ));
+        }
+
+        let content_type = normalize_content_type(&upload.content_type);
+        if !field.mime_types.is_empty() && !mime_type_allowed(&field.mime_types, &content_type) {
+            return Err(validation_error(
+                "Failed to validate record.",
+                &field.name,
+                "validation_mime_type",
+                format!("Field '{}' does not allow this file type.", field.name),
+            ));
+        }
+
         let filename = stored_file_name(&upload.original_name);
         validate_file_name(&filename)?;
         filenames.push(filename.clone());
         changes.store_files.push(StoredFileInput {
-            field_name: field_name.to_string(),
+            field_name: field.name.clone(),
             filename,
-            content_type: normalize_content_type(&upload.content_type),
+            content_type,
             data: upload.data,
         });
     }
@@ -4097,7 +4158,12 @@ fn file_field_value(names: &[String], max_select: u64) -> JsonValue {
     }
 }
 
-fn thumbnail_file(file: StoredFile, spec: &str) -> StoredFile {
+fn thumbnail_file(file: StoredFile, spec: &str, allowed_thumbs: &[String]) -> StoredFile {
+    let spec = spec.trim();
+    if !allowed_thumbs.iter().any(|thumb| thumb == spec) {
+        return file;
+    }
+
     render_thumbnail(&file, spec).unwrap_or(file)
 }
 
@@ -4254,20 +4320,20 @@ fn record_references_file(
     record: &JsonValue,
     filename: &str,
 ) -> Result<bool, ServerError> {
-    Ok(referenced_file_protection(collection, record, filename)?.is_some())
+    Ok(referenced_file(collection, record, filename)?.is_some())
 }
 
-fn referenced_file_protection(
+fn referenced_file(
     collection: &CollectionConfig,
     record: &JsonValue,
     filename: &str,
-) -> Result<Option<bool>, ServerError> {
+) -> Result<Option<ReferencedFile>, ServerError> {
     let Some(object) = record.as_object() else {
         return Ok(None);
     };
 
-    let mut referenced = false;
-    let mut protected = false;
+    let mut referenced = ReferencedFile::default();
+    let mut found = false;
     for field in collection
         .fields
         .iter()
@@ -4280,12 +4346,14 @@ fn referenced_file_protection(
             .iter()
             .any(|name| name == filename)
         {
-            referenced = true;
-            protected |= field.protected;
+            found = true;
+            referenced.protected |= field.protected;
+            referenced.thumbs.extend(field.thumbs.iter().cloned());
         }
     }
 
-    Ok(referenced.then_some(protected))
+    dedupe_strings(&mut referenced.thumbs);
+    Ok(found.then_some(referenced))
 }
 
 fn store_file_uploads(
@@ -4387,6 +4455,29 @@ fn normalize_content_type(value: &str) -> String {
     } else {
         value.to_string()
     }
+}
+
+fn mime_type_allowed(allowed: &[String], content_type: &str) -> bool {
+    let content_type = content_type_base(content_type);
+    allowed
+        .iter()
+        .map(|value| content_type_base(value))
+        .filter(|value| !value.is_empty())
+        .any(|allowed| {
+            allowed == content_type
+                || allowed
+                    .strip_suffix("/*")
+                    .is_some_and(|prefix| content_type.starts_with(&format!("{prefix}/")))
+        })
+}
+
+fn content_type_base(value: &str) -> String {
+    value
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
 }
 
 fn validate_file_name(name: &str) -> Result<(), ServerError> {

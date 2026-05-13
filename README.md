@@ -307,7 +307,9 @@ The first server slice supports:
   tokens populating `@request.auth.*` for protected downloads;
 - `download=1` file responses with `Content-Disposition: attachment`;
 - first `thumb` image thumbnail generation for PNG/JPEG/GIF/WebP inputs,
-  including crop, top/bottom crop, fit, width-only, and height-only formats;
+  gated by configured file-field `thumbs`, including crop, top/bottom crop,
+  fit, width-only, and height-only formats;
+- first file-field `maxSize` and `mimeTypes` upload validation;
 - PocketBase-style uploaded-file modifiers for replace, append, prepend,
   delete-by-name, and zero-value clearing on file fields;
 - PocketBase-like list response shape with `page`, `perPage`, `totalItems`,
