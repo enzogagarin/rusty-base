@@ -324,8 +324,8 @@ The first server slice supports:
   password-auth method summary and response `fields` projection;
 - `auth-with-password` and `auth-refresh` response `expand`/`fields` support,
   including response-level paths such as `record.expand.profile.bio`;
-- verification and password-reset request/confirm auth flows backed by opaque
-  action tokens;
+- verification, password-reset, and email-change request/confirm auth flows
+  backed by opaque action tokens;
 - relation expand respects target collection view rules and omits hidden related
   records from the `expand` payload;
 - PocketBase-like error response shape with `code`, `message`, and `data`;

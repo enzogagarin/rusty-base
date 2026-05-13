@@ -231,11 +231,13 @@ Exit criteria:
 - Added the first realtime MVP: `GET /api/realtime` SSE connect,
   `POST /api/realtime` subscriptions, and record create/update/delete event
   delivery filtered through collection `listRule` or record `viewRule`.
+- Added PocketBase-style email change request/confirm auth flow, including
+  current-password confirmation and stale auth/file token invalidation.
 
 ## Next Sprint
 
-1. Add auth route coverage beyond password/refresh/reset: email change, OTP,
-   and OAuth placeholders where useful.
+1. Add auth route coverage beyond password/refresh/reset/email change: OTP and
+   OAuth placeholders where useful.
 2. Expand compatibility fixtures around placeholder-like wildcard cases.
 3. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 4. Add relation compatibility fixtures copied from PocketBase-style access-rule

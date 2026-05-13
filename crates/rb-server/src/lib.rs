@@ -28,6 +28,7 @@ const AUTH_TOKEN_TTL_MILLIS: u128 = 7 * 24 * 60 * 60 * 1000;
 const FILE_TOKEN_TTL_MILLIS: u128 = 2 * 60 * 1000;
 const VERIFICATION_TOKEN_TTL_MILLIS: u128 = 3 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TOKEN_TTL_MILLIS: u128 = 30 * 60 * 1000;
+const EMAIL_CHANGE_TOKEN_TTL_MILLIS: u128 = 30 * 60 * 1000;
 const AUTH_FORM_VALIDATION_MESSAGE: &str = "An error occurred while validating the submitted data.";
 const MAX_THUMB_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_THUMB_SOURCE_PIXELS: u64 = 16_000_000;
@@ -566,6 +567,28 @@ struct AuthEmailRequest {
     email: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuthNewEmailRequest {
+    new_email: String,
+}
+
+impl AuthNewEmailRequest {
+    fn from_json(value: JsonValue) -> Result<Self, ServerError> {
+        let object = value.as_object().ok_or_else(|| {
+            validation_error(
+                AUTH_FORM_VALIDATION_MESSAGE,
+                "body",
+                "validation_invalid_body",
+                "Request body must be a JSON object.",
+            )
+        })?;
+
+        Ok(Self {
+            new_email: required_form_string(object, "newEmail", AUTH_FORM_VALIDATION_MESSAGE)?,
+        })
+    }
+}
+
 impl AuthEmailRequest {
     fn from_json(value: JsonValue) -> Result<Self, ServerError> {
         let object = value.as_object().ok_or_else(|| {
@@ -612,6 +635,30 @@ struct ConfirmPasswordResetRequest {
     password_confirm: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConfirmEmailChangeRequest {
+    token: String,
+    password: String,
+}
+
+impl ConfirmEmailChangeRequest {
+    fn from_json(value: JsonValue) -> Result<Self, ServerError> {
+        let object = value.as_object().ok_or_else(|| {
+            validation_error(
+                AUTH_FORM_VALIDATION_MESSAGE,
+                "body",
+                "validation_invalid_body",
+                "Request body must be a JSON object.",
+            )
+        })?;
+
+        Ok(Self {
+            token: required_form_string(object, "token", AUTH_FORM_VALIDATION_MESSAGE)?,
+            password: required_form_string(object, "password", AUTH_FORM_VALIDATION_MESSAGE)?,
+        })
+    }
+}
+
 impl ConfirmPasswordResetRequest {
     fn from_json(value: JsonValue) -> Result<Self, ServerError> {
         let object = value.as_object().ok_or_else(|| {
@@ -639,6 +686,7 @@ impl ConfirmPasswordResetRequest {
 enum AuthActionKind {
     Verification,
     PasswordReset,
+    EmailChange,
 }
 
 impl AuthActionKind {
@@ -646,6 +694,7 @@ impl AuthActionKind {
         match self {
             Self::Verification => "verification",
             Self::PasswordReset => "passwordReset",
+            Self::EmailChange => "emailChange",
         }
     }
 
@@ -653,6 +702,7 @@ impl AuthActionKind {
         match self {
             Self::Verification => VERIFICATION_TOKEN_TTL_MILLIS,
             Self::PasswordReset => PASSWORD_RESET_TOKEN_TTL_MILLIS,
+            Self::EmailChange => EMAIL_CHANGE_TOKEN_TTL_MILLIS,
         }
     }
 }
@@ -1621,6 +1671,133 @@ impl Store {
         Ok(())
     }
 
+    pub fn request_email_change(
+        &self,
+        collection_name: &str,
+        auth_token: &str,
+        new_email: &str,
+    ) -> Result<(), ServerError> {
+        let collection = self.auth_collection(collection_name)?;
+        let (token_collection_name, record_id) = self.valid_token_subject(auth_token)?;
+        if token_collection_name != collection_name {
+            return Err(ServerError::Forbidden("invalid auth token".to_string()));
+        }
+
+        let conn = self.connection()?;
+        let new_email = self.ensure_auth_email_available_tx(
+            &conn,
+            collection_name,
+            new_email,
+            Some(&record_id),
+        )?;
+        let table_sql = quote_identifier(&record_table_name(collection_name)?);
+        let exists = conn
+            .query_row(
+                &format!("SELECT 1 FROM {table_sql} WHERE id = ?1 LIMIT 1"),
+                params![&record_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some();
+        if !exists {
+            return Err(ServerError::Forbidden("auth record not found".to_string()));
+        }
+
+        delete_auth_action_tokens(
+            &conn,
+            &collection.name,
+            &record_id,
+            AuthActionKind::EmailChange,
+        )?;
+        let token = generate_token();
+        let created = now_timestamp();
+        let expires = (now_millis() + AuthActionKind::EmailChange.ttl_millis()).to_string();
+        conn.execute(
+            r#"
+            INSERT INTO "_rb_auth_action_tokens"
+                (token, kind, collection_name, record_id, data, created, expires)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+            params![
+                &token,
+                AuthActionKind::EmailChange.as_str(),
+                &collection.name,
+                &record_id,
+                json!({ "newEmail": new_email }).to_string(),
+                created,
+                expires
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn confirm_email_change(
+        &self,
+        collection_name: &str,
+        token: &str,
+        password: &str,
+    ) -> Result<(), ServerError> {
+        let collection = self.auth_collection(collection_name)?;
+        let conn = self.connection()?;
+        let (record_id, token_data) =
+            auth_action_subject_data(&conn, collection_name, AuthActionKind::EmailChange, token)?;
+        let new_email = token_data
+            .get("newEmail")
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| invalid_auth_action_token(AuthActionKind::EmailChange))?
+            .to_string();
+        let new_email = self.ensure_auth_email_available_tx(
+            &conn,
+            collection_name,
+            &new_email,
+            Some(&record_id),
+        )?;
+
+        let table_sql = quote_identifier(&record_table_name(collection_name)?);
+        let data = conn
+            .query_row(
+                &format!("SELECT data FROM {table_sql} WHERE id = ?1 LIMIT 1"),
+                params![&record_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| invalid_auth_action_token(AuthActionKind::EmailChange))?;
+        let mut data = serde_json::from_str::<JsonValue>(&data)?;
+        let object = data_object_mut(&mut data)?;
+        let password_hash = object
+            .get("passwordHash")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(invalid_credentials)?;
+        verify_password(password, password_hash)?;
+        object.insert("email".to_string(), JsonValue::String(new_email));
+        object.insert("verified".to_string(), JsonValue::Bool(true));
+
+        let now = now_timestamp();
+        conn.execute(
+            &format!("UPDATE {table_sql} SET data = ?1, updated = ?2 WHERE id = ?3"),
+            params![serde_json::to_string(&data)?, now, &record_id],
+        )?;
+        conn.execute(
+            r#"DELETE FROM "_rb_auth_tokens" WHERE collection_name = ?1 AND record_id = ?2"#,
+            params![collection_name, &record_id],
+        )?;
+        conn.execute(
+            r#"DELETE FROM "_rb_file_tokens" WHERE collection_name = ?1 AND record_id = ?2"#,
+            params![collection_name, &record_id],
+        )?;
+        delete_auth_action_tokens(
+            &conn,
+            collection.name.as_str(),
+            &record_id,
+            AuthActionKind::EmailChange,
+        )?;
+
+        Ok(())
+    }
+
     #[doc(hidden)]
     pub fn latest_auth_action_token(
         &self,
@@ -1711,6 +1888,58 @@ impl Store {
         )?;
 
         Ok(Some(token))
+    }
+
+    fn ensure_auth_email_available_tx(
+        &self,
+        conn: &Connection,
+        collection_name: &str,
+        email: &str,
+        except_record_id: Option<&str>,
+    ) -> Result<String, ServerError> {
+        let email = email.trim();
+        if email.is_empty() {
+            return Err(validation_error(
+                AUTH_FORM_VALIDATION_MESSAGE,
+                "newEmail",
+                "validation_required",
+                "Field 'newEmail' is required.",
+            ));
+        }
+
+        let table_sql = quote_identifier(&record_table_name(collection_name)?);
+        let taken = if let Some(record_id) = except_record_id {
+            conn.query_row(
+                &format!(
+                    "SELECT 1 FROM {table_sql} WHERE json_extract(data, '$.email') = ?1 AND id <> ?2 LIMIT 1"
+                ),
+                params![email, record_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some()
+        } else {
+            conn.query_row(
+                &format!(
+                    "SELECT 1 FROM {table_sql} WHERE json_extract(data, '$.email') = ?1 LIMIT 1"
+                ),
+                params![email],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some()
+        };
+
+        if taken {
+            return Err(validation_error(
+                AUTH_FORM_VALIDATION_MESSAGE,
+                "newEmail",
+                "validation_not_unique",
+                "The email is already in use.",
+            ));
+        }
+
+        Ok(email.to_string())
     }
 
     fn auth_collection(&self, collection_name: &str) -> Result<CollectionConfig, ServerError> {
@@ -2260,6 +2489,22 @@ impl RustyBaseApp {
                     &request.password,
                     &request.password_confirm,
                 )?;
+                Ok(HttpResponse::json(204, JsonValue::Null))
+            }
+            ("POST", ["api", "collections", collection, "request-email-change"]) => {
+                let token = bearer_token(&request)
+                    .ok_or_else(|| ServerError::Forbidden("missing auth token".to_string()))?;
+                let request =
+                    AuthNewEmailRequest::from_json(serde_json::from_slice(&request.body)?)?;
+                self.store
+                    .request_email_change(collection, token, &request.new_email)?;
+                Ok(HttpResponse::json(204, JsonValue::Null))
+            }
+            ("POST", ["api", "collections", collection, "confirm-email-change"]) => {
+                let request =
+                    ConfirmEmailChangeRequest::from_json(serde_json::from_slice(&request.body)?)?;
+                self.store
+                    .confirm_email_change(collection, &request.token, &request.password)?;
                 Ok(HttpResponse::json(204, JsonValue::Null))
             }
             ("POST", ["api", "collections", collection, "auth-with-password"]) => {
@@ -3819,20 +4064,36 @@ fn auth_action_subject(
     kind: AuthActionKind,
     token: &str,
 ) -> Result<String, ServerError> {
+    let (record_id, _) = auth_action_subject_data(conn, collection_name, kind, token)?;
+    Ok(record_id)
+}
+
+fn auth_action_subject_data(
+    conn: &Connection,
+    collection_name: &str,
+    kind: AuthActionKind,
+    token: &str,
+) -> Result<(String, JsonValue), ServerError> {
     let row = conn
         .query_row(
             r#"
-            SELECT record_id, expires
+            SELECT record_id, data, expires
             FROM "_rb_auth_action_tokens"
             WHERE token = ?1 AND kind = ?2 AND collection_name = ?3
             LIMIT 1
             "#,
             params![token, kind.as_str(), collection_name],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
         )
         .optional()?
         .ok_or_else(|| invalid_auth_action_token(kind))?;
-    let (record_id, expires) = row;
+    let (record_id, data, expires) = row;
     let expires = expires
         .parse::<u128>()
         .map_err(|_| invalid_auth_action_token(kind))?;
@@ -3843,8 +4104,10 @@ fn auth_action_subject(
         )?;
         return Err(invalid_auth_action_token(kind));
     }
+    let data =
+        serde_json::from_str::<JsonValue>(&data).map_err(|_| invalid_auth_action_token(kind))?;
 
-    Ok(record_id)
+    Ok((record_id, data))
 }
 
 fn delete_auth_action_tokens(
@@ -3865,7 +4128,7 @@ fn delete_auth_action_tokens(
 
 fn validate_auth_action_kind(kind: &str) -> Result<(), ServerError> {
     match kind {
-        "verification" | "passwordReset" => Ok(()),
+        "verification" | "passwordReset" | "emailChange" => Ok(()),
         _ => Err(ServerError::BadRequest(format!(
             "unknown auth action token kind '{kind}'"
         ))),

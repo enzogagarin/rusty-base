@@ -645,6 +645,192 @@ fn supports_verification_and_password_reset_tokens() {
 }
 
 #[test]
+fn supports_email_change_tokens() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [
+                    {"name": "email", "type": "email"},
+                    {"name": "name", "kind": "text"},
+                    {"name": "verified", "kind": "bool"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(users.status, 200);
+
+    let user = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({
+                "id": "user_1",
+                "email": "burak@example.com",
+                "name": "Burak",
+                "verified": false,
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(user.status, 200);
+
+    let other_user = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({
+                "id": "user_2",
+                "email": "taken@example.com",
+                "name": "Taken",
+                "verified": true,
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(other_user.status, 200);
+
+    let login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "burak@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(login.status, 200);
+    let old_token = login.body["token"].as_str().unwrap().to_string();
+
+    let missing_auth = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/request-email-change",
+            json!({"newEmail": "fresh@example.com"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(missing_auth.status, 403);
+
+    let missing_new_email = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/request-email-change",
+            json!({}),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {old_token}")),
+    );
+    assert_eq!(missing_new_email.status, 400);
+    assert_eq!(
+        missing_new_email.body["data"]["newEmail"]["code"],
+        "validation_required"
+    );
+
+    let taken_email = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/request-email-change",
+            json!({"newEmail": "taken@example.com"}),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {old_token}")),
+    );
+    assert_eq!(taken_email.status, 400);
+    assert_eq!(
+        taken_email.body["data"]["newEmail"]["code"],
+        "validation_not_unique"
+    );
+
+    let request_change = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/request-email-change",
+            json!({"newEmail": " changed@example.com "}),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {old_token}")),
+    );
+    assert_eq!(request_change.status, 204);
+    let change_token = app
+        .store()
+        .latest_auth_action_token("users", "user_1", "emailChange")
+        .unwrap()
+        .unwrap();
+
+    let wrong_password = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/confirm-email-change",
+            json!({"token": change_token.clone(), "password": "wrong password"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(wrong_password.status, 400);
+    assert_eq!(wrong_password.body["message"], "Failed to authenticate.");
+
+    let confirm_change = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/confirm-email-change",
+            json!({"token": change_token.clone(), "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(confirm_change.status, 204);
+
+    let old_token_refresh = app.handle(
+        HttpRequest::new("POST", "/api/collections/users/auth-refresh")
+            .with_header("Authorization", format!("Bearer {old_token}")),
+    );
+    assert_eq!(old_token_refresh.status, 403);
+
+    let old_email_login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "burak@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(old_email_login.status, 400);
+
+    let new_email_login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "changed@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(new_email_login.status, 200);
+    assert_eq!(
+        new_email_login.body["record"]["email"],
+        "changed@example.com"
+    );
+    assert_eq!(new_email_login.body["record"]["verified"], true);
+
+    let reused_token = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/confirm-email-change",
+            json!({"token": change_token, "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(reused_token.status, 400);
+}
+
+#[test]
 fn returns_validation_data_for_auth_and_record_forms() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
