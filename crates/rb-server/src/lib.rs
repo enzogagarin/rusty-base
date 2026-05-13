@@ -384,6 +384,10 @@ pub struct CollectionField {
     pub primary_key: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub protected: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub on_create: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub on_update: bool,
 }
 
 impl CollectionField {
@@ -410,6 +414,8 @@ impl CollectionField {
             presentable: false,
             primary_key: false,
             protected: false,
+            on_create: false,
+            on_update: false,
         }
     }
 
@@ -436,6 +442,8 @@ impl CollectionField {
             presentable: false,
             primary_key: false,
             protected: false,
+            on_create: false,
+            on_update: false,
         }
     }
 
@@ -463,6 +471,8 @@ pub enum CollectionFieldKind {
     Select,
     #[serde(rename = "geoPoint", alias = "geopoint")]
     GeoPoint,
+    #[serde(rename = "autodate")]
+    AutoDate,
 }
 
 impl From<CollectionFieldKind> for FieldKind {
@@ -481,6 +491,7 @@ impl From<CollectionFieldKind> for FieldKind {
             CollectionFieldKind::Relation => Self::Relation,
             CollectionFieldKind::Select => Self::Text,
             CollectionFieldKind::GeoPoint => Self::Json,
+            CollectionFieldKind::AutoDate => Self::DateTime,
         }
     }
 }
@@ -2062,6 +2073,8 @@ impl Store {
         prepare_record_value_modifiers(&collection, object, None)?;
         validate_record_fields(&collection, object)?;
         prepare_auth_password(&collection, object, true)?;
+        let now = now_timestamp();
+        apply_autodate_fields(&collection, object, true, &now);
         validate_record_field_options(&collection, object)?;
         self.validate_record_relations_exist(&collection, object)?;
 
@@ -2092,7 +2105,6 @@ impl Store {
             )?;
         }
 
-        let now = now_timestamp();
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
         let data_json = serde_json::to_string(&data)?;
         let conn = self.connection()?;
@@ -2306,10 +2318,11 @@ impl Store {
                 existing_object.insert(key.clone(), value.clone());
             }
         }
+        let now = now_timestamp();
+        apply_autodate_fields(&collection, existing_object, false, &now);
         validate_record_field_options(&collection, existing_object)?;
         self.validate_record_relations_exist(&collection, existing_object)?;
 
-        let now = now_timestamp();
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
         let data_json = serde_json::to_string(&existing)?;
         let conn = self.connection()?;
@@ -6192,6 +6205,7 @@ fn multipart_text_value(
                 )
             })
         }
+        CollectionFieldKind::AutoDate => Ok(JsonValue::String(value)),
         _ => Ok(JsonValue::String(value)),
     }
 }
@@ -6677,6 +6691,7 @@ fn collection_row_to_value(
     object.insert("created".to_string(), JsonValue::String(created));
     object.insert("updated".to_string(), JsonValue::String(updated));
     object.insert("system".to_string(), JsonValue::Bool(name.starts_with('_')));
+    decorate_collection_response_fields(object);
     Ok(value)
 }
 
@@ -6695,6 +6710,69 @@ fn record_collection_id(collection: &CollectionConfig) -> String {
 
 fn collection_id_sql() -> String {
     r#"COALESCE(NULLIF(json_extract("schema_json", '$.id'), ''), "name")"#.to_string()
+}
+
+fn decorate_collection_response_fields(object: &mut Map<String, JsonValue>) {
+    let mut fields = object
+        .remove("fields")
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|field| !is_response_only_collection_field_value(field))
+        .collect::<Vec<_>>();
+
+    let mut decorated = Vec::with_capacity(fields.len() + 3);
+    decorated.push(scaffold_id_field());
+    decorated.append(&mut fields);
+    decorated.push(scaffold_created_field());
+    decorated.push(scaffold_updated_field());
+    object.insert("fields".to_string(), JsonValue::Array(decorated));
+}
+
+fn is_response_only_collection_field_value(field: &JsonValue) -> bool {
+    serde_json::from_value::<CollectionField>(field.clone())
+        .is_ok_and(|field| is_response_only_collection_field(&field))
+}
+
+fn is_response_only_collection_field(field: &CollectionField) -> bool {
+    match field.name.as_str() {
+        "id" => {
+            field.id.as_deref() == Some("text3208210256")
+                && field.kind == CollectionFieldKind::Text
+                && field.required
+                && field.system
+                && !field.hidden
+                && !field.presentable
+                && field.primary_key
+                && field.min == Some(15)
+                && field.max == Some(15)
+                && field.pattern.as_deref() == Some("^[a-z0-9]+$")
+                && field.autogenerate_pattern.as_deref() == Some("[a-z0-9]{15}")
+        }
+        "created" => {
+            field.id.as_deref() == Some("autodate2990389176")
+                && field.kind == CollectionFieldKind::AutoDate
+                && !field.required
+                && !field.system
+                && !field.hidden
+                && !field.presentable
+                && !field.primary_key
+                && field.on_create
+                && !field.on_update
+        }
+        "updated" => {
+            field.id.as_deref() == Some("autodate3332085495")
+                && field.kind == CollectionFieldKind::AutoDate
+                && !field.required
+                && !field.system
+                && !field.hidden
+                && !field.presentable
+                && !field.primary_key
+                && field.on_create
+                && field.on_update
+        }
+        _ => false,
+    }
 }
 
 fn record_from_parts(
@@ -7186,6 +7264,9 @@ fn apply_collection_patch(collection: &mut CollectionConfig, patch: CollectionPa
 }
 
 fn normalize_collection(collection: &mut CollectionConfig) {
+    collection
+        .fields
+        .retain(|field| !is_response_only_collection_field(field));
     normalize_collection_id(collection);
     normalize_collection_fields(&mut collection.fields);
 
@@ -7297,10 +7378,10 @@ fn normalize_collection_id(collection: &mut CollectionConfig) {
 
 fn collection_scaffolds() -> JsonValue {
     json!({
-        "base": scaffold_collection("base", vec![scaffold_id_field()], json!({})),
+        "base": scaffold_collection("base", base_scaffold_fields(), json!({})),
         "auth": scaffold_collection(
             "auth",
-            vec![
+            auth_scaffold_fields(vec![
                 scaffold_id_field(),
                 json!({
                     "id": "password901924565",
@@ -7341,7 +7422,7 @@ fn collection_scaffolds() -> JsonValue {
                 }),
                 scaffold_bool_field("bool1547992806", "emailVisibility", true),
                 scaffold_bool_field("bool256245529", "verified", true)
-            ],
+            ]),
             json!({
                 "authRule": "",
                 "manageRule": null,
@@ -7378,6 +7459,20 @@ fn collection_scaffolds() -> JsonValue {
         ),
         "view": scaffold_collection("view", Vec::new(), json!({ "viewQuery": "" }))
     })
+}
+
+fn base_scaffold_fields() -> Vec<JsonValue> {
+    vec![
+        scaffold_id_field(),
+        scaffold_created_field(),
+        scaffold_updated_field(),
+    ]
+}
+
+fn auth_scaffold_fields(mut fields: Vec<JsonValue>) -> Vec<JsonValue> {
+    fields.push(scaffold_created_field());
+    fields.push(scaffold_updated_field());
+    fields
 }
 
 fn scaffold_collection(
@@ -7424,6 +7519,28 @@ fn scaffold_id_field() -> JsonValue {
         "pattern": "^[a-z0-9]+$",
         "autogeneratePattern": "[a-z0-9]{15}",
         "presentable": false
+    })
+}
+
+fn scaffold_created_field() -> JsonValue {
+    scaffold_autodate_field("autodate2990389176", "created", true, false)
+}
+
+fn scaffold_updated_field() -> JsonValue {
+    scaffold_autodate_field("autodate3332085495", "updated", true, true)
+}
+
+fn scaffold_autodate_field(id: &str, name: &str, on_create: bool, on_update: bool) -> JsonValue {
+    json!({
+        "id": id,
+        "name": name,
+        "type": "autodate",
+        "required": false,
+        "system": false,
+        "hidden": false,
+        "presentable": false,
+        "onCreate": on_create,
+        "onUpdate": on_update
     })
 }
 
@@ -7538,6 +7655,12 @@ fn collection_field_export_value(field: CollectionField) -> JsonValue {
     }
     if !field.except_domains.is_empty() {
         value.insert("exceptDomains".to_string(), json!(field.except_domains));
+    }
+    if field.on_create {
+        value.insert("onCreate".to_string(), JsonValue::Bool(true));
+    }
+    if field.on_update {
+        value.insert("onUpdate".to_string(), JsonValue::Bool(true));
     }
     value.insert("required".to_string(), JsonValue::Bool(field.required));
     value.insert("system".to_string(), JsonValue::Bool(field.system));
@@ -7729,6 +7852,18 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
         }
         for domain in field.only_domains.iter().chain(&field.except_domains) {
             validate_domain_option(&field.name, domain)?;
+        }
+        if field.kind != CollectionFieldKind::AutoDate && (field.on_create || field.on_update) {
+            return Err(ServerError::BadRequest(format!(
+                "field '{}' declares autodate options but is not an autodate field",
+                field.name
+            )));
+        }
+        if field.kind == CollectionFieldKind::AutoDate && !field.on_create && !field.on_update {
+            return Err(ServerError::BadRequest(format!(
+                "field '{}' autodate must run on create or update",
+                field.name
+            )));
         }
         if field.kind != CollectionFieldKind::Select && !field.values.is_empty() {
             return Err(ServerError::BadRequest(format!(
@@ -8940,6 +9075,9 @@ fn validate_record_field_options(
             CollectionFieldKind::DateTime => {
                 validate_datetime_field_value(field, value)?;
             }
+            CollectionFieldKind::AutoDate => {
+                validate_datetime_field_value(field, value)?;
+            }
             CollectionFieldKind::Array => {
                 if !value.is_array() {
                     return Err(validation_error(
@@ -8959,6 +9097,22 @@ fn validate_record_field_options(
     }
 
     Ok(())
+}
+
+fn apply_autodate_fields(
+    collection: &CollectionConfig,
+    object: &mut Map<String, JsonValue>,
+    is_create: bool,
+    now: &str,
+) {
+    for field in &collection.fields {
+        if field.kind != CollectionFieldKind::AutoDate {
+            continue;
+        }
+        if (is_create && field.on_create) || (!is_create && field.on_update) {
+            object.insert(field.name.clone(), JsonValue::String(now.to_string()));
+        }
+    }
 }
 
 fn validate_json_field_value(
@@ -9888,6 +10042,7 @@ fn field_kind_id_prefix(kind: CollectionFieldKind) -> &'static str {
         CollectionFieldKind::Relation => "relation",
         CollectionFieldKind::Select => "select",
         CollectionFieldKind::GeoPoint => "geoPoint",
+        CollectionFieldKind::AutoDate => "autodate",
     }
 }
 

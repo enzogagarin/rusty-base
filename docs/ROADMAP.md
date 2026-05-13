@@ -266,16 +266,18 @@ Exit criteria:
 - Added persisted collection field IDs, PocketBase-style `type` field metadata
   responses, export/import field ID preservation, and backwards-compatible
   `kind` input parsing.
-- Added first common/text/select/url/editor field option metadata parity for
+- Added first common/text/select/url/editor/autodate field option metadata
+  parity for
   `required`, `hidden`, `system`, `presentable`, `primaryKey`, `min`, `max`,
   `pattern`, `autogeneratePattern`, `values`, `maxSelect`, domain allow/deny
-  lists, and JSON/editor `maxSize`, including import/export preservation.
+  lists, `onCreate`/`onUpdate`, and JSON/editor `maxSize`, including
+  import/export preservation.
 - Added record create/update enforcement for `required`, text `min`/`max`/
   common regex-like `pattern` constraints, email shape, basic bool/number/array
   shapes, URL shape/domain options, PocketBase-style datetime format, geoPoint
   lon/lat shape, number `min`/`max`, select `values`/`maxSelect`, JSON
-  required/`maxSize`, editor `maxSize`, relation `maxSelect`, and relation
-  target existence against the final record state.
+  required/`maxSize`, editor `maxSize`, custom autodate stamping, relation
+  `maxSelect`, and relation target existence against the final record state.
 - Added PocketBase-style UTC `created`/`updated` timestamps for collection and
   record responses.
 - Added first `url` and `editor` field parity, including PocketBase `date`
@@ -283,12 +285,15 @@ Exit criteria:
   and editor `maxSize` validation.
 - Added first `geoPoint` field parity with lon/lat validation and nested
   `location.lat`/`location.lon` filter support.
+- Added PocketBase-style response-only collection system fields (`id`,
+  `created`, `updated`) for admin UI compatibility, represented as text and
+  autodate metadata without persisting them into user schemas.
 
 ## Next Sprint
 
 1. Expand remaining field-type parity beyond the currently supported
-   bool/number/text/email/url/editor/date/geoPoint/select/json/relation/file
-   subset.
+   bool/number/text/email/url/editor/date/autodate/geoPoint/select/json/
+   relation/file subset.
 2. Expand OAuth2 provider presets and harden callback validation around
    redirect URLs and provider-specific response edge cases.
 3. Expand compatibility fixtures around placeholder-like wildcard cases.

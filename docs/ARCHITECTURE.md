@@ -104,16 +104,19 @@ Responsibility:
   `collectionId`/`collectionName` metadata in record responses;
 - persist collection field IDs and return PocketBase-style `type` metadata
   while preserving `kind` as accepted legacy input;
-- preserve first common/text/select/url/editor field option metadata used by
-  the admin UI, including visibility, required/presentable, text bounds,
-  pattern, autogeneration/select settings, domain allow/deny lists, and
-  JSON/editor size limits;
+- return PocketBase-style response-only `id`, `created`, and `updated`
+  collection field metadata for admin UI style flows, with `created`/`updated`
+  represented as `autodate` fields;
+- preserve first common/text/select/url/editor/autodate field option metadata
+  used by the admin UI, including visibility, required/presentable, text
+  bounds, pattern, autogeneration/select settings, domain allow/deny lists, and
+  `onCreate`/`onUpdate` autodate flags plus JSON/editor size limits;
 - enforce required fields, text bounds/pattern constraints, basic scalar/array
   shapes, email shape, URL shape/domain options, PocketBase-style datetime
   format, geoPoint lon/lat shape, number bounds, select `values`/`maxSelect`,
-  JSON required/size rules, editor size rules, relation `maxSelect`, and
-  relation target existence for record create/update against the final stored
-  record shape;
+  JSON required/size rules, editor size rules, custom autodate stamping,
+  relation `maxSelect`, and relation target existence for record create/update
+  against the final stored record shape;
 - apply first record value modifiers for number add/subtract and multi-select/
   relation append, prepend, and remove operations before rule and validation
   checks;

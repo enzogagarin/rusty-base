@@ -304,16 +304,20 @@ The first server slice supports:
   and return PocketBase-style `collectionId` plus `collectionName`;
 - persisted collection field IDs with PocketBase-style `type` field metadata
   output while still accepting legacy Rusty Base `kind` input;
-- first common/text/select/url/editor field option metadata parity for
+- collection responses include PocketBase-style response-only `id`, `created`,
+  and `updated` system field metadata, with `created`/`updated` represented as
+  `autodate` fields for admin UI style flows;
+- first common/text/select/url/editor/autodate field option metadata parity for
   `required`, `hidden`, `system`, `presentable`, `primaryKey`, `min`, `max`,
   `pattern`, `autogeneratePattern`, `values`, `maxSelect`, domain allow/deny
-  lists, and JSON/editor `maxSize`;
+  lists, `onCreate`/`onUpdate`, and JSON/editor `maxSize`;
 - record create/update enforcement for `required`, text `min`/`max`/common
   regex-like `pattern` constraints, email shape, basic bool/number/array
   shapes, URL shape/domain options, PocketBase-style datetime format, geoPoint
   lon/lat shape, number `min`/`max`, select `values`/`maxSelect`, JSON
-  required/`maxSize`, editor `maxSize`, relation `maxSelect`, and relation
-  target existence, evaluated against the final record state on updates;
+  required/`maxSize`, editor `maxSize`, custom autodate stamping, relation
+  `maxSelect`, and relation target existence, evaluated against the final
+  record state on updates;
 - PocketBase-style record value modifiers for number add/subtract and
   multi-select/relation append, prepend, and remove operations;
 - `GET /api/collections/meta/scaffolds` for PocketBase-style collection type

@@ -1053,8 +1053,9 @@ fn lists_auth_methods_and_projects_auth_method_fields() {
         .unwrap(),
     );
     assert_eq!(users.status, 200);
-    assert_eq!(users.body["fields"][0]["type"], "email");
-    assert!(users.body["fields"][0].get("kind").is_none());
+    let email_field = collection_field(&users.body, "email");
+    assert_eq!(email_field["type"], "email");
+    assert!(email_field.get("kind").is_none());
 
     let methods = app.handle(HttpRequest::new(
         "GET",
@@ -2901,15 +2902,10 @@ fn generates_image_file_thumbnails() {
         .unwrap(),
     );
     assert_eq!(collection_response.status, 200);
-    assert_eq!(collection_response.body["fields"][1]["maxSize"], 4096);
-    assert_eq!(
-        collection_response.body["fields"][1]["mimeTypes"],
-        json!(["image/png"])
-    );
-    assert_eq!(
-        collection_response.body["fields"][1]["thumbs"],
-        json!(["2x0", "0x1", "2x2f", "1x1t"])
-    );
+    let photo_field = collection_field(&collection_response.body, "photo");
+    assert_eq!(photo_field["maxSize"], 4096);
+    assert_eq!(photo_field["mimeTypes"], json!(["image/png"]));
+    assert_eq!(photo_field["thumbs"], json!(["2x0", "0x1", "2x2f", "1x1t"]));
 
     let image = png_fixture(4, 2);
     let created = app.handle(multipart_request(
@@ -3099,7 +3095,7 @@ fn generates_file_tokens_for_protected_file_access() {
         .unwrap(),
     );
     assert_eq!(docs.status, 200);
-    assert_eq!(docs.body["fields"][1]["protected"], true);
+    assert_eq!(collection_field(&docs.body, "contract")["protected"], true);
 
     let created = app.handle(multipart_request(
         "POST",
@@ -3193,12 +3189,10 @@ fn updates_collections_and_renames_record_tables() {
         .unwrap(),
     );
     assert_eq!(collection_response.status, 200);
-    assert_eq!(collection_response.body["fields"][0]["type"], "text");
-    assert!(collection_response.body["fields"][0].get("kind").is_none());
-    let title_field_id = collection_response.body["fields"][0]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let title_field = collection_field(&collection_response.body, "title");
+    assert_eq!(title_field["type"], "text");
+    assert!(title_field.get("kind").is_none());
+    let title_field_id = title_field["id"].as_str().unwrap().to_string();
 
     let created = app.handle(
         HttpRequest::json(
@@ -3231,10 +3225,11 @@ fn updates_collections_and_renames_record_tables() {
     );
     assert_eq!(patched.status, 200);
     assert_eq!(patched.body["name"], "articles");
-    assert_eq!(patched.body["fields"].as_array().unwrap().len(), 2);
-    assert_eq!(patched.body["fields"][0]["id"], title_field_id);
-    assert_eq!(patched.body["fields"][0]["type"], "text");
-    assert!(patched.body["fields"][1]["id"]
+    assert_eq!(user_collection_fields(&patched.body).len(), 2);
+    let patched_title = collection_field(&patched.body, "title");
+    assert_eq!(patched_title["id"], title_field_id);
+    assert_eq!(patched_title["type"], "text");
+    assert!(collection_field(&patched.body, "tags")["id"]
         .as_str()
         .unwrap()
         .starts_with("array"));
@@ -3447,29 +3442,31 @@ fn persists_pocketbase_style_field_options() {
         .unwrap(),
     );
     assert_eq!(created.status, 200);
-    assert_eq!(created.body["fields"][0]["id"], "title_field");
-    assert_eq!(created.body["fields"][0]["type"], "text");
-    assert_eq!(created.body["fields"][0]["required"], true);
-    assert_eq!(created.body["fields"][0]["hidden"], true);
-    assert_eq!(created.body["fields"][0]["presentable"], true);
-    assert_eq!(created.body["fields"][0]["primaryKey"], false);
-    assert_eq!(created.body["fields"][0]["min"], 3);
-    assert_eq!(created.body["fields"][0]["max"], 80);
-    assert_eq!(created.body["fields"][0]["pattern"], "^[A-Z].+");
-    assert_eq!(created.body["fields"][0]["autogeneratePattern"], "[A-Z]{4}");
-    assert!(created.body["fields"][0].get("kind").is_none());
-    assert_eq!(created.body["fields"][1]["type"], "number");
-    assert_eq!(created.body["fields"][1]["min"], 1);
-    assert_eq!(created.body["fields"][1]["max"], 10);
-    assert_eq!(created.body["fields"][2]["type"], "select");
-    assert_eq!(
-        created.body["fields"][2]["values"],
-        json!(["draft", "published"])
-    );
-    assert_eq!(created.body["fields"][3]["type"], "json");
-    assert_eq!(created.body["fields"][3]["maxSize"], 128);
-    assert_eq!(created.body["fields"][4]["required"], true);
-    assert!(created.body["fields"][4].get("min").is_none());
+    let title_field = collection_field(&created.body, "title");
+    assert_eq!(title_field["id"], "title_field");
+    assert_eq!(title_field["type"], "text");
+    assert_eq!(title_field["required"], true);
+    assert_eq!(title_field["hidden"], true);
+    assert_eq!(title_field["presentable"], true);
+    assert_eq!(title_field["primaryKey"], false);
+    assert_eq!(title_field["min"], 3);
+    assert_eq!(title_field["max"], 80);
+    assert_eq!(title_field["pattern"], "^[A-Z].+");
+    assert_eq!(title_field["autogeneratePattern"], "[A-Z]{4}");
+    assert!(title_field.get("kind").is_none());
+    let score_field = collection_field(&created.body, "score");
+    assert_eq!(score_field["type"], "number");
+    assert_eq!(score_field["min"], 1);
+    assert_eq!(score_field["max"], 10);
+    let status_field = collection_field(&created.body, "status");
+    assert_eq!(status_field["type"], "select");
+    assert_eq!(status_field["values"], json!(["draft", "published"]));
+    let metadata_field = collection_field(&created.body, "metadata");
+    assert_eq!(metadata_field["type"], "json");
+    assert_eq!(metadata_field["maxSize"], 128);
+    let published_field = collection_field(&created.body, "published");
+    assert_eq!(published_field["required"], true);
+    assert!(published_field.get("min").is_none());
 
     let patched = app.handle(
         HttpRequest::json(
@@ -3490,11 +3487,12 @@ fn persists_pocketbase_style_field_options() {
         .unwrap(),
     );
     assert_eq!(patched.status, 200);
-    assert_eq!(patched.body["fields"][0]["id"], "title_field");
-    assert_eq!(patched.body["fields"][0]["min"], 5);
-    assert_eq!(patched.body["fields"][0]["max"], 100);
-    assert_eq!(patched.body["fields"][0]["pattern"], "");
-    assert_eq!(patched.body["fields"][0]["autogeneratePattern"], "");
+    let patched_title = collection_field(&patched.body, "title");
+    assert_eq!(patched_title["id"], "title_field");
+    assert_eq!(patched_title["min"], 5);
+    assert_eq!(patched_title["max"], 100);
+    assert_eq!(patched_title["pattern"], "");
+    assert_eq!(patched_title["autogeneratePattern"], "");
 
     let invalid_range = app.handle(
         HttpRequest::json(
@@ -3621,18 +3619,17 @@ fn supports_url_editor_and_date_field_parity() {
         .unwrap(),
     );
     assert_eq!(created.status, 200);
-    assert_eq!(created.body["fields"][0]["type"], "url");
+    let site_field = collection_field(&created.body, "site");
+    assert_eq!(site_field["type"], "url");
+    assert_eq!(site_field["onlyDomains"], json!(["example.com"]));
+    assert_eq!(site_field["exceptDomains"], json!(["blocked.example.com"]));
+    let body_field = collection_field(&created.body, "body");
+    assert_eq!(body_field["type"], "editor");
+    assert_eq!(body_field["maxSize"], 16);
     assert_eq!(
-        created.body["fields"][0]["onlyDomains"],
-        json!(["example.com"])
+        collection_field(&created.body, "publishedAt")["type"],
+        "date"
     );
-    assert_eq!(
-        created.body["fields"][0]["exceptDomains"],
-        json!(["blocked.example.com"])
-    );
-    assert_eq!(created.body["fields"][1]["type"], "editor");
-    assert_eq!(created.body["fields"][1]["maxSize"], 16);
-    assert_eq!(created.body["fields"][2]["type"], "date");
 
     let valid = app.handle(
         HttpRequest::json(
@@ -3709,6 +3706,117 @@ fn supports_url_editor_and_date_field_parity() {
 }
 
 #[test]
+fn supports_autodate_field_metadata_and_record_stamping() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let created_collection = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "events",
+                "fields": [
+                    {"name": "title", "type": "text"},
+                    {"name": "startedAt", "type": "autodate", "onCreate": true},
+                    {
+                        "name": "touchedAt",
+                        "type": "autodate",
+                        "onCreate": true,
+                        "onUpdate": true
+                    }
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created_collection.status, 200);
+    assert_eq!(
+        collection_field(&created_collection.body, "id")["type"],
+        "text"
+    );
+    assert_eq!(
+        collection_field(&created_collection.body, "created")["type"],
+        "autodate"
+    );
+    assert_eq!(
+        collection_field(&created_collection.body, "created")["onCreate"],
+        true
+    );
+    assert_eq!(
+        collection_field(&created_collection.body, "created")["onUpdate"],
+        false
+    );
+    assert_eq!(
+        collection_field(&created_collection.body, "updated")["type"],
+        "autodate"
+    );
+    assert_eq!(
+        collection_field(&created_collection.body, "updated")["onUpdate"],
+        true
+    );
+    assert_eq!(
+        collection_field(&created_collection.body, "startedAt")["type"],
+        "autodate"
+    );
+    assert_eq!(
+        collection_field(&created_collection.body, "startedAt")["onCreate"],
+        true
+    );
+
+    let created_record = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/events/records",
+            json!({"id": "event_1", "title": "Launch"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created_record.status, 200);
+    assert_pocketbase_datetime_value(&created_record.body["startedAt"]);
+    assert_pocketbase_datetime_value(&created_record.body["touchedAt"]);
+
+    let echoed_patch = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/events",
+            json!({"fields": created_collection.body["fields"].clone()}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(echoed_patch.status, 200);
+    assert_eq!(user_collection_fields(&echoed_patch.body).len(), 3);
+    assert_eq!(
+        collection_field(&echoed_patch.body, "created")["type"],
+        "autodate"
+    );
+
+    let reserved_user_field = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "bad_reserved",
+                "fields": [{"name": "id", "type": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(reserved_user_field.status, 400);
+
+    let updated_record = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/events/records/event_1",
+            json!({"title": "Launch day"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(updated_record.status, 200);
+    assert_pocketbase_datetime_value(&updated_record.body["startedAt"]);
+    assert_pocketbase_datetime_value(&updated_record.body["touchedAt"]);
+}
+
+#[test]
 fn supports_geo_point_field_values_and_filters() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
@@ -3727,7 +3835,10 @@ fn supports_geo_point_field_values_and_filters() {
         .unwrap(),
     );
     assert_eq!(created.status, 200);
-    assert_eq!(created.body["fields"][1]["type"], "geoPoint");
+    assert_eq!(
+        collection_field(&created.body, "location")["type"],
+        "geoPoint"
+    );
 
     let valid = app.handle(
         HttpRequest::json(
@@ -4629,10 +4740,7 @@ fn imports_collections_and_optionally_deletes_missing_metadata() {
 
     let posts_after_merge = app.handle(HttpRequest::new("GET", "/api/collections/posts"));
     assert_eq!(posts_after_merge.status, 200);
-    assert_eq!(
-        posts_after_merge.body["fields"].as_array().unwrap().len(),
-        3
-    );
+    assert_eq!(user_collection_fields(&posts_after_merge.body).len(), 3);
     assert_eq!(posts_after_merge.body["listRule"], "title ~ 'Rusty'");
 
     let list_after_merge = app.handle(HttpRequest::new("GET", "/api/collections/posts/records"));
@@ -4670,10 +4778,7 @@ fn imports_collections_and_optionally_deletes_missing_metadata() {
 
     let posts_after_replace = app.handle(HttpRequest::new("GET", "/api/collections/posts"));
     assert_eq!(posts_after_replace.status, 200);
-    assert_eq!(
-        posts_after_replace.body["fields"].as_array().unwrap().len(),
-        2
-    );
+    assert_eq!(user_collection_fields(&posts_after_replace.body).len(), 2);
 
     let list_after_replace = app.handle(HttpRequest::new("GET", "/api/collections/posts/records"));
     assert_eq!(list_after_replace.status, 200);
@@ -4704,6 +4809,14 @@ fn returns_collection_scaffolds_and_import_ready_export_payload() {
     assert_eq!(scaffolds.body["view"]["type"], "view");
     assert_eq!(scaffolds.body["base"]["fields"][0]["name"], "id");
     assert_eq!(scaffolds.body["base"]["fields"][0]["type"], "text");
+    assert_eq!(
+        collection_field(&scaffolds.body["base"], "created")["type"],
+        "autodate"
+    );
+    assert_eq!(
+        collection_field(&scaffolds.body["base"], "updated")["onUpdate"],
+        true
+    );
     assert_eq!(
         scaffolds.body["auth"]["passwordAuth"]["identityFields"][0],
         "email"
@@ -4756,9 +4869,9 @@ fn returns_collection_scaffolds_and_import_ready_export_payload() {
 
     let imported_posts = fresh.handle(HttpRequest::new("GET", "/api/collections/posts"));
     assert_eq!(imported_posts.status, 200);
-    assert_eq!(imported_posts.body["fields"].as_array().unwrap().len(), 2);
+    assert_eq!(user_collection_fields(&imported_posts.body).len(), 2);
     assert_eq!(
-        imported_posts.body["fields"][0]["id"],
+        collection_field(&imported_posts.body, "title")["id"],
         exported_title_field_id
     );
     assert_eq!(imported_posts.body["listRule"], "published = true");
@@ -5343,4 +5456,22 @@ fn assert_pocketbase_datetime_value(value: &JsonValue) {
             "unexpected datetime digit at {index}: {value}"
         );
     }
+}
+
+fn collection_field<'a>(collection: &'a JsonValue, name: &str) -> &'a JsonValue {
+    collection["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|field| field["name"] == name)
+        .unwrap_or_else(|| panic!("missing collection field {name}"))
+}
+
+fn user_collection_fields(collection: &JsonValue) -> Vec<&JsonValue> {
+    collection["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|field| !matches!(field["name"].as_str(), Some("id" | "created" | "updated")))
+        .collect()
 }
