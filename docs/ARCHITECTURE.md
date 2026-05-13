@@ -102,11 +102,12 @@ Responsibility:
   while preserving `kind` as accepted legacy input;
 - preserve first common/text/select field option metadata used by the admin UI,
   including visibility, required/presentable, text bounds, pattern, and
-  autogeneration/select settings;
+  autogeneration/select settings, plus JSON size limits;
 - enforce required fields, text bounds/pattern constraints, basic scalar/array
   shapes, email shape, PocketBase-style datetime format, number bounds, select
-  `values`/`maxSelect`, relation `maxSelect`, and relation target existence for
-  record create/update against the final stored record shape;
+  `values`/`maxSelect`, JSON required/size rules, relation `maxSelect`, and
+  relation target existence for record create/update against the final stored
+  record shape;
 - list records with PocketBase-style filtering, pagination, `skipTotal`,
   sorting, expand, and response projection;
 - execute JSON `/api/batch` record create/update/upsert/delete requests inside

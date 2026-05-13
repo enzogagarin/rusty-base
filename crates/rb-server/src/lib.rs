@@ -38,6 +38,7 @@ const SUPERUSERS_COLLECTION: &str = "_superusers";
 const MAX_THUMB_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_THUMB_SOURCE_PIXELS: u64 = 16_000_000;
 const MAX_THUMB_EDGE: u32 = 2048;
+const DEFAULT_JSON_MAX_SIZE_BYTES: u64 = 1024 * 1024;
 const REALTIME_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const DEFAULT_BATCH_MAX_REQUESTS: u64 = 50;
 const DEFAULT_BATCH_TIMEOUT_SECONDS: u64 = 3;
@@ -7614,13 +7615,20 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
             }
         }
         if field.kind != CollectionFieldKind::File
-            && (field.protected
-                || field.max_size.is_some()
-                || !field.mime_types.is_empty()
-                || !field.thumbs.is_empty())
+            && (field.protected || !field.mime_types.is_empty() || !field.thumbs.is_empty())
         {
             return Err(ServerError::BadRequest(format!(
                 "field '{}' declares file options but is not a file field",
+                field.name
+            )));
+        }
+        if !matches!(
+            field.kind,
+            CollectionFieldKind::File | CollectionFieldKind::Json
+        ) && field.max_size.is_some()
+        {
+            return Err(ServerError::BadRequest(format!(
+                "field '{}' declares maxSize but is not a file or json field",
                 field.name
             )));
         }
@@ -8530,7 +8538,7 @@ fn validate_record_field_options(
 ) -> Result<(), ServerError> {
     for field in &collection.fields {
         let value = object.get(&field.name);
-        if field.required && value.is_none_or(is_empty_record_value) {
+        if field.required && value.is_none_or(|value| is_empty_field_value(field, value)) {
             return Err(validation_error(
                 "Failed to validate record.",
                 &field.name,
@@ -8542,7 +8550,7 @@ fn validate_record_field_options(
         let Some(value) = value else {
             continue;
         };
-        if is_empty_record_value(value) {
+        if is_empty_field_value(field, value) {
             continue;
         }
 
@@ -8578,11 +8586,37 @@ fn validate_record_field_options(
             }
             CollectionFieldKind::Relation => validate_relation_field_value(field, value)?,
             CollectionFieldKind::Select => validate_select_field_value(field, value)?,
-            CollectionFieldKind::Json | CollectionFieldKind::File => {}
+            CollectionFieldKind::Json => validate_json_field_value(field, value)?,
+            CollectionFieldKind::File => {}
         }
     }
 
     Ok(())
+}
+
+fn validate_json_field_value(
+    field: &CollectionField,
+    value: &JsonValue,
+) -> Result<(), ServerError> {
+    let max_size = json_field_max_size(field);
+    let size = serde_json::to_vec(value)?.len() as u64;
+    if size > max_size {
+        return Err(validation_error(
+            "Failed to validate record.",
+            &field.name,
+            "validation_max_size",
+            format!("Field '{}' must be at most {} bytes.", field.name, max_size),
+        ));
+    }
+
+    Ok(())
+}
+
+fn json_field_max_size(field: &CollectionField) -> u64 {
+    field
+        .max_size
+        .filter(|max_size| *max_size > 0)
+        .unwrap_or(DEFAULT_JSON_MAX_SIZE_BYTES)
 }
 
 fn validate_datetime_field_value(
@@ -8929,6 +8963,20 @@ fn invalid_relation_target_value(field: &CollectionField) -> ServerError {
         "validation_invalid_relation",
         format!("Field '{}' references a missing record.", field.name),
     )
+}
+
+fn is_empty_field_value(field: &CollectionField, value: &JsonValue) -> bool {
+    if field.kind == CollectionFieldKind::Json {
+        return match value {
+            JsonValue::Null => true,
+            JsonValue::String(value) => value.is_empty(),
+            JsonValue::Array(values) => values.is_empty(),
+            JsonValue::Object(values) => values.is_empty(),
+            _ => false,
+        };
+    }
+
+    is_empty_record_value(value)
 }
 
 fn is_empty_record_value(value: &JsonValue) -> bool {

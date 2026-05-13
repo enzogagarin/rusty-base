@@ -4,7 +4,7 @@ use rb_server::{
     RealtimeConnection, RealtimeEvent, RustyBaseApp, Store,
 };
 use rusqlite::{params, Connection};
-use serde_json::json;
+use serde_json::{json, Value as JsonValue};
 use std::{
     env, fs,
     io::{BufRead, BufReader, Cursor, Read, Write},
@@ -3326,6 +3326,11 @@ fn persists_pocketbase_style_field_options() {
                         "values": ["draft", "published"]
                     },
                     {
+                        "name": "metadata",
+                        "type": "json",
+                        "maxSize": 128
+                    },
+                    {
                         "name": "published",
                         "kind": "bool",
                         "required": true
@@ -3355,8 +3360,10 @@ fn persists_pocketbase_style_field_options() {
         created.body["fields"][2]["values"],
         json!(["draft", "published"])
     );
-    assert_eq!(created.body["fields"][3]["required"], true);
-    assert!(created.body["fields"][3].get("min").is_none());
+    assert_eq!(created.body["fields"][3]["type"], "json");
+    assert_eq!(created.body["fields"][3]["maxSize"], 128);
+    assert_eq!(created.body["fields"][4]["required"], true);
+    assert!(created.body["fields"][4].get("min").is_none());
 
     let patched = app.handle(
         HttpRequest::json(
@@ -3447,6 +3454,19 @@ fn persists_pocketbase_style_field_options() {
         .unwrap(),
     );
     assert_eq!(invalid_select_values_kind.status, 400);
+
+    let invalid_max_size_kind = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "bad_max_size_kind",
+                "fields": [{"name": "title", "type": "text", "maxSize": 10}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(invalid_max_size_kind.status, 400);
 
     let invalid_kind = app.handle(
         HttpRequest::json(
@@ -3983,6 +4003,94 @@ fn enforces_non_text_field_option_shapes_on_records() {
     assert_eq!(valid_patch.body["publishedAt"], "2024-12-01 09:00:00.000Z");
     assert_eq!(valid_patch.body["status"], "published");
     assert_eq!(valid_patch.body["roles"], json!(["reader", "writer"]));
+}
+
+#[test]
+fn enforces_json_field_options_on_records() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let collection = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "events",
+                "fields": [
+                    {"name": "title", "type": "text"},
+                    {"name": "payload", "type": "json", "required": true, "maxSize": 20},
+                    {"name": "notes", "type": "json", "maxSize": 8}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(collection.status, 200);
+
+    let valid_object = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/events/records",
+            json!({"id": "event_1", "title": "Object", "payload": {"ok": true}}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(valid_object.status, 200);
+
+    let valid_scalar = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/events/records/event_1",
+            json!({"payload": false, "notes": null}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(valid_scalar.status, 200);
+    assert_eq!(valid_scalar.body["payload"], false);
+    assert_eq!(valid_scalar.body["notes"], JsonValue::Null);
+
+    for empty in [JsonValue::Null, json!(""), json!([]), json!({})] {
+        let response = app.handle(
+            HttpRequest::json(
+                "POST",
+                "/api/collections/events/records",
+                json!({"title": "Empty JSON", "payload": empty}),
+            )
+            .unwrap(),
+        );
+        assert_eq!(response.status, 400);
+        assert_eq!(
+            response.body["data"]["payload"]["code"],
+            "validation_required"
+        );
+    }
+
+    let too_large = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/events/records",
+            json!({"title": "Too large", "payload": {"message": "this is too large"}}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(too_large.status, 400);
+    assert_eq!(
+        too_large.body["data"]["payload"]["code"],
+        "validation_max_size"
+    );
+
+    let too_large_patch = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/events/records/event_1",
+            json!({"notes": {"long": "value"}}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(too_large_patch.status, 400);
+    assert_eq!(
+        too_large_patch.body["data"]["notes"]["code"],
+        "validation_max_size"
+    );
 }
 
 #[test]

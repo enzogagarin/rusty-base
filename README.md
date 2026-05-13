@@ -302,12 +302,13 @@ The first server slice supports:
   output while still accepting legacy Rusty Base `kind` input;
 - first common/text/select field option metadata parity for `required`,
   `hidden`, `system`, `presentable`, `primaryKey`, `min`, `max`, `pattern`,
-  `autogeneratePattern`, `values`, and `maxSelect`;
+  `autogeneratePattern`, `values`, `maxSelect`, and JSON `maxSize`;
 - record create/update enforcement for `required`, text `min`/`max`/common
   regex-like `pattern` constraints, email shape, basic bool/number/array
   shapes, PocketBase-style datetime format, number `min`/`max`, select
-  `values`/`maxSelect`, relation `maxSelect`, and relation target existence,
-  evaluated against the final record state on updates;
+  `values`/`maxSelect`, JSON required/`maxSize`, relation `maxSelect`, and
+  relation target existence, evaluated against the final record state on
+  updates;
 - `GET /api/collections/meta/scaffolds` for PocketBase-style collection type
   scaffolds;
 - `GET /api/collections/meta/export` as a Rusty Base import-ready metadata
