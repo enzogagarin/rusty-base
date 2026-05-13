@@ -1,8 +1,8 @@
 use rb_filter_engine::{
     compile_ast, compile_filter, compile_filter_with_context, compile_filter_with_named_params,
     compile_filter_with_named_params_and_context, compile_filter_with_params,
-    compile_filter_with_settings, parse_filter, FilterContext, FilterDateTime, FilterErrorKind,
-    FilterSettings, NamedParam, Value,
+    compile_filter_with_settings, parse_filter, plan_filter_with_context, render_plan_sql,
+    FilterContext, FilterDateTime, FilterErrorKind, FilterSettings, NamedParam, Value,
 };
 
 #[test]
@@ -220,6 +220,23 @@ fn compiles_request_isset_modifier() {
 }
 
 #[test]
+fn compiles_request_changed_modifier() {
+    let context = fixed_context()
+        .with_body_value("title", Value::String("Rusty Base".to_string()))
+        .with_body_changed("title", true)
+        .with_body_changed("role", true);
+
+    let out = compile_filter_with_context(
+        "@request.body.title:changed = true && @request.body.role:changed = false",
+        context,
+    )
+    .unwrap();
+
+    assert_eq!(out.sql, "TRUE = TRUE AND FALSE = FALSE");
+    assert_eq!(out.params, Vec::<Value>::new());
+}
+
+#[test]
 fn compiles_request_lower_and_length_modifiers() {
     let context = fixed_context()
         .with_body_value("title", Value::String("Rusty Base".to_string()))
@@ -239,6 +256,54 @@ fn compiles_request_lower_and_length_modifiers() {
             Value::String("rusty base".to_string()),
             Value::Number("2".to_string()),
             Value::Number("2".to_string())
+        ]
+    );
+}
+
+#[test]
+fn compiles_request_each_modifier() {
+    let context = fixed_context().with_body_each_values(
+        "scopes",
+        [
+            Value::String("post:create".to_string()),
+            Value::String("comment:create".to_string()),
+        ],
+    );
+
+    let out = compile_filter_with_context("@request.body.scopes:each ~ 'create'", context).unwrap();
+
+    assert_eq!(out.sql, "? LIKE ? ESCAPE '\\' AND ? LIKE ? ESCAPE '\\'");
+    assert_eq!(
+        out.params,
+        vec![
+            Value::String("post:create".to_string()),
+            Value::String("%create%".to_string()),
+            Value::String("comment:create".to_string()),
+            Value::String("%create%".to_string())
+        ]
+    );
+}
+
+#[test]
+fn plans_request_each_modifier() {
+    let context = fixed_context().with_body_each_values(
+        "scopes",
+        [
+            Value::String("post:create".to_string()),
+            Value::String("comment:create".to_string()),
+        ],
+    );
+    let plan = plan_filter_with_context("@request.body.scopes:each ~ 'create'", context).unwrap();
+    let out = render_plan_sql(&plan).unwrap();
+
+    assert_eq!(out.sql, "? LIKE ? ESCAPE '\\' AND ? LIKE ? ESCAPE '\\'");
+    assert_eq!(
+        out.params,
+        vec![
+            Value::String("post:create".to_string()),
+            Value::String("%create%".to_string()),
+            Value::String("comment:create".to_string()),
+            Value::String("%create%".to_string())
         ]
     );
 }

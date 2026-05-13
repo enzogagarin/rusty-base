@@ -519,6 +519,90 @@ fn applies_update_and_delete_rules_against_existing_records() {
 }
 
 #[test]
+fn applies_request_changed_modifier_in_update_rules() {
+    let store = Store::open_in_memory().unwrap();
+    store
+        .create_collection(
+            CollectionConfig::new(
+                "posts",
+                [
+                    CollectionField::new("title", CollectionFieldKind::Text),
+                    CollectionField::new("owner", CollectionFieldKind::Text),
+                    CollectionField::new("role", CollectionFieldKind::Text),
+                ],
+            )
+            .with_update_rule("owner = @request.auth.id && @request.body.role:changed = false"),
+        )
+        .unwrap();
+    store
+        .create_record(
+            "posts",
+            json!({"id": "post_1", "title": "Mine", "owner": "user_1", "role": "member"}),
+        )
+        .unwrap();
+
+    let context =
+        FilterContext::default().with_auth_value("id", FilterValue::String("user_1".to_string()));
+    let title_update = store
+        .update_record_with_context(
+            "posts",
+            "post_1",
+            json!({"title": "Renamed"}),
+            context.clone(),
+        )
+        .unwrap();
+    assert_eq!(title_update["title"], "Renamed");
+
+    let same_role = store
+        .update_record_with_context(
+            "posts",
+            "post_1",
+            json!({"role": "member"}),
+            context.clone(),
+        )
+        .unwrap();
+    assert_eq!(same_role["role"], "member");
+
+    let changed_role = store
+        .update_record_with_context("posts", "post_1", json!({"role": "admin"}), context)
+        .unwrap_err();
+    assert!(changed_role.to_string().contains("update rule denied"));
+}
+
+#[test]
+fn applies_each_field_modifier_in_list_rules() {
+    let store = Store::open_in_memory().unwrap();
+    store
+        .create_collection(
+            CollectionConfig::new(
+                "posts",
+                [
+                    CollectionField::new("title", CollectionFieldKind::Text),
+                    CollectionField::new("scopes", CollectionFieldKind::Array),
+                ],
+            )
+            .with_list_rule("scopes:each ~ 'create'"),
+        )
+        .unwrap();
+    store
+        .create_record(
+            "posts",
+            json!({"title": "Allowed", "scopes": ["post:create", "comment:create"]}),
+        )
+        .unwrap();
+    store
+        .create_record(
+            "posts",
+            json!({"title": "Denied", "scopes": ["post:create", "post:delete"]}),
+        )
+        .unwrap();
+
+    let list = store.list_records("posts", ListOptions::default()).unwrap();
+    assert_eq!(list.total_items, 1);
+    assert_eq!(list.items[0]["title"], "Allowed");
+}
+
+#[test]
 fn handles_pocketbase_style_records_http_routes() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
@@ -572,6 +656,80 @@ fn handles_pocketbase_style_records_http_routes() {
     assert_eq!(list.status, 200);
     assert_eq!(list.body["totalItems"], 1);
     assert_eq!(list.body["items"][0]["title"], "Rusty Base");
+}
+
+#[test]
+fn updates_collections_and_renames_record_tables() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let collection_response = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [{"name": "title", "kind": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(collection_response.status, 200);
+
+    let created = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Rusty Base"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created.status, 200);
+
+    let view = app.handle(HttpRequest::new("GET", "/api/collections/posts"));
+    assert_eq!(view.status, 200);
+    assert_eq!(view.body["name"], "posts");
+
+    let patched = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts",
+            json!({
+                "name": "articles",
+                "fields": [
+                    {"name": "title", "kind": "text"},
+                    {"name": "tags", "kind": "array"}
+                ],
+                "listRule": "title ~ 'Rusty'"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(patched.status, 200);
+    assert_eq!(patched.body["name"], "articles");
+    assert_eq!(patched.body["fields"].as_array().unwrap().len(), 2);
+
+    let old_collection = app.handle(HttpRequest::new("GET", "/api/collections/posts"));
+    assert_eq!(old_collection.status, 404);
+
+    let old_records = app.handle(HttpRequest::new("GET", "/api/collections/posts/records"));
+    assert_eq!(old_records.status, 404);
+
+    let list = app.handle(HttpRequest::new("GET", "/api/collections/articles/records"));
+    assert_eq!(list.status, 200);
+    assert_eq!(list.body["totalItems"], 1);
+    assert_eq!(list.body["items"][0]["collectionName"], "articles");
+    assert_eq!(list.body["items"][0]["title"], "Rusty Base");
+
+    let created_with_new_field = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/articles/records",
+            json!({"title": "Rusty Addendum", "tags": ["rust"]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created_with_new_field.status, 200);
+    assert_eq!(created_with_new_field.body["tags"], json!(["rust"]));
 }
 
 #[test]
@@ -698,6 +856,48 @@ fn applies_request_lower_and_length_modifiers_in_create_rules() {
             "POST",
             "/api/collections/posts/records",
             json!({"title": "Rusty Base", "tags": ["rust"]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(denied.status, 403);
+}
+
+#[test]
+fn applies_request_each_modifier_in_create_rules() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let collection_response = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "title", "kind": "text"},
+                    {"name": "scopes", "kind": "array"}
+                ],
+                "createRule": "@request.body.scopes:length > 0 && @request.body.scopes:each ~ 'create'"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(collection_response.status, 200);
+
+    let allowed = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Allowed", "scopes": ["post:create", "comment:create"]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(allowed.status, 200);
+
+    let denied = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Denied", "scopes": ["post:create", "post:delete"]}),
         )
         .unwrap(),
     );

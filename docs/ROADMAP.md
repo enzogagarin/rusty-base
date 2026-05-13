@@ -184,6 +184,12 @@ Exit criteria:
   generic 400 response.
 - Added field-level validation `data` details for initial auth form and record
   form failures.
+- Added `@request.body.*:changed` support for update rules by comparing
+  submitted body fields with the existing record values.
+- Added initial `:each` support for existing array-like fields and submitted
+  `@request.body.*` arrays.
+- Added `GET/PATCH /api/collections/:collection` for collection metadata
+  updates, field list changes, rule changes, and safe record table renames.
 
 ## Next Sprint
 
@@ -191,5 +197,6 @@ Exit criteria:
 2. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 3. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.
-4. Add the remaining request/field modifiers such as `:changed` and `:each`.
-5. Start collection update/migration APIs for changing schemas after creation.
+4. Add collection delete and truncate endpoints.
+5. Expand PocketBase-compatible relation-edge and uploaded-file modifier
+   fixtures.

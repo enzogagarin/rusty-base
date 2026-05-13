@@ -49,6 +49,16 @@ fn compiles_lower_and_length_field_modifiers() {
 }
 
 #[test]
+fn compiles_each_field_modifier() {
+    let out = compile_filter_with_schema("tags:each ~ 'rust'", &schema()).unwrap();
+    assert_eq!(
+        out.sql,
+        "NOT EXISTS (SELECT 1 FROM json_each(\"tags\") WHERE NOT (json_each.value LIKE ? ESCAPE '\\'))"
+    );
+    assert_eq!(out.params, vec![Value::String("%rust%".to_string())]);
+}
+
+#[test]
 fn rejects_unknown_fields() {
     let err = compile_filter_with_schema("password = 'secret'", &schema()).unwrap_err();
     assert!(err.to_string().contains("unknown field"));

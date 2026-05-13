@@ -258,8 +258,11 @@ The first filter engine prototype supports:
   `@request.context`, and `@request.method`;
 - `@request.*:isset` checks for rule filters, for example
   `@request.body.role:isset = false`;
-- `:lower` and `:length` modifiers for bounded rule/filter expressions, including
-  `@request.body.title:lower` and `tags:length`;
+- `@request.body.*:changed` checks for update rules, for example
+  `@request.body.role:changed = false`;
+- `:lower`, `:length`, and `:each` modifiers for bounded rule/filter
+  expressions, including `@request.body.title:lower`, `tags:length`, and
+  `tags:each`;
 - comparison operators: `=`, `!=`, `>`, `>=`, `<`, `<=`;
 - contains-like operators: `~`, `!~`;
 - PocketBase-style any-match operators for SQLite JSON arrays: `?=`, `?!=`, `?>`, `?>=`, `?<`, `?<=`, `?~`, `?!~`;
@@ -285,6 +288,8 @@ The first server slice supports:
 - SQLite-backed collection metadata;
 - per-collection record tables with JSON record data;
 - `GET/POST /api/collections`;
+- `GET/PATCH /api/collections/:collection`, including safe metadata updates
+  and record table renames;
 - `GET/POST /api/collections/:collection/records`;
 - `GET/PATCH/DELETE /api/collections/:collection/records/:id`;
 - PocketBase-like list response shape with `page`, `perPage`, `totalItems`,
@@ -320,7 +325,8 @@ id IS NULL OR (status = TRUE AND score >= ?)
 Not implemented yet:
 
 - full PocketBase `fexpr` grammar compatibility;
-- remaining request/field modifiers such as `:changed` and `:each`;
+- full PocketBase modifier compatibility for uploaded files and relation-edge
+  cases;
 - cross-collection identifiers such as `@collection.*`;
 - full PocketBase auth provider/settings parity beyond the current password-token
   flow;

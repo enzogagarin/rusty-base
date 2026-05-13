@@ -105,6 +105,22 @@ impl FilterContext {
         self.request.body_lengths.insert(field.into(), length);
         self
     }
+
+    pub fn with_body_each_values(
+        mut self,
+        field: impl Into<String>,
+        values: impl IntoIterator<Item = Value>,
+    ) -> Self {
+        self.request
+            .body_each_values
+            .insert(field.into(), values.into_iter().collect());
+        self
+    }
+
+    pub fn with_body_changed(mut self, field: impl Into<String>, changed: bool) -> Self {
+        self.request.body_changes.insert(field.into(), changed);
+        self
+    }
 }
 
 impl Default for FilterContext {
@@ -125,6 +141,8 @@ pub struct RequestContext {
     pub headers: HashMap<String, Value>,
     pub body: HashMap<String, Value>,
     pub body_lengths: HashMap<String, usize>,
+    pub body_each_values: HashMap<String, Vec<Value>>,
+    pub body_changes: HashMap<String, bool>,
 }
 
 impl RequestContext {
@@ -166,6 +184,21 @@ impl RequestContext {
         self.body_lengths.insert(field.into(), length);
         self
     }
+
+    pub fn with_body_each_values(
+        mut self,
+        field: impl Into<String>,
+        values: impl IntoIterator<Item = Value>,
+    ) -> Self {
+        self.body_each_values
+            .insert(field.into(), values.into_iter().collect());
+        self
+    }
+
+    pub fn with_body_changed(mut self, field: impl Into<String>, changed: bool) -> Self {
+        self.body_changes.insert(field.into(), changed);
+        self
+    }
 }
 
 impl Default for RequestContext {
@@ -178,6 +211,8 @@ impl Default for RequestContext {
             headers: HashMap::new(),
             body: HashMap::new(),
             body_lengths: HashMap::new(),
+            body_each_values: HashMap::new(),
+            body_changes: HashMap::new(),
         }
     }
 }
@@ -379,6 +414,7 @@ pub struct ResolvedField {
     pub sql: String,
     pub kind: Option<FieldKind>,
     pub relation: Option<RelationTraversal>,
+    pub each: bool,
 }
 
 impl ResolvedField {
@@ -387,6 +423,7 @@ impl ResolvedField {
             sql: sql.into(),
             kind: None,
             relation: None,
+            each: false,
         }
     }
 
@@ -395,6 +432,7 @@ impl ResolvedField {
             sql: sql.into(),
             kind: Some(kind),
             relation: None,
+            each: false,
         }
     }
 
@@ -548,6 +586,10 @@ pub enum PlannedOperand {
         kind: FieldKind,
     },
     Value(Value),
+    EachValues {
+        name: String,
+        values: Vec<Value>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1573,11 +1615,14 @@ enum LogicOp {
 enum FieldModifier {
     Lower,
     Length,
+    Each,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RequestModifier {
     Isset,
+    Changed,
+    Each,
     Lower,
     Length,
 }
@@ -1868,9 +1913,58 @@ impl<'a> FilterPlanner<'a> {
         match operand {
             Operand::Field(field) => self.plan_field_operand(field),
             Operand::Function { name, args } => self.plan_function_operand(name, args),
-            Operand::Macro(name) => Ok(PlannedOperand::Value(resolve_macro(name, &self.context)?)),
+            Operand::Macro(name) => {
+                if let Some(each) = self.resolve_request_each_operand(name)? {
+                    return Ok(each);
+                }
+                Ok(PlannedOperand::Value(resolve_macro(name, &self.context)?))
+            }
             Operand::Value(value) => Ok(PlannedOperand::Value(value.clone())),
         }
+    }
+
+    fn resolve_request_each_operand(
+        &self,
+        name: &str,
+    ) -> Result<Option<PlannedOperand>, FilterError> {
+        let (base_name, modifier) = split_request_modifier(name)?;
+        if modifier != Some(RequestModifier::Each) {
+            return Ok(None);
+        }
+
+        let Some(field) = base_name.strip_prefix("@request.body.") else {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::InvalidLiteral,
+                "request modifier ':each' is only supported for @request.body.*",
+            ));
+        };
+        if !is_safe_identifier_path(field) {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::UnsafeIdentifier,
+                format!("unsafe request identifier '{name}'"),
+            ));
+        }
+
+        let values = self
+            .context
+            .request
+            .body_each_values
+            .get(field)
+            .cloned()
+            .or_else(|| {
+                self.context
+                    .request
+                    .body
+                    .get(field)
+                    .cloned()
+                    .map(|value| vec![value])
+            })
+            .unwrap_or_default();
+
+        Ok(Some(PlannedOperand::EachValues {
+            name: name.to_string(),
+            values,
+        }))
     }
 
     fn plan_field_operand(&mut self, field: &str) -> Result<PlannedOperand, FilterError> {
@@ -2091,6 +2185,17 @@ impl<'a> SqlCompiler<'a> {
     ) -> Result<String, FilterError> {
         let left = self.resolve_operand(left)?;
         let right = self.resolve_operand(right)?;
+
+        if left.is_each_match() {
+            return self.compile_each_match(&left, op, &right);
+        }
+        if right.is_each_match() {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::InvalidOperator,
+                "':each' modifier is only supported on the left side of a comparison",
+            ));
+        }
+
         validate_compare_operands(&left, op, &right)?;
 
         if is_any_match_op(op) {
@@ -2137,9 +2242,58 @@ impl<'a> SqlCompiler<'a> {
                 })
             }
             Operand::Function { name, args } => self.resolve_function(name, args),
-            Operand::Macro(name) => Ok(ResolvedOperand::Value(resolve_macro(name, &self.context)?)),
+            Operand::Macro(name) => {
+                if let Some(each) = self.resolve_request_each_operand(name)? {
+                    return Ok(each);
+                }
+                Ok(ResolvedOperand::Value(resolve_macro(name, &self.context)?))
+            }
             Operand::Value(value) => Ok(ResolvedOperand::Value(value.clone())),
         }
+    }
+
+    fn resolve_request_each_operand(
+        &self,
+        name: &str,
+    ) -> Result<Option<ResolvedOperand>, FilterError> {
+        let (base_name, modifier) = split_request_modifier(name)?;
+        if modifier != Some(RequestModifier::Each) {
+            return Ok(None);
+        }
+
+        let Some(field) = base_name.strip_prefix("@request.body.") else {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::InvalidLiteral,
+                format!("request modifier ':each' is only supported for @request.body.*"),
+            ));
+        };
+        if !is_safe_identifier_path(field) {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::UnsafeIdentifier,
+                format!("unsafe request identifier '{name}'"),
+            ));
+        }
+
+        let values = self
+            .context
+            .request
+            .body_each_values
+            .get(field)
+            .cloned()
+            .or_else(|| {
+                self.context
+                    .request
+                    .body
+                    .get(field)
+                    .cloned()
+                    .map(|value| vec![value])
+            })
+            .unwrap_or_default();
+
+        Ok(Some(ResolvedOperand::EachValues {
+            name: name.to_string(),
+            values,
+        }))
     }
 
     fn resolve_function(
@@ -2228,6 +2382,107 @@ impl<'a> SqlCompiler<'a> {
         Ok(format!("{left_sql} {sql_op} {right_sql} ESCAPE '\\'"))
     }
 
+    fn compile_each_match(
+        &mut self,
+        left: &ResolvedOperand,
+        op: CompareOp,
+        right: &ResolvedOperand,
+    ) -> Result<String, FilterError> {
+        if is_any_match_op(op) {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::InvalidOperator,
+                "':each' modifier cannot be combined with any-match operators",
+            ));
+        }
+
+        match left {
+            ResolvedOperand::Field { .. } => {
+                validate_compare_operands(left, op, right)?;
+                self.compile_each_field_match(left, op, right)
+            }
+            ResolvedOperand::EachValues { values, .. } => {
+                self.compile_each_value_match(values, op, right)
+            }
+            ResolvedOperand::Function { .. } | ResolvedOperand::Value(_) => {
+                unreachable!("compile_each_match should only be called for operands marked as each")
+            }
+        }
+    }
+
+    fn compile_each_field_match(
+        &mut self,
+        left: &ResolvedOperand,
+        op: CompareOp,
+        right: &ResolvedOperand,
+    ) -> Result<String, FilterError> {
+        let ResolvedOperand::Field { resolved, .. } = left else {
+            unreachable!("field each match requires a field operand");
+        };
+        let item_sql = self.render_each_item_condition("json_each.value", op, right)?;
+        Ok(format!(
+            "NOT EXISTS (SELECT 1 FROM json_each({}) WHERE NOT ({item_sql}))",
+            resolved.sql
+        ))
+    }
+
+    fn compile_each_value_match(
+        &mut self,
+        values: &[Value],
+        op: CompareOp,
+        right: &ResolvedOperand,
+    ) -> Result<String, FilterError> {
+        if values.is_empty() {
+            return Ok("TRUE".to_string());
+        }
+
+        let mut parts = Vec::with_capacity(values.len());
+        for value in values {
+            let left_sql = self.render_operand(&ResolvedOperand::Value(value.clone()));
+            parts.push(self.render_each_item_condition(&left_sql, op, right)?);
+        }
+        Ok(parts.join(" AND "))
+    }
+
+    fn render_each_item_condition(
+        &mut self,
+        item_sql: &str,
+        op: CompareOp,
+        right: &ResolvedOperand,
+    ) -> Result<String, FilterError> {
+        if matches!(op, CompareOp::Eq | CompareOp::Ne) && right.is_null_value() {
+            let operator = if matches!(op, CompareOp::Ne) {
+                "IS NOT"
+            } else {
+                "IS"
+            };
+            return Ok(format!("{item_sql} {operator} NULL"));
+        }
+        if right.is_null_value() {
+            return Err(FilterError::new("null can only be used with = or !="));
+        }
+
+        match op {
+            CompareOp::Like | CompareOp::NotLike => {
+                let right_sql = self.render_like_pattern_operand(right);
+                let sql_op = compare_op_sql(op);
+                Ok(format!("{item_sql} {sql_op} {right_sql} ESCAPE '\\'"))
+            }
+            CompareOp::Eq
+            | CompareOp::Ne
+            | CompareOp::Gt
+            | CompareOp::Gte
+            | CompareOp::Lt
+            | CompareOp::Lte => {
+                let right_sql = self.render_operand(right);
+                Ok(format!("{item_sql} {} {right_sql}", compare_op_sql(op)))
+            }
+            _ => Err(FilterError::with_kind(
+                FilterErrorKind::InvalidOperator,
+                "':each' modifier cannot be combined with any-match operators",
+            )),
+        }
+    }
+
     fn render_operand(&mut self, operand: &ResolvedOperand) -> String {
         match operand {
             ResolvedOperand::Field { resolved, .. } => resolved.sql.clone(),
@@ -2241,6 +2496,9 @@ impl<'a> SqlCompiler<'a> {
             ResolvedOperand::Value(Value::Bool(true)) => "TRUE".to_string(),
             ResolvedOperand::Value(Value::Bool(false)) => "FALSE".to_string(),
             ResolvedOperand::Value(Value::Null) => "NULL".to_string(),
+            ResolvedOperand::EachValues { .. } => {
+                unreachable!(":each request values must be rendered by compile_each_match")
+            }
         }
     }
 
@@ -2251,6 +2509,9 @@ impl<'a> SqlCompiler<'a> {
                 format!("('%' || {} || '%')", self.render_function(name, args))
             }
             ResolvedOperand::Value(value) => self.params.bind(wrap_like(value)),
+            ResolvedOperand::EachValues { .. } => {
+                unreachable!(":each request values must be rendered by compile_each_match")
+            }
         }
     }
 
@@ -2287,7 +2548,9 @@ impl<'a> SqlCompiler<'a> {
     ) -> Result<String, FilterError> {
         let field_sql = match left {
             ResolvedOperand::Field { resolved, .. } => resolved.sql.clone(),
-            ResolvedOperand::Function { .. } | ResolvedOperand::Value(_) => {
+            ResolvedOperand::Function { .. }
+            | ResolvedOperand::Value(_)
+            | ResolvedOperand::EachValues { .. } => {
                 return Err(FilterError::with_kind(
                     FilterErrorKind::InvalidOperator,
                     "any-match operators require a field on the left side",
@@ -2415,6 +2678,16 @@ impl<'a> PlanSqlRenderer<'a> {
         right: &PlannedOperand,
         relation_context: Option<&RelationRenderContext<'_>>,
     ) -> Result<String, FilterError> {
+        if planned_operand_is_each_match(left) {
+            return self.render_each_match(left, op, right, relation_context);
+        }
+        if planned_operand_is_each_match(right) {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::InvalidOperator,
+                "':each' modifier is only supported on the left side of a comparison",
+            ));
+        }
+
         if is_plan_any_match_op(op) {
             return self.render_any_match(left, op, right, relation_context);
         }
@@ -2490,6 +2763,113 @@ impl<'a> PlanSqlRenderer<'a> {
         Ok(format!("{left_sql} {sql_op} {right_sql} ESCAPE '\\'"))
     }
 
+    fn render_each_match(
+        &mut self,
+        left: &PlannedOperand,
+        op: PlanCompareOp,
+        right: &PlannedOperand,
+        relation_context: Option<&RelationRenderContext<'_>>,
+    ) -> Result<String, FilterError> {
+        if is_plan_any_match_op(op) {
+            return Err(FilterError::with_kind(
+                FilterErrorKind::InvalidOperator,
+                "':each' modifier cannot be combined with any-match operators",
+            ));
+        }
+
+        match left {
+            PlannedOperand::Field(_) => {
+                let field_sql = self.render_operand(left, relation_context)?;
+                let item_sql = self.render_each_item_condition(
+                    "json_each.value",
+                    op,
+                    right,
+                    relation_context,
+                )?;
+                Ok(format!(
+                    "NOT EXISTS (SELECT 1 FROM json_each({field_sql}) WHERE NOT ({item_sql}))"
+                ))
+            }
+            PlannedOperand::EachValues { values, .. } => {
+                self.render_each_value_match(values, op, right, relation_context)
+            }
+            PlannedOperand::Function { .. } | PlannedOperand::Value(_) => {
+                Err(FilterError::with_kind(
+                    FilterErrorKind::InvalidOperator,
+                    "':each' modifier requires a field on the left side",
+                ))
+            }
+        }
+    }
+
+    fn render_each_value_match(
+        &mut self,
+        values: &[Value],
+        op: PlanCompareOp,
+        right: &PlannedOperand,
+        relation_context: Option<&RelationRenderContext<'_>>,
+    ) -> Result<String, FilterError> {
+        if values.is_empty() {
+            return Ok("TRUE".to_string());
+        }
+
+        let mut parts = Vec::with_capacity(values.len());
+        for value in values {
+            let left_sql =
+                self.render_operand(&PlannedOperand::Value(value.clone()), relation_context)?;
+            parts.push(self.render_each_item_condition(&left_sql, op, right, relation_context)?);
+        }
+        Ok(parts.join(" AND "))
+    }
+
+    fn render_each_item_condition(
+        &mut self,
+        item_sql: &str,
+        op: PlanCompareOp,
+        right: &PlannedOperand,
+        relation_context: Option<&RelationRenderContext<'_>>,
+    ) -> Result<String, FilterError> {
+        if matches!(op, PlanCompareOp::Eq | PlanCompareOp::Ne)
+            && planned_operand_is_null_value(right)
+        {
+            let operator = if matches!(op, PlanCompareOp::Ne) {
+                "IS NOT"
+            } else {
+                "IS"
+            };
+            return Ok(format!("{item_sql} {operator} NULL"));
+        }
+        if planned_operand_is_null_value(right) {
+            return Err(FilterError::new("null can only be used with = or !="));
+        }
+
+        match op {
+            PlanCompareOp::Like | PlanCompareOp::NotLike => {
+                let right_sql = self.render_like_pattern_operand(right, relation_context)?;
+                Ok(format!(
+                    "{item_sql} {} {right_sql} ESCAPE '\\'",
+                    plan_compare_op_sql(op)
+                ))
+            }
+            PlanCompareOp::Eq
+            | PlanCompareOp::Ne
+            | PlanCompareOp::Gt
+            | PlanCompareOp::Gte
+            | PlanCompareOp::Lt
+            | PlanCompareOp::Lte => {
+                let right_sql = self.render_operand(right, relation_context)?;
+                Ok(format!(
+                    "{item_sql} {} {right_sql}",
+                    plan_compare_op_sql(op)
+                ))
+            }
+            _ => Err(FilterError::with_kind(
+                FilterErrorKind::InvalidOperator,
+                "':each' modifier cannot be combined with any-match operators",
+            )),
+        }
+    }
+
     fn render_any_match(
         &mut self,
         left: &PlannedOperand,
@@ -2503,7 +2883,6 @@ impl<'a> PlanSqlRenderer<'a> {
                 "any-match operators require a field on the left side",
             ));
         };
-
         let field_sql = self.render_operand(left, relation_context)?;
         let inner_op = plan_any_match_sql_op(op)?;
         let (right_sql, escape_clause) = match op {
@@ -2538,6 +2917,9 @@ impl<'a> PlanSqlRenderer<'a> {
             PlannedOperand::Value(Value::Bool(true)) => Ok("TRUE".to_string()),
             PlannedOperand::Value(Value::Bool(false)) => Ok("FALSE".to_string()),
             PlannedOperand::Value(Value::Null) => Ok("NULL".to_string()),
+            PlannedOperand::EachValues { .. } => {
+                unreachable!(":each request values must be rendered by render_each_match")
+            }
         }
     }
 
@@ -2581,6 +2963,9 @@ impl<'a> PlanSqlRenderer<'a> {
                 Ok(format!("('%' || {rendered} || '%')"))
             }
             PlannedOperand::Value(value) => Ok(self.params.bind(wrap_like(value))),
+            PlannedOperand::EachValues { .. } => {
+                unreachable!(":each request values must be rendered by render_each_match")
+            }
         }
     }
 
@@ -2777,13 +3162,19 @@ enum ResolvedOperand {
         kind: FieldKind,
     },
     Value(Value),
+    EachValues {
+        name: String,
+        values: Vec<Value>,
+    },
 }
 
 impl ResolvedOperand {
     fn as_value(&self) -> Option<&Value> {
         match self {
             ResolvedOperand::Value(value) => Some(value),
-            ResolvedOperand::Field { .. } | ResolvedOperand::Function { .. } => None,
+            ResolvedOperand::Field { .. }
+            | ResolvedOperand::Function { .. }
+            | ResolvedOperand::EachValues { .. } => None,
         }
     }
 
@@ -2791,11 +3182,19 @@ impl ResolvedOperand {
         matches!(self, ResolvedOperand::Value(Value::Null))
     }
 
+    fn is_each_match(&self) -> bool {
+        match self {
+            ResolvedOperand::Field { resolved, .. } => resolved.each,
+            ResolvedOperand::EachValues { .. } => true,
+            ResolvedOperand::Function { .. } | ResolvedOperand::Value(_) => false,
+        }
+    }
+
     fn kind(&self) -> Option<FieldKind> {
         match self {
             ResolvedOperand::Field { resolved, .. } => resolved.kind,
             ResolvedOperand::Function { kind, .. } => Some(*kind),
-            ResolvedOperand::Value(_) => None,
+            ResolvedOperand::Value(_) | ResolvedOperand::EachValues { .. } => None,
         }
     }
 
@@ -2804,6 +3203,7 @@ impl ResolvedOperand {
             ResolvedOperand::Field { name, .. } => name,
             ResolvedOperand::Function { name, .. } => name,
             ResolvedOperand::Value(_) => "literal",
+            ResolvedOperand::EachValues { name, .. } => name,
         }
     }
 }
@@ -2820,6 +3220,10 @@ fn planned_operand_to_resolved(operand: &PlannedOperand) -> ResolvedOperand {
             kind: *kind,
         },
         PlannedOperand::Value(value) => ResolvedOperand::Value(value.clone()),
+        PlannedOperand::EachValues { name, values } => ResolvedOperand::EachValues {
+            name: name.clone(),
+            values: values.clone(),
+        },
     }
 }
 
@@ -2864,13 +3268,13 @@ fn validate_compare_operands_with_options(
                 )?;
             };
         }
-        ResolvedOperand::Value(_) if is_any_match_op(op) => {
+        ResolvedOperand::Value(_) | ResolvedOperand::EachValues { .. } if is_any_match_op(op) => {
             return Err(FilterError::with_kind(
                 FilterErrorKind::InvalidOperator,
                 "any-match operators require a field on the left side",
             ))
         }
-        ResolvedOperand::Value(_) => {}
+        ResolvedOperand::Value(_) | ResolvedOperand::EachValues { .. } => {}
     }
 
     if is_any_match_op(op) {
@@ -2895,7 +3299,7 @@ fn resolved_operand_has_multiple_relation(operand: &ResolvedOperand) -> bool {
         ResolvedOperand::Function { args, .. } => {
             args.iter().any(resolved_operand_has_multiple_relation)
         }
-        ResolvedOperand::Value(_) => false,
+        ResolvedOperand::Value(_) | ResolvedOperand::EachValues { .. } => false,
     }
 }
 
@@ -3011,7 +3415,14 @@ fn resolve_request_identifier(name: &str, context: &FilterContext) -> Result<Val
     }
 
     if let Some(field) = base_name.strip_prefix("@request.body.") {
-        return request_body_value(name, field, &request.body, &request.body_lengths, modifier);
+        return request_body_value(
+            name,
+            field,
+            &request.body,
+            &request.body_lengths,
+            &request.body_changes,
+            modifier,
+        );
     }
 
     Err(FilterError::with_kind(
@@ -3027,6 +3438,8 @@ fn split_request_modifier(name: &str) -> Result<(&str, Option<RequestModifier>),
 
     let modifier = match modifier {
         "isset" => RequestModifier::Isset,
+        "changed" => RequestModifier::Changed,
+        "each" => RequestModifier::Each,
         "lower" => RequestModifier::Lower,
         "length" => RequestModifier::Length,
         _ => {
@@ -3073,10 +3486,15 @@ fn request_map_value(
     match modifier {
         Some(RequestModifier::Isset) => return Ok(Value::Bool(values.contains_key(field))),
         Some(RequestModifier::Lower) => return Ok(lower_request_value(values.get(field))),
-        Some(RequestModifier::Length) => {
+        Some(RequestModifier::Changed)
+        | Some(RequestModifier::Each)
+        | Some(RequestModifier::Length) => {
             return Err(FilterError::with_kind(
                 FilterErrorKind::InvalidLiteral,
-                format!("request modifier ':length' is only supported for @request.body.*"),
+                format!(
+                    "request modifier ':{}' is only supported for @request.body.*",
+                    request_modifier_name(modifier.unwrap())
+                ),
             ))
         }
         None => {}
@@ -3093,6 +3511,7 @@ fn request_body_value(
     field: &str,
     values: &HashMap<String, Value>,
     lengths: &HashMap<String, usize>,
+    changes: &HashMap<String, bool>,
     modifier: Option<RequestModifier>,
 ) -> Result<Value, FilterError> {
     if !is_safe_identifier_path(field) {
@@ -3104,6 +3523,13 @@ fn request_body_value(
 
     match modifier {
         Some(RequestModifier::Isset) => Ok(Value::Bool(values.contains_key(field))),
+        Some(RequestModifier::Changed) => Ok(Value::Bool(
+            values.contains_key(field) && changes.get(field).copied().unwrap_or(false),
+        )),
+        Some(RequestModifier::Each) => Err(FilterError::with_kind(
+            FilterErrorKind::InvalidLiteral,
+            "request modifier ':each' must be used as the left operand of a comparison",
+        )),
         Some(RequestModifier::Lower) => Ok(lower_request_value(values.get(field))),
         Some(RequestModifier::Length) => Ok(Value::Number(
             lengths.get(field).copied().unwrap_or_default().to_string(),
@@ -3131,6 +3557,8 @@ fn request_value_to_string(value: Option<&Value>) -> String {
 fn request_modifier_name(modifier: RequestModifier) -> &'static str {
     match modifier {
         RequestModifier::Isset => "isset",
+        RequestModifier::Changed => "changed",
+        RequestModifier::Each => "each",
         RequestModifier::Lower => "lower",
         RequestModifier::Length => "length",
     }
@@ -3148,6 +3576,7 @@ fn split_field_modifier(field: &str) -> Result<(&str, Option<FieldModifier>), Fi
     let modifier = match modifier {
         "lower" => FieldModifier::Lower,
         "length" => FieldModifier::Length,
+        "each" => FieldModifier::Each,
         _ => {
             return Err(FilterError::with_kind(
                 FilterErrorKind::InvalidLiteral,
@@ -3206,6 +3635,21 @@ fn apply_field_modifier(
             resolved.sql = format!("COALESCE(json_array_length({}), 0)", resolved.sql);
             resolved.kind = Some(FieldKind::Number);
         }
+        FieldModifier::Each => {
+            if let Some(kind) = resolved.kind {
+                if !matches!(
+                    kind,
+                    FieldKind::Array | FieldKind::Relation | FieldKind::Json
+                ) {
+                    return Err(FilterError::with_kind(
+                        FilterErrorKind::InvalidOperator,
+                        "field modifier ':each' is only allowed on array-like fields",
+                    ));
+                }
+            }
+            resolved.kind = Some(FieldKind::Text);
+            resolved.each = true;
+        }
     }
 
     Ok(resolved)
@@ -3215,6 +3659,7 @@ fn field_modifier_name(modifier: FieldModifier) -> &'static str {
     match modifier {
         FieldModifier::Lower => "lower",
         FieldModifier::Length => "length",
+        FieldModifier::Each => "each",
     }
 }
 
@@ -3429,6 +3874,19 @@ fn planned_operand_is_null_value(operand: &PlannedOperand) -> bool {
     matches!(operand, PlannedOperand::Value(Value::Null))
 }
 
+fn planned_operand_is_each_match(operand: &PlannedOperand) -> bool {
+    match operand {
+        PlannedOperand::Field(PlannedField {
+            resolved: ResolvedField { each: true, .. },
+            ..
+        })
+        | PlannedOperand::EachValues { .. } => true,
+        PlannedOperand::Field(_) | PlannedOperand::Function { .. } | PlannedOperand::Value(_) => {
+            false
+        }
+    }
+}
+
 fn is_plan_any_match_op(op: PlanCompareOp) -> bool {
     matches!(
         op,
@@ -3512,7 +3970,7 @@ fn collect_planned_operand_relations<'a>(
                 collect_planned_operand_relations(arg, relations);
             }
         }
-        PlannedOperand::Value(_) => {}
+        PlannedOperand::Value(_) | PlannedOperand::EachValues { .. } => {}
     }
 }
 

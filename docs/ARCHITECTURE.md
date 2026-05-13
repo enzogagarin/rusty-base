@@ -60,6 +60,7 @@ Responsibility:
 - revoke valid bearer tokens through `auth-logout`;
 - return PocketBase-like API error bodies with `code`, `message`, and `data`;
 - include field-level validation `data` for initial auth and record form errors;
+- update collection metadata and rename record tables transactionally;
 - translate collection schemas into `rb-filter-engine` field resolvers;
 - apply list/view/create/update/delete filters with request context.
 

@@ -264,6 +264,25 @@ impl AuthWithPasswordRequest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionPatch {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub fields: Option<Vec<CollectionField>>,
+    #[serde(default)]
+    pub list_rule: Option<Option<String>>,
+    #[serde(default)]
+    pub view_rule: Option<Option<String>>,
+    #[serde(default)]
+    pub create_rule: Option<Option<String>>,
+    #[serde(default)]
+    pub update_rule: Option<Option<String>>,
+    #[serde(default)]
+    pub delete_rule: Option<Option<String>>,
+}
+
 pub struct Store {
     conn: Mutex<Connection>,
 }
@@ -367,6 +386,70 @@ impl Store {
             conn.prepare(r#"SELECT schema_json FROM "_rb_collections" ORDER BY name ASC"#)?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+    }
+
+    pub fn update_collection(
+        &self,
+        name: &str,
+        patch: CollectionPatch,
+    ) -> Result<CollectionConfig, ServerError> {
+        validate_collection_name(name)?;
+        let mut collection = self.get_collection(name)?;
+        apply_collection_patch(&mut collection, patch);
+        validate_collection(&collection)?;
+
+        let old_name = name;
+        let new_name = collection.name.clone();
+        let old_table = record_table_name(old_name)?;
+        let new_table = record_table_name(&new_name)?;
+        let schema_json = serde_json::to_string(&collection)?;
+        let now = now_timestamp();
+        let mut conn = self.connection()?;
+        let tx = conn.transaction()?;
+
+        if old_name != new_name {
+            let name_taken = tx
+                .query_row(
+                    r#"SELECT 1 FROM "_rb_collections" WHERE name = ?1 LIMIT 1"#,
+                    params![&new_name],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?
+                .is_some();
+            if name_taken {
+                return Err(ServerError::BadRequest(format!(
+                    "collection '{new_name}' already exists"
+                )));
+            }
+
+            let old_table_sql = quote_identifier(&old_table);
+            let new_table_sql = quote_identifier(&new_table);
+            tx.execute(
+                &format!("ALTER TABLE {old_table_sql} RENAME TO {new_table_sql}"),
+                [],
+            )?;
+            tx.execute(
+                r#"UPDATE "_rb_auth_tokens" SET collection_name = ?1 WHERE collection_name = ?2"#,
+                params![&new_name, old_name],
+            )?;
+        }
+
+        let affected = tx.execute(
+            r#"
+            UPDATE "_rb_collections"
+            SET name = ?1, schema_json = ?2, updated = ?3
+            WHERE name = ?4
+            "#,
+            params![&new_name, schema_json, now, old_name],
+        )?;
+        if affected == 0 {
+            return Err(ServerError::NotFound(format!(
+                "collection '{old_name}' not found"
+            )));
+        }
+        tx.commit()?;
+
+        Ok(collection)
     }
 
     pub fn create_record(
@@ -538,7 +621,7 @@ impl Store {
         }
 
         let mut existing = self.read_record(collection_name, id)?;
-        let context = context_with_body_values(context, &patch);
+        let context = context_with_body_values_and_changes(context, &patch, Some(&existing));
         self.enforce_existing_record_rule(
             collection_name,
             &collection,
@@ -921,6 +1004,15 @@ impl RustyBaseApp {
             ("POST", ["api", "collections"]) => {
                 let collection: CollectionConfig = serde_json::from_slice(&request.body)?;
                 let collection = self.store.create_collection(collection)?;
+                Ok(HttpResponse::json(200, json!(collection)))
+            }
+            ("GET", ["api", "collections", collection]) => {
+                let collection = self.store.get_collection(collection)?;
+                Ok(HttpResponse::json(200, json!(collection)))
+            }
+            ("PATCH", ["api", "collections", collection]) => {
+                let patch: CollectionPatch = serde_json::from_slice(&request.body)?;
+                let collection = self.store.update_collection(collection, patch)?;
                 Ok(HttpResponse::json(200, json!(collection)))
             }
             ("POST", ["api", "collections", collection, "auth-with-password"]) => {
@@ -1404,15 +1496,32 @@ fn bearer_token(request: &HttpRequest) -> Option<&str> {
         .filter(|token| !token.trim().is_empty())
 }
 
-fn context_with_body_values(mut context: FilterContext, body: &JsonValue) -> FilterContext {
+fn context_with_body_values(context: FilterContext, body: &JsonValue) -> FilterContext {
+    context_with_body_values_and_changes(context, body, None)
+}
+
+fn context_with_body_values_and_changes(
+    mut context: FilterContext,
+    body: &JsonValue,
+    existing: Option<&JsonValue>,
+) -> FilterContext {
     let Some(object) = body.as_object() else {
         return context;
     };
+    let existing_object = existing.and_then(JsonValue::as_object);
 
     for (name, value) in object {
         context = context.with_body_value(name.clone(), json_to_filter_value(value));
         if let Some(array) = value.as_array() {
             context = context.with_body_length(name.clone(), array.len());
+            context = context.with_body_each_values(
+                name.clone(),
+                array.iter().map(json_to_filter_value).collect::<Vec<_>>(),
+            );
+        }
+        if let Some(existing_object) = existing_object {
+            context =
+                context.with_body_changed(name.clone(), existing_object.get(name) != Some(value));
         }
     }
 
@@ -1566,6 +1675,30 @@ fn insert_auth_token(
     )?;
 
     Ok((token, expires))
+}
+
+fn apply_collection_patch(collection: &mut CollectionConfig, patch: CollectionPatch) {
+    if let Some(name) = patch.name {
+        collection.name = name;
+    }
+    if let Some(fields) = patch.fields {
+        collection.fields = fields;
+    }
+    if let Some(rule) = patch.list_rule {
+        collection.list_rule = rule;
+    }
+    if let Some(rule) = patch.view_rule {
+        collection.view_rule = rule;
+    }
+    if let Some(rule) = patch.create_rule {
+        collection.create_rule = rule;
+    }
+    if let Some(rule) = patch.update_rule {
+        collection.update_rule = rule;
+    }
+    if let Some(rule) = patch.delete_rule {
+        collection.delete_rule = rule;
+    }
 }
 
 fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError> {
