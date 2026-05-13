@@ -58,6 +58,8 @@ Responsibility:
   them through `/api/files/:collection/:record/:filename`;
 - support the first PocketBase-style file field mutations for replace, append,
   prepend, delete-by-name, and clearing;
+- issue short-lived protected file tokens that populate `@request.auth.*` for
+  protected file downloads;
 - support auth collections with Argon2 password hashes and expiring bearer
   tokens;
 - expose a first public auth-methods summary for auth collections;
@@ -86,8 +88,8 @@ Non-responsibility:
 - its server-side `auth-logout` route is a Rusty Base extension rather than a
   PocketBase-compatible route;
 - it does not implement OAuth providers or full auth settings yet;
-- it does not own thumbnails, protected file tokens, S3/local filesystem
-  adapters, realtime, admin UI, or migration compatibility yet.
+- it does not own thumbnails, S3/local filesystem adapters, realtime, admin UI,
+  protected-file edge parity, or migration compatibility yet.
 
 Current integration shape:
 

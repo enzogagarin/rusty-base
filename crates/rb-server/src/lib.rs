@@ -25,6 +25,7 @@ use std::{
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 const AUTH_TOKEN_TTL_MILLIS: u128 = 7 * 24 * 60 * 60 * 1000;
+const FILE_TOKEN_TTL_MILLIS: u128 = 2 * 60 * 1000;
 const VERIFICATION_TOKEN_TTL_MILLIS: u128 = 3 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TOKEN_TTL_MILLIS: u128 = 30 * 60 * 1000;
 const AUTH_FORM_VALIDATION_MESSAGE: &str = "An error occurred while validating the submitted data.";
@@ -180,6 +181,8 @@ pub struct CollectionField {
     pub collection: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_select: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub protected: bool,
 }
 
 impl CollectionField {
@@ -189,6 +192,7 @@ impl CollectionField {
             kind,
             collection: None,
             max_select: None,
+            protected: false,
         }
     }
 
@@ -198,6 +202,7 @@ impl CollectionField {
             kind: CollectionFieldKind::Relation,
             collection: Some(collection.into()),
             max_select: None,
+            protected: false,
         }
     }
 
@@ -532,6 +537,13 @@ impl Store {
                 created TEXT NOT NULL,
                 expires TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS "_rb_file_tokens" (
+                token TEXT PRIMARY KEY NOT NULL,
+                collection_name TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                created TEXT NOT NULL,
+                expires TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS "_rb_files" (
                 collection_name TEXT NOT NULL,
                 record_id TEXT NOT NULL,
@@ -656,6 +668,10 @@ impl Store {
                 params![&new_name, old_name],
             )?;
             tx.execute(
+                r#"UPDATE "_rb_file_tokens" SET collection_name = ?1 WHERE collection_name = ?2"#,
+                params![&new_name, old_name],
+            )?;
+            tx.execute(
                 r#"UPDATE "_rb_files" SET collection_name = ?1 WHERE collection_name = ?2"#,
                 params![&new_name, old_name],
             )?;
@@ -713,6 +729,10 @@ impl Store {
                     params![name],
                 )?;
                 tx.execute(
+                    r#"DELETE FROM "_rb_file_tokens" WHERE collection_name = ?1"#,
+                    params![name],
+                )?;
+                tx.execute(
                     r#"DELETE FROM "_rb_files" WHERE collection_name = ?1"#,
                     params![name],
                 )?;
@@ -756,6 +776,10 @@ impl Store {
                     )?;
                     tx.execute(
                         r#"DELETE FROM "_rb_auth_action_tokens" WHERE collection_name = ?1"#,
+                        params![&collection.name],
+                    )?;
+                    tx.execute(
+                        r#"DELETE FROM "_rb_file_tokens" WHERE collection_name = ?1"#,
                         params![&collection.name],
                     )?;
                 }
@@ -805,6 +829,10 @@ impl Store {
             params![name],
         )?;
         tx.execute(
+            r#"DELETE FROM "_rb_file_tokens" WHERE collection_name = ?1"#,
+            params![name],
+        )?;
+        tx.execute(
             r#"DELETE FROM "_rb_files" WHERE collection_name = ?1"#,
             params![name],
         )?;
@@ -834,6 +862,10 @@ impl Store {
         )?;
         conn.execute(
             r#"DELETE FROM "_rb_auth_action_tokens" WHERE collection_name = ?1"#,
+            params![name],
+        )?;
+        conn.execute(
+            r#"DELETE FROM "_rb_file_tokens" WHERE collection_name = ?1"#,
             params![name],
         )?;
         conn.execute(
@@ -1153,6 +1185,10 @@ impl Store {
                 r#"DELETE FROM "_rb_auth_action_tokens" WHERE collection_name = ?1 AND record_id = ?2"#,
                 params![collection_name, id],
             )?;
+            conn.execute(
+                r#"DELETE FROM "_rb_file_tokens" WHERE collection_name = ?1 AND record_id = ?2"#,
+                params![collection_name, id],
+            )?;
         }
 
         Ok(())
@@ -1363,6 +1399,10 @@ impl Store {
             r#"DELETE FROM "_rb_auth_tokens" WHERE collection_name = ?1 AND record_id = ?2"#,
             params![collection_name, &record_id],
         )?;
+        conn.execute(
+            r#"DELETE FROM "_rb_file_tokens" WHERE collection_name = ?1 AND record_id = ?2"#,
+            params![collection_name, &record_id],
+        )?;
         delete_auth_action_tokens(
             &conn,
             collection.name.as_str(),
@@ -1481,6 +1521,39 @@ impl Store {
         context: FilterContext,
     ) -> Result<FilterContext, ServerError> {
         let (collection_name, record_id) = self.valid_token_subject(token)?;
+        let record = self.read_record(&collection_name, &record_id)?;
+        Ok(context_with_auth_record_values(context, &record))
+    }
+
+    pub fn create_file_token(&self, auth_token: &str) -> Result<String, ServerError> {
+        let (collection_name, record_id) = self.valid_token_subject(auth_token)?;
+        let token = generate_token();
+        let now = now_millis();
+        let expires = (now + FILE_TOKEN_TTL_MILLIS).to_string();
+        let conn = self.connection()?;
+        conn.execute(
+            r#"
+            INSERT INTO "_rb_file_tokens" (token, collection_name, record_id, created, expires)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+            params![
+                &token,
+                &collection_name,
+                &record_id,
+                now.to_string(),
+                &expires
+            ],
+        )?;
+
+        Ok(token)
+    }
+
+    pub fn context_for_file_token(
+        &self,
+        token: &str,
+        context: FilterContext,
+    ) -> Result<FilterContext, ServerError> {
+        let (collection_name, record_id) = self.valid_file_token_subject(token)?;
         let record = self.read_record(&collection_name, &record_id)?;
         Ok(context_with_auth_record_values(context, &record))
     }
@@ -1655,14 +1728,30 @@ impl Store {
     }
 
     fn valid_token_subject(&self, token: &str) -> Result<(String, String), ServerError> {
+        self.valid_subject_token("_rb_auth_tokens", token, "auth")
+    }
+
+    fn valid_file_token_subject(&self, token: &str) -> Result<(String, String), ServerError> {
+        self.valid_subject_token("_rb_file_tokens", token, "file")
+    }
+
+    fn valid_subject_token(
+        &self,
+        table_name: &str,
+        token: &str,
+        label: &str,
+    ) -> Result<(String, String), ServerError> {
+        let table_sql = quote_identifier(table_name);
         let conn = self.connection()?;
         let token_row = conn
             .query_row(
-                r#"
-                SELECT collection_name, record_id, expires
-                FROM "_rb_auth_tokens"
-                WHERE token = ?1
-                "#,
+                &format!(
+                    r#"
+                    SELECT collection_name, record_id, expires
+                    FROM {table_sql}
+                    WHERE token = ?1
+                    "#
+                ),
                 params![token],
                 |row| {
                     Ok((
@@ -1673,13 +1762,13 @@ impl Store {
                 },
             )
             .optional()?
-            .ok_or_else(|| ServerError::Forbidden("invalid auth token".to_string()))?;
+            .ok_or_else(|| ServerError::Forbidden(format!("invalid {label} token")))?;
         let (collection_name, record_id, expires) = token_row;
         let expires = expires
             .parse::<u128>()
-            .map_err(|_| ServerError::Forbidden("invalid auth token".to_string()))?;
+            .map_err(|_| ServerError::Forbidden(format!("invalid {label} token")))?;
         if expires <= now_millis() {
-            return Err(ServerError::Forbidden("expired auth token".to_string()));
+            return Err(ServerError::Forbidden(format!("expired {label} token")));
         }
 
         Ok((collection_name, record_id))
@@ -1813,14 +1902,30 @@ impl RustyBaseApp {
                 200,
                 json!({"code": 200, "message": "API is healthy."}),
             )),
+            ("POST", ["api", "files", "token"]) => {
+                let auth_token = bearer_token(&request)
+                    .ok_or_else(|| ServerError::Forbidden("missing auth token".to_string()))?;
+                let token = self.store.create_file_token(auth_token)?;
+                Ok(HttpResponse::json(200, json!({ "token": token })))
+            }
             ("GET", ["api", "files", collection, record_id, filename]) => {
-                let context = self.request_context(&request, &query)?;
                 let collection_config = self.store.get_collection(collection)?;
-                let record = self.store.get_record(collection, record_id, context)?;
-                if !record_references_file(&collection_config, &record, filename)? {
+                let record = self.store.read_record(collection, record_id)?;
+                let Some(protected) =
+                    referenced_file_protection(&collection_config, &record, filename)?
+                else {
                     return Err(ServerError::NotFound(format!(
                         "file '{filename}' not found"
                     )));
+                };
+                if protected {
+                    let context = self.file_request_context(&request, &query)?;
+                    let record = self.store.get_record(collection, record_id, context)?;
+                    if !record_references_file(&collection_config, &record, filename)? {
+                        return Err(ServerError::NotFound(format!(
+                            "file '{filename}' not found"
+                        )));
+                    }
                 }
                 let file = self.store.get_file(collection, record_id, filename)?;
                 Ok(HttpResponse::bytes(200, file.content_type, file.data))
@@ -2020,6 +2125,19 @@ impl RustyBaseApp {
         };
 
         self.store.context_for_token(token, context)
+    }
+
+    fn file_request_context(
+        &self,
+        request: &HttpRequest,
+        query: &HashMap<String, String>,
+    ) -> Result<FilterContext, ServerError> {
+        let context = request_context(request, query);
+        if let Some(token) = query.get("token").filter(|token| !token.trim().is_empty()) {
+            return self.store.context_for_file_token(token, context);
+        }
+
+        self.request_context(request, query)
     }
 }
 
@@ -3027,11 +3145,19 @@ fn request_context(request: &HttpRequest, query: &HashMap<String, String>) -> Fi
 }
 
 fn bearer_token(request: &HttpRequest) -> Option<&str> {
-    let value = request.headers.get("authorization")?;
+    let value = request.headers.get("authorization")?.trim();
     value
         .strip_prefix("Bearer ")
         .or_else(|| value.strip_prefix("bearer "))
-        .filter(|token| !token.trim().is_empty())
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .or_else(|| {
+            if value.is_empty() || value.contains(char::is_whitespace) {
+                None
+            } else {
+                Some(value)
+            }
+        })
 }
 
 fn context_with_body_values(context: FilterContext, body: &JsonValue) -> FilterContext {
@@ -3481,6 +3607,9 @@ fn collection_field_export_value(field: CollectionField) -> JsonValue {
     if let Some(max_select) = field.max_select {
         value.insert("maxSelect".to_string(), json!(max_select));
     }
+    if field.protected {
+        value.insert("protected".to_string(), JsonValue::Bool(true));
+    }
 
     JsonValue::Object(value)
 }
@@ -3606,6 +3735,12 @@ fn validate_collection(collection: &CollectionConfig) -> Result<(), ServerError>
                     field.name
                 )));
             }
+        }
+        if field.protected && field.kind != CollectionFieldKind::File {
+            return Err(ServerError::BadRequest(format!(
+                "field '{}' is protected but is not a file field",
+                field.name
+            )));
         }
     }
 
@@ -3899,10 +4034,20 @@ fn record_references_file(
     record: &JsonValue,
     filename: &str,
 ) -> Result<bool, ServerError> {
+    Ok(referenced_file_protection(collection, record, filename)?.is_some())
+}
+
+fn referenced_file_protection(
+    collection: &CollectionConfig,
+    record: &JsonValue,
+    filename: &str,
+) -> Result<Option<bool>, ServerError> {
     let Some(object) = record.as_object() else {
-        return Ok(false);
+        return Ok(None);
     };
 
+    let mut referenced = false;
+    let mut protected = false;
     for field in collection
         .fields
         .iter()
@@ -3915,11 +4060,12 @@ fn record_references_file(
             .iter()
             .any(|name| name == filename)
         {
-            return Ok(true);
+            referenced = true;
+            protected |= field.protected;
         }
     }
 
-    Ok(false)
+    Ok(referenced.then_some(protected))
 }
 
 fn store_file_uploads(
@@ -4371,6 +4517,10 @@ fn percent_decode(value: &str) -> String {
 
 fn normalize_http_header_name(name: &str) -> String {
     name.trim().to_ascii_lowercase()
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn error_response(err: ServerError) -> HttpResponse {

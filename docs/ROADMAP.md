@@ -215,10 +215,13 @@ Exit criteria:
 - Added the first file-field MVP: PocketBase-style `file` fields,
   multipart record create/update uploads, SQLite-backed file blob storage,
   filename sanitization/suffixing, and `/api/files/:collection/:record/:file`
-  downloads gated by the target record `viewRule`.
+  downloads.
 - Added PocketBase-style uploaded-file field modifiers for replace, append
   (`field+`), prepend (`+field`), delete-by-name (`field-`), and zero-value
   clearing.
+- Added `/api/files/token` and protected `file` field support so protected
+  downloads can satisfy target record `viewRule` checks through short-lived file
+  tokens.
 
 ## Next Sprint
 
@@ -226,7 +229,7 @@ Exit criteria:
 2. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 3. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.
-4. Add file thumbnails, protected-file tokens, and uploaded-file compatibility
-   fixtures around edge cases.
+4. Add file thumbnails and uploaded/protected-file compatibility fixtures around
+   edge cases.
 5. Add auth route coverage beyond password/refresh/reset: email change, OTP,
    and OAuth placeholders where useful.

@@ -1200,11 +1200,144 @@ fn uploads_and_serves_file_fields() {
     );
     assert_eq!(private.status, 200);
 
-    let blocked = app.handle(HttpRequest::new(
+    let still_public = app.handle(HttpRequest::new(
         "GET",
         format!("/api/files/docs/doc_1/{updated_attachment}"),
     ));
-    assert_eq!(blocked.status, 404);
+    assert_eq!(still_public.status, 200);
+    assert_eq!(still_public.raw_body, b"# updated");
+}
+
+#[test]
+fn generates_file_tokens_for_protected_file_access() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [{"name": "email", "type": "email"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(users.status, 200);
+
+    for (id, email) in [
+        ("user_1", "owner@example.com"),
+        ("user_2", "other@example.com"),
+    ] {
+        let created = app.handle(
+            HttpRequest::json(
+                "POST",
+                "/api/collections/users/records",
+                json!({
+                    "id": id,
+                    "email": email,
+                    "password": "correct horse",
+                    "passwordConfirm": "correct horse"
+                }),
+            )
+            .unwrap(),
+        );
+        assert_eq!(created.status, 200);
+    }
+
+    let docs = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "docs",
+                "fields": [
+                    {"name": "owner", "kind": "text"},
+                    {"name": "contract", "type": "file", "protected": true}
+                ],
+                "viewRule": "owner = @request.auth.id"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(docs.status, 200);
+    assert_eq!(docs.body["fields"][1]["protected"], true);
+
+    let created = app.handle(multipart_request(
+        "POST",
+        "/api/collections/docs/records",
+        "rb-protected-boundary",
+        vec![
+            multipart_field("id", "doc_1"),
+            multipart_field("owner", "user_1"),
+            multipart_file(
+                "contract",
+                "contract.pdf",
+                "application/pdf",
+                b"contract bytes",
+            ),
+        ],
+    ));
+    assert_eq!(created.status, 200);
+    let contract = created.body["contract"].as_str().unwrap().to_string();
+
+    let without_token = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/docs/doc_1/{contract}"),
+    ));
+    assert_eq!(without_token.status, 404);
+
+    let missing_auth = app.handle(HttpRequest::new("POST", "/api/files/token"));
+    assert_eq!(missing_auth.status, 403);
+
+    let owner_login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "owner@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(owner_login.status, 200);
+    let owner_auth_token = owner_login.body["token"].as_str().unwrap();
+
+    let owner_file_token_response = app.handle(
+        HttpRequest::new("POST", "/api/files/token").with_header("Authorization", owner_auth_token),
+    );
+    assert_eq!(owner_file_token_response.status, 200);
+    let owner_file_token = owner_file_token_response.body["token"].as_str().unwrap();
+
+    let allowed = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/docs/doc_1/{contract}?token={owner_file_token}"),
+    ));
+    assert_eq!(allowed.status, 200);
+    assert_eq!(allowed.content_type, "application/pdf");
+    assert_eq!(allowed.raw_body, b"contract bytes");
+
+    let other_login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "other@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(other_login.status, 200);
+    let other_auth_token = other_login.body["token"].as_str().unwrap();
+    let other_file_token_response = app.handle(
+        HttpRequest::new("POST", "/api/files/token")
+            .with_header("Authorization", format!("Bearer {other_auth_token}")),
+    );
+    assert_eq!(other_file_token_response.status, 200);
+    let other_file_token = other_file_token_response.body["token"].as_str().unwrap();
+
+    let denied = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/docs/doc_1/{contract}?token={other_file_token}"),
+    ));
+    assert_eq!(denied.status, 404);
 }
 
 #[test]
