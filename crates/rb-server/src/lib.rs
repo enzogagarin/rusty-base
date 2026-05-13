@@ -696,6 +696,11 @@ struct AuthWithOAuth2Request {
     create_data: JsonValue,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ImpersonateRequest {
+    duration: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RealtimeSubscribeRequest {
@@ -803,6 +808,23 @@ impl AuthWithOAuth2Request {
                 .get("createData")
                 .cloned()
                 .unwrap_or_else(|| JsonValue::Object(Map::new())),
+        })
+    }
+}
+
+impl ImpersonateRequest {
+    fn from_json(value: JsonValue) -> Result<Self, ServerError> {
+        let object = value.as_object().ok_or_else(|| {
+            validation_error(
+                AUTH_FORM_VALIDATION_MESSAGE,
+                "body",
+                "validation_invalid_body",
+                "Request body must be a JSON object.",
+            )
+        })?;
+
+        Ok(Self {
+            duration: optional_form_u64(object, "duration", AUTH_FORM_VALIDATION_MESSAGE)?,
         })
     }
 }
@@ -1046,7 +1068,8 @@ impl Store {
                 collection_name TEXT NOT NULL,
                 record_id TEXT NOT NULL,
                 created TEXT NOT NULL,
-                expires TEXT NOT NULL
+                expires TEXT NOT NULL,
+                renewable INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS "_rb_auth_action_tokens" (
                 token TEXT PRIMARY KEY NOT NULL,
@@ -1086,7 +1109,7 @@ impl Store {
             );
             "#,
         )?;
-        ensure_auth_token_expires_column(&conn)?;
+        ensure_auth_token_columns(&conn)?;
         Ok(())
     }
 
@@ -1914,9 +1937,14 @@ impl Store {
         token: &str,
     ) -> Result<AuthResponse, ServerError> {
         let collection = self.auth_collection(collection_name)?;
-        let (token_collection_name, record_id) = self.valid_token_subject(token)?;
+        let (token_collection_name, record_id, renewable) = self.valid_auth_token_subject(token)?;
         if token_collection_name != collection_name {
             return Err(ServerError::Forbidden("invalid auth token".to_string()));
+        }
+        if !renewable {
+            return Err(ServerError::Forbidden(
+                "impersonate auth tokens cannot be refreshed".to_string(),
+            ));
         }
 
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
@@ -1957,6 +1985,57 @@ impl Store {
             expires,
             record: record_from_parts(
                 &collection_name,
+                id,
+                serde_json::from_str::<JsonValue>(&data)?,
+                created,
+                updated,
+            ),
+        })
+    }
+
+    pub fn impersonate_auth_record(
+        &self,
+        collection_name: &str,
+        record_id: &str,
+        duration_seconds: Option<u64>,
+    ) -> Result<AuthResponse, ServerError> {
+        let collection = self.auth_collection(collection_name)?;
+        validate_record_id(record_id)?;
+
+        let table_sql = quote_identifier(&record_table_name(collection_name)?);
+        let conn = self.connection()?;
+        let row = conn
+            .query_row(
+                &format!(
+                    "SELECT id, data, created, updated FROM {table_sql} WHERE id = ?1 LIMIT 1"
+                ),
+                params![record_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| ServerError::NotFound(format!("record '{record_id}' not found")))?;
+
+        let ttl_millis = duration_seconds
+            .filter(|duration| *duration > 0)
+            .map(|duration| u128::from(duration) * 1000)
+            .unwrap_or_else(|| auth_token_ttl_millis(&collection));
+        let (token, expires) =
+            insert_auth_token_with_renewable(&conn, collection_name, record_id, ttl_millis, false)?;
+        drop(conn);
+
+        let (id, data, created, updated) = row;
+        Ok(AuthResponse {
+            token,
+            expires,
+            record: record_from_parts(
+                collection_name,
                 id,
                 serde_json::from_str::<JsonValue>(&data)?,
                 created,
@@ -2869,7 +2948,40 @@ impl Store {
     }
 
     fn valid_token_subject(&self, token: &str) -> Result<(String, String), ServerError> {
-        self.valid_subject_token("_rb_auth_tokens", token, "auth")
+        let (collection_name, record_id, _) = self.valid_auth_token_subject(token)?;
+        Ok((collection_name, record_id))
+    }
+
+    fn valid_auth_token_subject(&self, token: &str) -> Result<(String, String, bool), ServerError> {
+        let conn = self.connection()?;
+        let token_row = conn
+            .query_row(
+                r#"
+                SELECT collection_name, record_id, expires, renewable
+                FROM "_rb_auth_tokens"
+                WHERE token = ?1
+                "#,
+                params![token],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| ServerError::Forbidden("invalid auth token".to_string()))?;
+        let (collection_name, record_id, expires, renewable) = token_row;
+        let expires = expires
+            .parse::<u128>()
+            .map_err(|_| ServerError::Forbidden("invalid auth token".to_string()))?;
+        if expires <= now_millis() {
+            return Err(ServerError::Forbidden("expired auth token".to_string()));
+        }
+
+        Ok((collection_name, record_id, renewable != 0))
     }
 
     fn valid_file_token_subject(&self, token: &str) -> Result<(String, String), ServerError> {
@@ -3311,6 +3423,25 @@ impl RustyBaseApp {
                 )?;
                 Ok(HttpResponse::json(200, payload))
             }
+            ("POST", ["api", "collections", collection, "impersonate", id]) => {
+                self.require_superuser_token(&request)?;
+                let body = json_body_or_empty(&request.body)?;
+                let impersonate = ImpersonateRequest::from_json(body)?;
+                let response =
+                    self.store
+                        .impersonate_auth_record(collection, id, impersonate.duration)?;
+                let expands = expand_options_from_query(&query)?;
+                let fields = field_options_from_query(&query)?;
+                let payload = auth_response_payload(
+                    &self.store,
+                    collection,
+                    response,
+                    &expands,
+                    &fields,
+                    request_context(&request, &query),
+                )?;
+                Ok(HttpResponse::json(200, payload))
+            }
             ("POST", ["api", "collections", collection, "auth-logout"]) => {
                 let token = bearer_token(&request)
                     .ok_or_else(|| ServerError::Forbidden("missing auth token".to_string()))?;
@@ -3403,6 +3534,10 @@ impl RustyBaseApp {
             return Ok(());
         }
 
+        self.require_superuser_token(request)
+    }
+
+    fn require_superuser_token(&self, request: &HttpRequest) -> Result<(), ServerError> {
         let token = bearer_token(request)
             .ok_or_else(|| ServerError::Forbidden("missing superuser auth token".to_string()))?;
         if self.store.is_superuser_token(token)? {
@@ -3732,6 +3867,14 @@ fn handle_realtime_stream(app: RustyBaseApp, mut stream: TcpStream) -> Result<()
 
     app.realtime.remove_client(&connection.client_id);
     Ok(())
+}
+
+fn json_body_or_empty(body: &[u8]) -> Result<JsonValue, ServerError> {
+    if body.is_empty() {
+        Ok(JsonValue::Object(Map::new()))
+    } else {
+        serde_json::from_slice(body).map_err(ServerError::Json)
+    }
 }
 
 fn parse_http_request(stream: &mut TcpStream) -> Result<HttpRequest, ServerError> {
@@ -4087,6 +4230,8 @@ fn record_sort_sql(
         };
         let expression = if field == "@random" {
             "RANDOM()".to_string()
+        } else if field == "@rowid" {
+            "rowid".to_string()
         } else {
             resolver.resolve_field(field)?.sql
         };
@@ -5691,13 +5836,12 @@ fn validation_error(
     }
 }
 
-fn ensure_auth_token_expires_column(conn: &Connection) -> Result<(), ServerError> {
+fn ensure_auth_token_columns(conn: &Connection) -> Result<(), ServerError> {
     let mut stmt = conn.prepare(r#"PRAGMA table_info("_rb_auth_tokens")"#)?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-    let has_expires = rows
-        .collect::<Result<Vec<_>, _>>()?
-        .iter()
-        .any(|name| name == "expires");
+    let columns = rows.collect::<Result<Vec<_>, _>>()?;
+    let has_expires = columns.iter().any(|name| name == "expires");
+    let has_renewable = columns.iter().any(|name| name == "renewable");
 
     if !has_expires {
         conn.execute(
@@ -5713,6 +5857,12 @@ fn ensure_auth_token_expires_column(conn: &Connection) -> Result<(), ServerError
             params![AUTH_TOKEN_TTL_MILLIS.to_string()],
         )?;
     }
+    if !has_renewable {
+        conn.execute(
+            r#"ALTER TABLE "_rb_auth_tokens" ADD COLUMN renewable INTEGER NOT NULL DEFAULT 1"#,
+            [],
+        )?;
+    }
 
     Ok(())
 }
@@ -5723,20 +5873,32 @@ fn insert_auth_token(
     record_id: &str,
     ttl_millis: u128,
 ) -> Result<(String, String), ServerError> {
+    insert_auth_token_with_renewable(conn, collection_name, record_id, ttl_millis, true)
+}
+
+fn insert_auth_token_with_renewable(
+    conn: &Connection,
+    collection_name: &str,
+    record_id: &str,
+    ttl_millis: u128,
+    renewable: bool,
+) -> Result<(String, String), ServerError> {
     let token = generate_token();
     let now = now_millis();
     let expires = (now + ttl_millis).to_string();
     conn.execute(
         r#"
-        INSERT INTO "_rb_auth_tokens" (token, collection_name, record_id, created, expires)
-        VALUES (?1, ?2, ?3, ?4, ?5)
+        INSERT INTO "_rb_auth_tokens"
+            (token, collection_name, record_id, created, expires, renewable)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
         "#,
         params![
             &token,
             collection_name,
             record_id,
             now.to_string(),
-            &expires
+            &expires,
+            if renewable { 1 } else { 0 }
         ],
     )?;
 
@@ -7208,6 +7370,29 @@ fn required_form_string(
     }
 
     Ok(value.to_string())
+}
+
+fn optional_form_u64(
+    object: &Map<String, JsonValue>,
+    field: &str,
+    message: &str,
+) -> Result<Option<u64>, ServerError> {
+    let Some(value) = object.get(field) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    if let Some(value) = value.as_u64() {
+        return Ok(Some(value));
+    }
+
+    Err(validation_error(
+        message,
+        field,
+        "validation_invalid_number",
+        format!("Field '{field}' must be a non-negative number."),
+    ))
 }
 
 fn validate_form_email(field: &str, value: &str, message: &str) -> Result<String, ServerError> {

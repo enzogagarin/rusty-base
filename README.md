@@ -326,7 +326,7 @@ The first server slice supports:
 - PocketBase-like list response shape with `page`, `perPage`, `totalItems`,
   `totalPages`, and `items`;
 - record list `sort` support for system fields, collection fields, nested JSON
-  paths, and `@random`;
+  paths, `@random`, and `@rowid`;
 - first `?expand=relation,nested.relation` support for relation record
   responses;
 - first `?fields=...` response projection support for records and expanded
@@ -341,6 +341,8 @@ The first server slice supports:
   `record.expand.profile.bio`;
 - `auth-with-oauth2` request validation, provider profile account-linking, and
   the first remote token/userinfo callback exchange path;
+- superuser-only `impersonate` endpoint for auth records, including custom
+  duration and nonrenewable impersonation tokens;
 - `request-otp` and `auth-with-otp` backed by short-lived one-time auth action
   tokens;
 - verification, password-reset, and email-change request/confirm auth flows

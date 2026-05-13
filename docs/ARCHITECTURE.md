@@ -85,6 +85,8 @@ Responsibility:
   password, OTP, MFA, OAuth2, and legacy SDK compatibility fields;
 - persist normalized auth collection options for password identity fields,
   token durations, OTP, MFA, and OAuth2 provider metadata;
+- generate superuser-only auth record impersonation tokens with custom duration
+  and nonrenewable refresh behavior;
 - store short-lived opaque auth action tokens for verification, password reset,
   email change, and OTP flows;
 - rotate valid auth tokens through `auth-refresh`;

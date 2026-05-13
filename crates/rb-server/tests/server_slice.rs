@@ -544,6 +544,164 @@ fn superusers_manage_collections_and_bypass_record_rules() {
 }
 
 #[test]
+fn superusers_impersonate_auth_records_with_nonrenewable_tokens() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let superusers = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "_superusers",
+                "type": "auth",
+                "fields": [{"name": "email", "kind": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(superusers.status, 200);
+
+    let first_superuser = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/_superusers/records",
+            json!({
+                "id": "su_1",
+                "email": "root@example.com",
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(first_superuser.status, 200);
+
+    let login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/_superusers/auth-with-password",
+            json!({"identity": "root@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(login.status, 200);
+    let superuser_token = login.body["token"].as_str().unwrap().to_string();
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [{"name": "email", "kind": "text"}]
+            }),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(users.status, 200);
+
+    let user = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({
+                "id": "user_1",
+                "email": "burak@example.com",
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(user.status, 200);
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "title", "kind": "text"},
+                    {"name": "owner", "kind": "text"}
+                ],
+                "listRule": "owner = @request.auth.id"
+            }),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(posts.status, 200);
+
+    let post = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"title": "Impersonated access", "owner": "user_1"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(post.status, 200);
+
+    let blocked = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/impersonate/user_1",
+            json!({"duration": 3600}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(blocked.status, 403);
+
+    let impersonated = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/impersonate/user_1",
+            json!({"duration": 3600}),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(impersonated.status, 200);
+    assert_eq!(impersonated.body["record"]["id"], "user_1");
+    let impersonated_token = impersonated.body["token"].as_str().unwrap().to_string();
+    assert!(impersonated.body["expires"]
+        .as_str()
+        .unwrap()
+        .parse::<u128>()
+        .is_ok());
+
+    let visible_as_user = app.handle(
+        HttpRequest::new("GET", "/api/collections/posts/records")
+            .with_header("Authorization", format!("Bearer {impersonated_token}")),
+    );
+    assert_eq!(visible_as_user.status, 200);
+    assert_eq!(visible_as_user.body["totalItems"], 1);
+    assert_eq!(
+        visible_as_user.body["items"][0]["title"],
+        "Impersonated access"
+    );
+
+    let refresh = app.handle(
+        HttpRequest::new("POST", "/api/collections/users/auth-refresh")
+            .with_header("Authorization", format!("Bearer {impersonated_token}")),
+    );
+    assert_eq!(refresh.status, 403);
+    assert!(refresh.body["message"]
+        .as_str()
+        .unwrap()
+        .contains("cannot be refreshed"));
+
+    let non_auth = app.handle(
+        HttpRequest::new("POST", "/api/collections/posts/impersonate/user_1")
+            .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(non_auth.status, 400);
+}
+
+#[test]
 fn auth_responses_support_expand_and_response_fields() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
