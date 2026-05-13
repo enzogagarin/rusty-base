@@ -7,11 +7,85 @@ use rusqlite::{params, Connection};
 use serde_json::json;
 use std::{
     env, fs,
-    io::Cursor,
+    io::{BufRead, BufReader, Cursor, Read, Write},
+    net::{TcpListener, TcpStream},
     path::PathBuf,
-    process,
+    process, thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+struct OAuth2FixtureProvider {
+    token_url: String,
+    user_info_url: String,
+    handle: thread::JoinHandle<()>,
+}
+
+fn spawn_oauth2_fixture_provider() -> OAuth2FixtureProvider {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+        for _ in 0..2 {
+            let (stream, _) = listener.accept().unwrap();
+            handle_oauth2_fixture_request(stream);
+        }
+    });
+
+    OAuth2FixtureProvider {
+        token_url: format!("http://{addr}/token"),
+        user_info_url: format!("http://{addr}/userinfo"),
+        handle,
+    }
+}
+
+fn handle_oauth2_fixture_request(mut stream: TcpStream) {
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line).unwrap();
+
+    let mut content_length = 0usize;
+    loop {
+        let mut header = String::new();
+        reader.read_line(&mut header).unwrap();
+        let header = header.trim_end();
+        if header.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = header.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse().unwrap();
+            }
+        }
+    }
+
+    let mut body = vec![0; content_length];
+    reader.read_exact(&mut body).unwrap();
+    let body = String::from_utf8(body).unwrap();
+
+    if request_line.starts_with("POST /token ") && body.contains("code=remote_code") {
+        write_oauth2_fixture_json(
+            &mut stream,
+            200,
+            r#"{"access_token":"remote_access","refresh_token":"remote_refresh","expires_in":3600}"#,
+        );
+    } else if request_line.starts_with("GET /userinfo ") {
+        write_oauth2_fixture_json(
+            &mut stream,
+            200,
+            r#"{"id":42,"email":"remote@example.com","preferred_username":"remote_user","name":"Remote User","picture":"http://127.0.0.1/avatar.png"}"#,
+        );
+    } else {
+        write_oauth2_fixture_json(&mut stream, 404, r#"{"error":"not_found"}"#);
+    }
+}
+
+fn write_oauth2_fixture_json(stream: &mut TcpStream, status: u16, body: &str) {
+    let reason = if status == 200 { "OK" } else { "Not Found" };
+    let response = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(response.as_bytes()).unwrap();
+}
 
 #[test]
 fn stores_collection_records_and_filters_with_filter_engine() {
@@ -461,6 +535,7 @@ fn lists_auth_methods_and_projects_auth_method_fields() {
 #[test]
 fn persists_auth_options_and_supports_oauth2_profile_linking() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+    let fixture_provider = spawn_oauth2_fixture_provider();
 
     let users = app.handle(
         HttpRequest::json(
@@ -488,6 +563,20 @@ fn persists_auth_options_and_supports_oauth2_profile_linking() {
                             "displayName": "GitHub",
                             "clientId": "client-id",
                             "clientSecret": "client-secret"
+                        },
+                        {
+                            "name": "custom",
+                            "displayName": "Custom",
+                            "clientId": "client-id",
+                            "clientSecret": "client-secret"
+                        },
+                        {
+                            "name": "fixture",
+                            "displayName": "Fixture",
+                            "clientId": "fixture-client",
+                            "clientSecret": "fixture-secret",
+                            "tokenUrl": fixture_provider.token_url.clone(),
+                            "userInfoUrl": fixture_provider.user_info_url.clone()
                         }
                     ]
                 },
@@ -597,7 +686,7 @@ fn persists_auth_options_and_supports_oauth2_profile_linking() {
             "POST",
             "/api/collections/users/auth-with-oauth2",
             json!({
-                "provider": "github",
+                "provider": "custom",
                 "code": "code",
                 "codeVerifier": "verifier",
                 "redirectUrl": "http://127.0.0.1/callback",
@@ -610,7 +699,38 @@ fn persists_auth_options_and_supports_oauth2_profile_linking() {
     assert!(opaque_provider.body["message"]
         .as_str()
         .unwrap()
-        .contains("not implemented yet"));
+        .contains("callback exchange is not configured"));
+
+    let remote_provider = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-oauth2?fields=record.email,record.username,record.name,meta.id,meta.provider,meta.accessToken,meta.refreshToken,meta.expiry",
+            json!({
+                "provider": "fixture",
+                "code": "remote_code",
+                "codeVerifier": "remote_verifier",
+                "redirectUrl": "http://127.0.0.1/callback",
+                "createData": {"name": "Remote Create"}
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(remote_provider.status, 200);
+    assert_eq!(
+        remote_provider.body["record"]["email"],
+        "remote@example.com"
+    );
+    assert_eq!(remote_provider.body["record"]["username"], "remote_user");
+    assert_eq!(remote_provider.body["record"]["name"], "Remote Create");
+    assert_eq!(remote_provider.body["meta"]["provider"], "fixture");
+    assert_eq!(remote_provider.body["meta"]["id"], "42");
+    assert_eq!(remote_provider.body["meta"]["accessToken"], "remote_access");
+    assert_eq!(
+        remote_provider.body["meta"]["refreshToken"],
+        "remote_refresh"
+    );
+    assert_eq!(remote_provider.body["meta"]["expiry"], "3600");
+    fixture_provider.handle.join().unwrap();
 
     let linked_profile_code = json!({
         "id": "gh_1",

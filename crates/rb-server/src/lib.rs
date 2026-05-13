@@ -271,6 +271,12 @@ pub struct OAuth2ProviderConfig {
     pub client_id: String,
     #[serde(default)]
     pub client_secret: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub auth_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub token_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub user_info_url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3115,13 +3121,13 @@ impl RustyBaseApp {
             ("POST", ["api", "collections", collection, "auth-with-oauth2"]) => {
                 let auth =
                     AuthWithOAuth2Request::from_json(serde_json::from_slice(&request.body)?)?;
-                let Some(profile) = oauth2_profile_from_code(&auth.code)? else {
+                let profile = if let Some(profile) = oauth2_profile_from_code(&auth.code)? {
+                    profile
+                } else {
                     let collection_config = self.store.auth_collection(collection)?;
-                    ensure_oauth2_provider_configured(&collection_config, &auth.provider)?;
-                    let _ = (&auth.code_verifier, &auth.redirect_url);
-                    return Err(ServerError::BadRequest(
-                        "OAuth2 provider callback exchange is not implemented yet".to_string(),
-                    ));
+                    let provider_config =
+                        oauth2_provider_configured(&collection_config, &auth.provider)?;
+                    exchange_oauth2_code(&collection_config, provider_config, &auth)?
                 };
                 let (response, meta) = self.store.auth_with_oauth2_profile(
                     collection,
@@ -4113,7 +4119,19 @@ fn ensure_oauth2_provider_configured(
     collection: &CollectionConfig,
     provider: &str,
 ) -> Result<(), ServerError> {
-    let oauth2 = collection.oauth2.clone().unwrap_or_default();
+    oauth2_provider_configured(collection, provider).map(|_| ())
+}
+
+fn oauth2_provider_configured<'a>(
+    collection: &'a CollectionConfig,
+    provider: &str,
+) -> Result<&'a OAuth2ProviderConfig, ServerError> {
+    let Some(oauth2) = collection.oauth2.as_ref() else {
+        return Err(ServerError::BadRequest(format!(
+            "OAuth2 auth is not enabled for collection '{}'",
+            collection.name
+        )));
+    };
     if !oauth2.enabled {
         return Err(ServerError::BadRequest(format!(
             "OAuth2 auth is not enabled for collection '{}'",
@@ -4121,16 +4139,289 @@ fn ensure_oauth2_provider_configured(
         )));
     }
 
-    if oauth2
+    oauth2
         .providers
         .iter()
-        .any(|candidate| candidate.name == provider)
+        .find(|candidate| candidate.name == provider)
+        .ok_or_else(|| {
+            ServerError::BadRequest(format!("OAuth2 provider '{provider}' is not configured"))
+        })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OAuth2ExchangeEndpoints {
+    token_url: String,
+    user_info_url: String,
+    email_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OAuth2TokenResponse {
+    #[serde(default)]
+    access_token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    expires_in: Option<i64>,
+}
+
+fn exchange_oauth2_code(
+    collection: &CollectionConfig,
+    provider: &OAuth2ProviderConfig,
+    request: &AuthWithOAuth2Request,
+) -> Result<OAuth2Profile, ServerError> {
+    let endpoints = oauth2_exchange_endpoints(provider).ok_or_else(|| {
+        ServerError::BadRequest(format!(
+            "OAuth2 provider callback exchange is not configured for provider '{}'",
+            provider.name
+        ))
+    })?;
+    if provider.client_id.trim().is_empty() {
+        return Err(ServerError::BadRequest(format!(
+            "OAuth2 provider '{}' is missing a clientId",
+            provider.name
+        )));
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent("RustyBase OAuth2")
+        .build()
+        .map_err(|err| oauth2_provider_request_error("client", err))?;
+
+    let mut form = vec![
+        ("grant_type", "authorization_code"),
+        ("code", request.code.as_str()),
+        ("client_id", provider.client_id.as_str()),
+        ("redirect_uri", request.redirect_url.as_str()),
+        ("code_verifier", request.code_verifier.as_str()),
+    ];
+    if !provider.client_secret.trim().is_empty() {
+        form.push(("client_secret", provider.client_secret.as_str()));
+    }
+
+    let token_json = client
+        .post(&endpoints.token_url)
+        .header("Accept", "application/json")
+        .form(&form)
+        .send()
+        .map_err(|err| oauth2_provider_request_error("token", err))
+        .and_then(|response| oauth2_provider_json_response(response, "token"))?;
+    let token = serde_json::from_value::<OAuth2TokenResponse>(token_json).map_err(|_| {
+        ServerError::BadRequest("OAuth2 provider token response is invalid".to_string())
+    })?;
+    if token.access_token.trim().is_empty() {
+        return Err(ServerError::BadRequest(
+            "OAuth2 provider token response is missing access_token".to_string(),
+        ));
+    }
+
+    let user_json = client
+        .get(&endpoints.user_info_url)
+        .header("Accept", "application/json")
+        .bearer_auth(&token.access_token)
+        .send()
+        .map_err(|err| oauth2_provider_request_error("user info", err))
+        .and_then(|response| oauth2_provider_json_response(response, "user info"))?;
+    let fallback_email = if oauth2_provider_key(&provider.name) == "github"
+        && oauth2_profile_value(&user_json, "", &["email"]).is_none()
     {
-        Ok(())
+        if let Some(email_url) = endpoints.email_url.as_deref() {
+            oauth2_primary_email(&client, email_url, &token.access_token)?
+        } else {
+            None
+        }
     } else {
-        Err(ServerError::BadRequest(format!(
-            "OAuth2 provider '{provider}' is not configured"
-        )))
+        None
+    };
+
+    oauth2_profile_from_user_info(collection, provider, user_json, fallback_email, token)
+}
+
+fn oauth2_exchange_endpoints(provider: &OAuth2ProviderConfig) -> Option<OAuth2ExchangeEndpoints> {
+    let token_url = provider.token_url.trim();
+    let user_info_url = provider.user_info_url.trim();
+    if !token_url.is_empty() && !user_info_url.is_empty() {
+        return Some(OAuth2ExchangeEndpoints {
+            token_url: token_url.to_string(),
+            user_info_url: user_info_url.to_string(),
+            email_url: None,
+        });
+    }
+
+    match oauth2_provider_key(&provider.name).as_str() {
+        "github" => Some(OAuth2ExchangeEndpoints {
+            token_url: "https://github.com/login/oauth/access_token".to_string(),
+            user_info_url: "https://api.github.com/user".to_string(),
+            email_url: Some("https://api.github.com/user/emails".to_string()),
+        }),
+        "google" => Some(OAuth2ExchangeEndpoints {
+            token_url: "https://oauth2.googleapis.com/token".to_string(),
+            user_info_url: "https://www.googleapis.com/oauth2/v3/userinfo".to_string(),
+            email_url: None,
+        }),
+        _ => None,
+    }
+}
+
+fn oauth2_provider_key(name: &str) -> String {
+    name.trim().to_ascii_lowercase()
+}
+
+fn oauth2_provider_request_error(label: &str, err: reqwest::Error) -> ServerError {
+    ServerError::BadRequest(format!("OAuth2 provider {label} request failed: {err}"))
+}
+
+fn oauth2_provider_json_response(
+    response: reqwest::blocking::Response,
+    label: &str,
+) -> Result<JsonValue, ServerError> {
+    let status = response.status();
+    let body = response
+        .text()
+        .map_err(|err| oauth2_provider_request_error(label, err))?;
+    if !status.is_success() {
+        return Err(ServerError::BadRequest(format!(
+            "OAuth2 provider {label} request failed with status {}",
+            status.as_u16()
+        )));
+    }
+
+    serde_json::from_str(&body).map_err(|_| {
+        ServerError::BadRequest(format!("OAuth2 provider {label} response must be JSON"))
+    })
+}
+
+fn oauth2_primary_email(
+    client: &reqwest::blocking::Client,
+    email_url: &str,
+    access_token: &str,
+) -> Result<Option<String>, ServerError> {
+    let value = client
+        .get(email_url)
+        .header("Accept", "application/json")
+        .bearer_auth(access_token)
+        .send()
+        .map_err(|err| oauth2_provider_request_error("email", err))
+        .and_then(|response| oauth2_provider_json_response(response, "email"))?;
+    let Some(emails) = value.as_array() else {
+        return Ok(None);
+    };
+
+    let primary_verified = emails.iter().find_map(|email| {
+        let object = email.as_object()?;
+        let is_primary = object
+            .get("primary")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false);
+        let is_verified = object
+            .get("verified")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(true);
+        if is_primary && is_verified {
+            object
+                .get("email")
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
+        } else {
+            None
+        }
+    });
+    if primary_verified.is_some() {
+        return Ok(primary_verified);
+    }
+
+    Ok(emails.iter().find_map(|email| {
+        let object = email.as_object()?;
+        let is_verified = object
+            .get("verified")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(true);
+        if is_verified {
+            object
+                .get("email")
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
+        } else {
+            None
+        }
+    }))
+}
+
+fn oauth2_profile_from_user_info(
+    collection: &CollectionConfig,
+    provider: &OAuth2ProviderConfig,
+    user_info: JsonValue,
+    fallback_email: Option<String>,
+    token: OAuth2TokenResponse,
+) -> Result<OAuth2Profile, ServerError> {
+    let mapped_fields = collection
+        .oauth2
+        .as_ref()
+        .map(|oauth2| oauth2.mapped_fields.clone())
+        .unwrap_or_default();
+    let provider_id = oauth2_profile_value(&user_info, &mapped_fields.id, &["id", "sub"])
+        .ok_or_else(|| {
+            ServerError::BadRequest(format!(
+                "OAuth2 provider '{}' user info response is missing an id",
+                provider.name
+            ))
+        })?;
+
+    let email = oauth2_profile_value(&user_info, "", &["email"]).or(fallback_email);
+    Ok(OAuth2Profile {
+        provider_id,
+        name: oauth2_profile_value(
+            &user_info,
+            &mapped_fields.name,
+            &["name", "display_name", "login"],
+        ),
+        username: oauth2_profile_value(
+            &user_info,
+            &mapped_fields.username,
+            &["username", "login", "preferred_username", "email"],
+        ),
+        email,
+        avatar_url: oauth2_profile_value(
+            &user_info,
+            &mapped_fields.avatar_url,
+            &["avatarURL", "avatarUrl", "avatar_url", "picture"],
+        ),
+        raw_user: user_info,
+        access_token: Some(token.access_token),
+        refresh_token: token.refresh_token,
+        expiry: token.expires_in.map(|value| value.to_string()),
+    })
+}
+
+fn oauth2_profile_value(value: &JsonValue, mapped_path: &str, defaults: &[&str]) -> Option<String> {
+    let mapped_path = mapped_path.trim();
+    if !mapped_path.is_empty() {
+        return json_scalar_at_path(value, mapped_path);
+    }
+
+    defaults
+        .iter()
+        .find_map(|path| json_scalar_at_path(value, path))
+}
+
+fn json_scalar_at_path(value: &JsonValue, path: &str) -> Option<String> {
+    let mut current = value;
+    for segment in path.split('.').map(str::trim) {
+        if segment.is_empty() {
+            return None;
+        }
+        current = current.as_object()?.get(segment)?;
+    }
+
+    match current {
+        JsonValue::String(value) => {
+            let value = value.trim();
+            (!value.is_empty()).then(|| value.to_string())
+        }
+        JsonValue::Number(value) => Some(value.to_string()),
+        JsonValue::Bool(value) => Some(value.to_string()),
+        _ => None,
     }
 }
 
@@ -5652,10 +5943,35 @@ fn validate_auth_options(collection: &CollectionConfig) -> Result<(), ServerErro
                     "OAuth2 provider name is required".to_string(),
                 ));
             }
+            let has_token_url = !provider.token_url.trim().is_empty();
+            let has_user_info_url = !provider.user_info_url.trim().is_empty();
+            if has_token_url != has_user_info_url {
+                return Err(ServerError::BadRequest(format!(
+                    "OAuth2 provider '{}' requires both tokenUrl and userInfoUrl",
+                    provider.name
+                )));
+            }
+            for (field, url) in [
+                ("authUrl", provider.auth_url.as_str()),
+                ("tokenUrl", provider.token_url.as_str()),
+                ("userInfoUrl", provider.user_info_url.as_str()),
+            ] {
+                let url = url.trim();
+                if !url.is_empty() && !is_http_url(url) {
+                    return Err(ServerError::BadRequest(format!(
+                        "OAuth2 provider '{}' has invalid {field}",
+                        provider.name
+                    )));
+                }
+            }
         }
     }
 
     Ok(())
+}
+
+fn is_http_url(value: &str) -> bool {
+    value.starts_with("http://") || value.starts_with("https://")
 }
 
 fn validate_collection_name(name: &str) -> Result<(), ServerError> {

@@ -328,8 +328,8 @@ The first server slice supports:
 - `auth-with-password`, `auth-with-otp`, and `auth-refresh` response
   `expand`/`fields` support, including response-level paths such as
   `record.expand.profile.bio`;
-- `auth-with-oauth2` request validation plus the first provider profile
-  account-linking flow; remote provider callback exchange is still pending;
+- `auth-with-oauth2` request validation, provider profile account-linking, and
+  the first remote token/userinfo callback exchange path;
 - `request-otp` and `auth-with-otp` backed by short-lived one-time auth action
   tokens;
 - verification, password-reset, and email-change request/confirm auth flows

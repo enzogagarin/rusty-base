@@ -241,11 +241,14 @@ Exit criteria:
 - Added the first `auth-with-oauth2` provider profile account-linking path,
   including external account persistence, existing-record matching by email, and
   auth response `meta` output.
+- Added remote OAuth2 code exchange through configured token/userinfo endpoints,
+  with initial GitHub and Google endpoint presets sharing the same account-link
+  core.
 
 ## Next Sprint
 
-1. Add remote OAuth2 provider callback exchange on top of the account-linking
-   core.
+1. Generate PocketBase-style OAuth2 `auth-methods` authURL/state/codeVerifier
+   data for configured providers.
 2. Expand compatibility fixtures around placeholder-like wildcard cases.
 3. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 4. Add relation compatibility fixtures copied from PocketBase-style access-rule
