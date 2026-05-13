@@ -703,6 +703,19 @@ struct ImpersonateRequest {
     duration: Option<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct BatchRequestBody {
+    requests: Vec<BatchRequestInput>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct BatchRequestInput {
+    method: String,
+    url: String,
+    headers: HashMap<String, String>,
+    body: JsonValue,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RealtimeSubscribeRequest {
@@ -827,6 +840,77 @@ impl ImpersonateRequest {
 
         Ok(Self {
             duration: optional_form_u64(object, "duration", AUTH_FORM_VALIDATION_MESSAGE)?,
+        })
+    }
+}
+
+impl BatchRequestBody {
+    fn from_json(value: JsonValue) -> Result<Self, ServerError> {
+        let object = value.as_object().ok_or_else(|| {
+            validation_error(
+                "Something went wrong while processing your request.",
+                "body",
+                "validation_invalid_body",
+                "Request body must be a JSON object.",
+            )
+        })?;
+        let Some(requests) = object.get("requests").and_then(JsonValue::as_array) else {
+            return Err(validation_error(
+                "Something went wrong while processing your request.",
+                "requests",
+                "validation_required",
+                "Field 'requests' is required.",
+            ));
+        };
+        if requests.len() > 50 {
+            return Err(validation_error(
+                "Something went wrong while processing your request.",
+                "requests",
+                "validation_max_items",
+                "Batch requests cannot contain more than 50 items.",
+            ));
+        }
+
+        Ok(Self {
+            requests: requests
+                .iter()
+                .cloned()
+                .map(BatchRequestInput::from_json)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+impl BatchRequestInput {
+    fn from_json(value: JsonValue) -> Result<Self, ServerError> {
+        let object = value.as_object().ok_or_else(|| {
+            validation_error(
+                "Something went wrong while processing your request.",
+                "requests",
+                "validation_invalid_body",
+                "Batch request must be a JSON object.",
+            )
+        })?;
+
+        let method = required_form_string(
+            object,
+            "method",
+            "Something went wrong while processing your request.",
+        )?
+        .to_ascii_uppercase();
+        let url = required_form_string(
+            object,
+            "url",
+            "Something went wrong while processing your request.",
+        )?;
+        let headers = batch_request_headers(object.get("headers"))?;
+        let body = object.get("body").cloned().unwrap_or(JsonValue::Null);
+
+        Ok(Self {
+            method,
+            url,
+            headers,
+            body,
         })
     }
 }
@@ -3139,6 +3223,24 @@ impl Store {
         Ok(allowed)
     }
 
+    fn begin_batch_transaction(&self) -> Result<(), ServerError> {
+        let conn = self.connection()?;
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        Ok(())
+    }
+
+    fn commit_batch_transaction(&self) -> Result<(), ServerError> {
+        let conn = self.connection()?;
+        conn.execute_batch("COMMIT")?;
+        Ok(())
+    }
+
+    fn rollback_batch_transaction(&self) -> Result<(), ServerError> {
+        let conn = self.connection()?;
+        conn.execute_batch("ROLLBACK")?;
+        Ok(())
+    }
+
     fn connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, ServerError> {
         self.conn
             .lock()
@@ -3204,6 +3306,7 @@ impl RustyBaseApp {
                     .set_subscriptions(&subscribe.client_id, subscriptions, context)?;
                 Ok(HttpResponse::json(204, JsonValue::Null))
             }
+            ("POST", ["api", "batch"]) => self.handle_batch(request),
             ("POST", ["api", "files", "token"]) => {
                 let auth_token = bearer_token(&request)
                     .ok_or_else(|| ServerError::Forbidden("missing auth token".to_string()))?;
@@ -3570,6 +3673,118 @@ impl RustyBaseApp {
         Ok(())
     }
 
+    fn handle_batch(&self, request: HttpRequest) -> Result<HttpResponse, ServerError> {
+        let batch = BatchRequestBody::from_json(serde_json::from_slice(&request.body)?)?;
+        self.store.begin_batch_transaction()?;
+
+        let mut responses = Vec::with_capacity(batch.requests.len());
+        for (index, item) in batch.requests.into_iter().enumerate() {
+            let child = match self.batch_http_request(&request, item) {
+                Ok(request) => request,
+                Err(err) => {
+                    let response = error_response(err);
+                    let _ = self.store.rollback_batch_transaction();
+                    return Err(batch_request_failed(index, &response));
+                }
+            };
+            let response = self.handle(child);
+            if response.status >= 400 {
+                let _ = self.store.rollback_batch_transaction();
+                return Err(batch_request_failed(index, &response));
+            }
+            responses.push(json!({
+                "status": response.status,
+                "body": response.body,
+            }));
+        }
+
+        self.store.commit_batch_transaction()?;
+        Ok(HttpResponse::json(200, JsonValue::Array(responses)))
+    }
+
+    fn batch_http_request(
+        &self,
+        parent: &HttpRequest,
+        item: BatchRequestInput,
+    ) -> Result<HttpRequest, ServerError> {
+        if item
+            .headers
+            .keys()
+            .any(|name| name == "authorization" || name == "x-rb-auth-id")
+        {
+            return Err(ServerError::BadRequest(
+                "custom batch auth headers are not supported".to_string(),
+            ));
+        }
+
+        let mut method = item.method;
+        let original_path = item.url;
+        let mut path = original_path.clone();
+        let body = item.body;
+        ensure_supported_batch_request(&method, &path)?;
+
+        if method == "PUT" {
+            let (path_only, query_suffix) = match path.split_once('?') {
+                Some((path_only, query)) => (path_only.to_string(), format!("?{query}")),
+                None => (path.clone(), String::new()),
+            };
+            let segments = path_segments(&path_only);
+            let collection = segments
+                .get(2)
+                .map(String::as_str)
+                .ok_or_else(|| ServerError::BadRequest("invalid batch request url".to_string()))?;
+            let id = body
+                .as_object()
+                .and_then(|object| object.get("id"))
+                .and_then(JsonValue::as_str)
+                .filter(|id| !id.trim().is_empty())
+                .ok_or_else(|| {
+                    validation_error(
+                        "Something went wrong while processing your request.",
+                        "id",
+                        "validation_required",
+                        "Upsert batch requests require a body id.",
+                    )
+                })?;
+            validate_record_id(id)?;
+
+            method = if self.store.read_record(collection, id).is_ok() {
+                "PATCH".to_string()
+            } else {
+                "POST".to_string()
+            };
+            path = if method == "PATCH" {
+                format!("/api/collections/{collection}/records/{id}{query_suffix}")
+            } else {
+                original_path
+            };
+        }
+
+        let mut headers = item.headers;
+        if let Some(value) = parent.headers.get("authorization") {
+            headers.insert("authorization".to_string(), value.clone());
+        }
+        if let Some(value) = parent.headers.get("x-rb-auth-id") {
+            headers.insert("x-rb-auth-id".to_string(), value.clone());
+        }
+
+        let body = if body.is_null() {
+            Vec::new()
+        } else {
+            headers
+                .entry("content-type".to_string())
+                .or_insert_with(|| "application/json".to_string());
+            serde_json::to_vec(&body)?
+        };
+
+        Ok(HttpRequest {
+            method,
+            path,
+            headers,
+            body,
+        })
+    }
+
     fn request_context(
         &self,
         request: &HttpRequest,
@@ -3884,6 +4099,96 @@ fn json_body_or_empty(body: &[u8]) -> Result<JsonValue, ServerError> {
     } else {
         serde_json::from_slice(body).map_err(ServerError::Json)
     }
+}
+
+fn batch_request_headers(
+    value: Option<&JsonValue>,
+) -> Result<HashMap<String, String>, ServerError> {
+    let Some(value) = value else {
+        return Ok(HashMap::new());
+    };
+    let Some(object) = value.as_object() else {
+        return Err(validation_error(
+            "Something went wrong while processing your request.",
+            "headers",
+            "validation_invalid_body",
+            "Batch request headers must be an object.",
+        ));
+    };
+
+    let mut headers = HashMap::new();
+    for (name, value) in object {
+        let Some(value) = value.as_str() else {
+            return Err(validation_error(
+                "Something went wrong while processing your request.",
+                "headers",
+                "validation_invalid_string",
+                "Batch request header values must be strings.",
+            ));
+        };
+        headers.insert(normalize_http_header_name(name), value.to_string());
+    }
+
+    Ok(headers)
+}
+
+fn ensure_supported_batch_request(method: &str, url: &str) -> Result<(), ServerError> {
+    let (path, _) = split_path_query(url);
+    let segments = path_segments(&path);
+    let segments = segments.iter().map(String::as_str).collect::<Vec<_>>();
+    let supported = matches!(
+        (method, segments.as_slice()),
+        ("POST", ["api", "collections", _, "records"])
+            | ("PUT", ["api", "collections", _, "records"])
+            | ("PATCH", ["api", "collections", _, "records", _])
+            | ("DELETE", ["api", "collections", _, "records", _])
+    );
+    if supported {
+        Ok(())
+    } else {
+        Err(ServerError::BadRequest(format!(
+            "unsupported batch request '{method} {url}'"
+        )))
+    }
+}
+
+fn batch_request_failed(index: usize, response: &HttpResponse) -> ServerError {
+    let response = batch_error_response_payload(response);
+    let mut requests = Map::new();
+    requests.insert(
+        index.to_string(),
+        json!({
+            "code": "batch_request_failed",
+            "message": "Batch request failed.",
+            "response": response,
+        }),
+    );
+    let mut data = Map::new();
+    data.insert("requests".to_string(), JsonValue::Object(requests));
+
+    ServerError::BadRequestData {
+        message: "Batch transaction failed.".to_string(),
+        data: JsonValue::Object(data),
+    }
+}
+
+fn batch_error_response_payload(response: &HttpResponse) -> JsonValue {
+    let message = response
+        .body
+        .get("message")
+        .cloned()
+        .unwrap_or_else(|| JsonValue::String("Batch request failed.".to_string()));
+    let data = response
+        .body
+        .get("data")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    json!({
+        "status": response.status,
+        "message": message,
+        "data": data,
+    })
 }
 
 fn parse_http_request(stream: &mut TcpStream) -> Result<HttpRequest, ServerError> {

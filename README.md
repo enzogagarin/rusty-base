@@ -309,6 +309,8 @@ The first server slice supports:
   management after a superuser exists;
 - `GET/POST /api/collections/:collection/records`;
 - `GET/PATCH/DELETE /api/collections/:collection/records/:id`;
+- JSON `POST /api/batch` for transactional record create/update/upsert/delete
+  request batches;
 - `GET /api/realtime` SSE connect and `POST /api/realtime` subscriptions for
   first record create/update/delete events;
 - PocketBase-style `file` collection field input, multipart record

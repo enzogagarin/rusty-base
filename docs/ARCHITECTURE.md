@@ -98,6 +98,8 @@ Responsibility:
   and response projection;
 - list records with PocketBase-style filtering, pagination, `skipTotal`,
   sorting, expand, and response projection;
+- execute JSON `/api/batch` record create/update/upsert/delete requests inside
+  one SQLite transaction;
 - expose collection type scaffolds for admin UI style flows;
 - import collection metadata in bulk with optional deletion of missing
   collections and fields;

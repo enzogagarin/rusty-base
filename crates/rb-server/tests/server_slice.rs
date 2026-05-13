@@ -2199,6 +2199,139 @@ fn handles_pocketbase_style_records_http_routes() {
 }
 
 #[test]
+fn handles_json_record_batch_requests_transactionally() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let collection_response = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "title", "kind": "text"},
+                    {"name": "published", "kind": "bool"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(collection_response.status, 200);
+
+    let batch = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/batch",
+            json!({
+                "requests": [
+                    {
+                        "method": "POST",
+                        "url": "/api/collections/posts/records",
+                        "body": {"id": "post_1", "title": "One", "published": true}
+                    },
+                    {
+                        "method": "PUT",
+                        "url": "/api/collections/posts/records",
+                        "body": {"id": "post_2", "title": "Two", "published": false}
+                    },
+                    {
+                        "method": "PATCH",
+                        "url": "/api/collections/posts/records/post_1",
+                        "body": {"title": "One Updated"}
+                    },
+                    {
+                        "method": "DELETE",
+                        "url": "/api/collections/posts/records/post_2"
+                    }
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(batch.status, 200);
+    assert_eq!(batch.body.as_array().unwrap().len(), 4);
+    assert_eq!(batch.body[0]["status"], 200);
+    assert_eq!(batch.body[1]["status"], 200);
+    assert_eq!(batch.body[2]["status"], 200);
+    assert_eq!(batch.body[3]["status"], 204);
+    assert_eq!(batch.body[2]["body"]["title"], "One Updated");
+
+    let updated = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts/records/post_1",
+    ));
+    assert_eq!(updated.status, 200);
+    assert_eq!(updated.body["title"], "One Updated");
+
+    let deleted = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts/records/post_2",
+    ));
+    assert_eq!(deleted.status, 404);
+
+    let failed = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/batch",
+            json!({
+                "requests": [
+                    {
+                        "method": "POST",
+                        "url": "/api/collections/posts/records",
+                        "body": {"id": "post_rollback", "title": "Rollback", "published": true}
+                    },
+                    {
+                        "method": "PATCH",
+                        "url": "/api/collections/posts/records/missing",
+                        "body": {"title": "Missing"}
+                    }
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(failed.status, 400);
+    assert_eq!(failed.body["message"], "Batch transaction failed.");
+    assert_eq!(
+        failed.body["data"]["requests"]["1"]["code"],
+        "batch_request_failed"
+    );
+    assert_eq!(
+        failed.body["data"]["requests"]["1"]["response"]["status"],
+        404
+    );
+
+    let rolled_back = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts/records/post_rollback",
+    ));
+    assert_eq!(rolled_back.status, 404);
+
+    let custom_auth = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/batch",
+            json!({
+                "requests": [
+                    {
+                        "method": "POST",
+                        "url": "/api/collections/posts/records",
+                        "headers": {"Authorization": "Bearer child_token"},
+                        "body": {"id": "post_custom_auth", "title": "Custom Auth"}
+                    }
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(custom_auth.status, 400);
+    assert_eq!(
+        custom_auth.body["data"]["requests"]["0"]["response"]["status"],
+        400
+    );
+}
+
+#[test]
 fn publishes_realtime_record_events() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
