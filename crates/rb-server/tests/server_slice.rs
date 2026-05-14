@@ -1610,6 +1610,110 @@ fn supports_otp_request_and_auth_flow() {
 }
 
 #[test]
+fn expired_otp_token_is_rejected_without_authenticating() {
+    let path = temp_db_path("expired-otp-token");
+    let app = RustyBaseApp::new(Store::open(&path).unwrap());
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [
+                    {"name": "email", "type": "email"},
+                    {"name": "name", "kind": "text"},
+                    {"name": "verified", "kind": "bool"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(users.status, 200);
+
+    let user = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({
+                "id": "user_1",
+                "email": "burak@example.com",
+                "name": "Burak",
+                "verified": false,
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(user.status, 200);
+
+    let request_otp = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/request-otp",
+            json!({"email": "burak@example.com"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(request_otp.status, 200);
+    let otp_id = request_otp.body["otpId"].as_str().unwrap().to_string();
+    let otp_data = app
+        .store()
+        .latest_auth_action_data("users", "user_1", "otp")
+        .unwrap()
+        .unwrap();
+    let password = otp_data["password"].as_str().unwrap().to_string();
+
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            r#"UPDATE "_rb_auth_action_tokens" SET expires = ?1 WHERE token = ?2"#,
+            params!["0", &otp_id],
+        )
+        .unwrap();
+    }
+
+    let expired_otp = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-otp",
+            json!({"otpId": otp_id, "password": password}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(expired_otp.status, 400);
+    assert_eq!(expired_otp.body["message"], "Failed to authenticate.");
+    assert!(app
+        .store()
+        .latest_auth_action_token("users", "user_1", "otp")
+        .unwrap()
+        .is_none());
+
+    let record = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/users/records/user_1",
+    ));
+    assert_eq!(record.status, 200);
+    assert_eq!(record.body["verified"], false);
+
+    let password_login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "burak@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(password_login.status, 200);
+    assert_eq!(password_login.body["record"]["verified"], false);
+
+    drop(app);
+    fs::remove_file(path).ok();
+}
+
+#[test]
 fn supports_verification_and_password_reset_tokens() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
