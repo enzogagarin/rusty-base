@@ -1,0 +1,43 @@
+{
+  "name": "PocketBase auth context behavior",
+  "area": "auth_context",
+  "pocketBaseNote": "PocketBase-style record rules treat missing, expired, or revoked auth tokens as an empty @request.auth context, while explicit auth endpoints still require a valid token.",
+  "cases": [
+    {
+      "name": "anonymous request has empty auth context",
+      "route": "GET /api/collections/posts/records",
+      "expectedStatus": 200,
+      "pocketBaseNote": "Without an auth token, @request.auth fields resolve as empty values and ownership rules do not match."
+    },
+    {
+      "name": "valid auth token populates request auth context",
+      "route": "GET /api/collections/posts/records",
+      "expectedStatus": 200,
+      "pocketBaseNote": "A valid auth token populates @request.auth so owner-based list rules can match the requesting record."
+    },
+    {
+      "name": "expired auth token becomes empty rule auth context",
+      "route": "GET /api/collections/posts/records",
+      "expectedStatus": 200,
+      "pocketBaseNote": "Expired bearer tokens should not grant auth context to record rules; they behave like an anonymous request."
+    },
+    {
+      "name": "expired auth token cannot refresh",
+      "route": "POST /api/collections/users/auth-refresh",
+      "expectedStatus": 403,
+      "pocketBaseNote": "Auth endpoints that explicitly operate on a token still reject expired tokens."
+    },
+    {
+      "name": "revoked auth token becomes empty rule auth context",
+      "route": "GET /api/collections/posts/records",
+      "expectedStatus": 200,
+      "pocketBaseNote": "A revoked bearer token should not populate @request.auth for record rule evaluation."
+    },
+    {
+      "name": "revoked auth token cannot refresh",
+      "route": "POST /api/collections/users/auth-refresh",
+      "expectedStatus": 403,
+      "pocketBaseNote": "Revoked tokens remain invalid for explicit auth refresh operations."
+    }
+  ]
+}

@@ -61,6 +61,16 @@ fn pocketbase_auth_action_fixture_matches_http_behavior() {
 }
 
 #[test]
+fn pocketbase_auth_context_fixture_matches_http_behavior() {
+    let fixture = load_server_fixture("auth_context");
+    assert_eq!(fixture.area, "auth_context");
+
+    let outcomes = run_auth_context_fixture();
+
+    assert_fixture_outcomes(&fixture, outcomes);
+}
+
+#[test]
 fn pocketbase_relation_expand_fixture_matches_http_behavior() {
     let fixture = load_server_fixture("relation_expand");
     assert_eq!(fixture.area, "relation_expand");
@@ -351,6 +361,157 @@ fn run_auth_action_fixture() -> BTreeMap<String, FixtureOutcome> {
     outcomes.insert(
         "new password authenticates after reset".to_string(),
         FixtureOutcome::from_response(&new_password),
+    );
+
+    outcomes
+}
+
+fn run_auth_context_fixture() -> BTreeMap<String, FixtureOutcome> {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+    let mut outcomes = BTreeMap::new();
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [{"name": "email", "type": "email"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(users.status, 200);
+
+    let user = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({
+                "id": "user_1",
+                "email": "owner@example.com",
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(user.status, 200);
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "title", "type": "text"},
+                    {"name": "owner", "type": "text"}
+                ],
+                "listRule": "owner = @request.auth.id"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(posts.status, 200);
+
+    let post = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"id": "post_1", "title": "Owned", "owner": "user_1"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(post.status, 200);
+
+    let anonymous = app.handle(HttpRequest::new("GET", "/api/collections/posts/records"));
+    assert_eq!(anonymous.status, 200);
+    assert_eq!(anonymous.body["totalItems"], 0);
+    outcomes.insert(
+        "anonymous request has empty auth context".to_string(),
+        FixtureOutcome::from_response(&anonymous),
+    );
+
+    let login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "owner@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(login.status, 200);
+    let token = login.body["token"].as_str().unwrap().to_string();
+
+    let authorized = app.handle(
+        HttpRequest::new("GET", "/api/collections/posts/records")
+            .with_header("Authorization", format!("Bearer {token}")),
+    );
+    assert_eq!(authorized.status, 200);
+    assert_eq!(authorized.body["totalItems"], 1);
+    outcomes.insert(
+        "valid auth token populates request auth context".to_string(),
+        FixtureOutcome::from_response(&authorized),
+    );
+
+    app.store().expire_token(&token).unwrap();
+
+    let expired_list = app.handle(
+        HttpRequest::new("GET", "/api/collections/posts/records")
+            .with_header("Authorization", format!("Bearer {token}")),
+    );
+    assert_eq!(expired_list.status, 200);
+    assert_eq!(expired_list.body["totalItems"], 0);
+    outcomes.insert(
+        "expired auth token becomes empty rule auth context".to_string(),
+        FixtureOutcome::from_response(&expired_list),
+    );
+
+    let expired_refresh = app.handle(
+        HttpRequest::new("POST", "/api/collections/users/auth-refresh")
+            .with_header("Authorization", format!("Bearer {token}")),
+    );
+    outcomes.insert(
+        "expired auth token cannot refresh".to_string(),
+        FixtureOutcome::from_response(&expired_refresh),
+    );
+
+    let second_login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "owner@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(second_login.status, 200);
+    let revoked_token = second_login.body["token"].as_str().unwrap().to_string();
+    let logout = app.handle(
+        HttpRequest::new("POST", "/api/collections/users/auth-logout")
+            .with_header("Authorization", format!("Bearer {revoked_token}")),
+    );
+    assert_eq!(logout.status, 204);
+
+    let revoked_list = app.handle(
+        HttpRequest::new("GET", "/api/collections/posts/records")
+            .with_header("Authorization", format!("Bearer {revoked_token}")),
+    );
+    assert_eq!(revoked_list.status, 200);
+    assert_eq!(revoked_list.body["totalItems"], 0);
+    outcomes.insert(
+        "revoked auth token becomes empty rule auth context".to_string(),
+        FixtureOutcome::from_response(&revoked_list),
+    );
+
+    let revoked_refresh = app.handle(
+        HttpRequest::new("POST", "/api/collections/users/auth-refresh")
+            .with_header("Authorization", format!("Bearer {revoked_token}")),
+    );
+    outcomes.insert(
+        "revoked auth token cannot refresh".to_string(),
+        FixtureOutcome::from_response(&revoked_refresh),
     );
 
     outcomes
