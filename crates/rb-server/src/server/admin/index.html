@@ -546,6 +546,20 @@
       font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
 
+    .record-file-list label {
+      display: inline-flex;
+      gap: 5px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .record-file-list input {
+      width: auto;
+      min-height: 0;
+    }
+
     .validation-summary {
       display: grid;
       gap: 6px;
@@ -1354,6 +1368,11 @@
           clearRecordFieldValidationFeedback(input);
         });
       });
+      document.querySelectorAll("[data-record-file-delete]").forEach((input) => {
+        input.addEventListener("change", () => {
+          clearRecordFieldValidationFeedback(input);
+        });
+      });
     }
 
     function recordBrowserControlsHtml() {
@@ -1560,8 +1579,8 @@
         return `
           <div class="${fieldClass}">
             ${label}
-            ${recordFileValueHtml(value)}
-            <input id="${inputId}" data-record-file="${escapeAttribute(name)}" type="file"${recordFieldIsMulti(field) ? " multiple" : ""}${accept}>
+            ${recordFileValueHtml(name, value)}
+            <input id="${inputId}" data-record-file="${escapeAttribute(name)}" data-record-multi="${recordFieldIsMulti(field) ? "true" : "false"}" type="file"${recordFieldIsMulti(field) ? " multiple" : ""}${accept}>
             ${fieldError}
           </div>
         `;
@@ -1618,7 +1637,7 @@
       return detail.message || detail.code || "Invalid value";
     }
 
-    function recordFileValueHtml(value) {
+    function recordFileValueHtml(fieldName, value) {
       const names = Array.isArray(value)
         ? value
         : value
@@ -1629,7 +1648,12 @@
       }
       return `
         <div class="record-file-list">
-          ${names.map((name) => `<code>${escapeHtml(name)}</code>`).join("")}
+          ${names.map((name) => `
+            <label>
+              <input type="checkbox" data-record-file-delete="${escapeAttribute(fieldName)}" value="${escapeAttribute(name)}">
+              <code>${escapeHtml(name)}</code>
+            </label>
+          `).join("")}
         </div>
       `;
     }
@@ -1753,6 +1777,7 @@
       }
 
       try {
+        applyRecordFileDeletes(payload, recordEditorFileDeletes());
         const uploads = recordEditorFileUploads();
         const method = state.editorMode === "edit" ? "PATCH" : "POST";
         const path = state.editorMode === "edit"
@@ -1788,16 +1813,43 @@
       document.querySelectorAll("[data-record-file]").forEach((input) => {
         Array.from(input.files || []).forEach((file) => {
           if (file && input.dataset.recordFile) {
-            uploads.push({ fieldName: input.dataset.recordFile, file });
+            const fieldName = state.editorMode === "edit" && input.dataset.recordMulti === "true"
+              ? `${input.dataset.recordFile}+`
+              : input.dataset.recordFile;
+            uploads.push({ fieldName, file });
           }
         });
       });
       return uploads;
     }
 
+    function recordEditorFileDeletes() {
+      const deletes = {};
+      document.querySelectorAll("[data-record-file-delete]:checked").forEach((input) => {
+        const fieldName = input.dataset.recordFileDelete || "";
+        const fileName = input.value || "";
+        if (!fieldName || !fileName) {
+          return;
+        }
+        if (!deletes[fieldName]) {
+          deletes[fieldName] = [];
+        }
+        deletes[fieldName].push(fileName);
+      });
+      return deletes;
+    }
+
+    function applyRecordFileDeletes(payload, deletes) {
+      Object.entries(deletes).forEach(([fieldName, names]) => {
+        if (names.length) {
+          payload[`${fieldName}-`] = names;
+        }
+      });
+    }
+
     function recordFormDataPayload(collection, payload, uploads) {
       const form = new FormData();
-      const uploadedFields = new Set(uploads.map((upload) => upload.fieldName));
+      const uploadedFields = new Set(uploads.map((upload) => upload.fieldName.replace(/\+$/, "")));
       const fileFields = new Set(userCollectionFields(collection)
         .filter((field) => (field.type || field.kind) === "file")
         .map((field) => field.name));
@@ -1881,7 +1933,7 @@
     }
 
     function clearRecordFieldValidationFeedback(input) {
-      const fieldName = input.dataset.recordField || input.dataset.recordFile;
+      const fieldName = input.dataset.recordField || input.dataset.recordFile || input.dataset.recordFileDelete;
       if (!fieldName || !state.editorValidation[fieldName]) {
         return;
       }

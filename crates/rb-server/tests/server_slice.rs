@@ -147,6 +147,9 @@ fn serves_embedded_admin_ui_shell() {
         assert!(html.contains("recordFormDataPayload"));
         assert!(html.contains("FormData"));
         assert!(html.contains("recordFileValueHtml"));
+        assert!(html.contains("data-record-file-delete"));
+        assert!(html.contains("recordEditorFileDeletes"));
+        assert!(html.contains("applyRecordFileDeletes"));
         assert!(html.contains("Initialized and logged in"));
         assert!(html.contains(r#""PATCH""#));
         assert!(html.contains(r#"method: "DELETE""#));
