@@ -201,6 +201,12 @@ Run the local server benchmark smoke:
 cargo run -p rb-server --example bench_server --release
 ```
 
+Run the PocketBase-style blog demo script:
+
+```bash
+./examples/blog.sh
+```
+
 Build a local executable:
 
 ```bash
