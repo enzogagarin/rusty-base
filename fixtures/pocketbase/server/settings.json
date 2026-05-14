@@ -1,0 +1,51 @@
+{
+  "name": "PocketBase settings behavior",
+  "area": "settings",
+  "pocketBaseNote": "PocketBase application settings are superuser-managed after bootstrap, support nested partial patches, redact stored secrets in API responses, and return field-level validation errors for invalid settings.",
+  "cases": [
+    {
+      "name": "settings defaults are readable before superuser bootstrap",
+      "route": "GET /api/settings",
+      "expectedStatus": 200,
+      "pocketBaseNote": "Before the first superuser exists, bootstrap flows can inspect default settings."
+    },
+    {
+      "name": "settings require superuser after bootstrap",
+      "route": "GET /api/settings",
+      "expectedStatus": 403,
+      "pocketBaseNote": "After a superuser exists, settings reads and writes require superuser authorization."
+    },
+    {
+      "name": "superuser patch updates settings and redacts secrets",
+      "route": "PATCH /api/settings",
+      "expectedStatus": 200,
+      "pocketBaseNote": "A superuser can patch nested settings sections, but secret values are redacted from the response."
+    },
+    {
+      "name": "redacted secret placeholders preserve stored secrets",
+      "route": "PATCH /api/settings",
+      "expectedStatus": 200,
+      "pocketBaseNote": "Submitting the redaction placeholder for a secret field should keep the previously stored secret value."
+    },
+    {
+      "name": "settings fields projection returns selected settings",
+      "route": "GET /api/settings?fields=meta.appName,batch.maxRequests,smtp.password",
+      "expectedStatus": 200,
+      "pocketBaseNote": "Settings responses support fields projection while preserving secret redaction."
+    },
+    {
+      "name": "invalid batch settings return field validation errors",
+      "route": "PATCH /api/settings",
+      "expectedStatus": 400,
+      "expectedCode": "validation_invalid_number",
+      "pocketBaseNote": "Invalid numeric settings should be rejected with a field-level validation code."
+    },
+    {
+      "name": "enabled backup s3 settings require a secret",
+      "route": "PATCH /api/settings",
+      "expectedStatus": 400,
+      "expectedCode": "validation_required",
+      "pocketBaseNote": "Enabled S3-backed backup settings must include all required storage credentials, including the secret."
+    }
+  ]
+}

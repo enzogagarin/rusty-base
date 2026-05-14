@@ -428,8 +428,8 @@ The first server slice supports:
 - first `?fields=...` response projection support for records and expanded
   relations, including `*` and nested paths such as `expand.author.name`;
 - server compatibility fixtures for auth action tokens, auth context, batch
-  requests, import/export, view collections, relation expand, realtime, and
-  protected file access under `fixtures/pocketbase/server`;
+  requests, import/export, settings, view collections, relation expand,
+  realtime, and protected file access under `fixtures/pocketbase/server`;
 - `GET /api/collections/:collection/auth-methods` with password, OTP, MFA,
   OAuth2 provider auth URLs, PKCE verifier/challenge data, and legacy SDK
   compatibility fields plus response `fields` projection;

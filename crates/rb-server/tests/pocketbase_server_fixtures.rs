@@ -132,6 +132,16 @@ fn pocketbase_import_export_fixture_matches_http_behavior() {
     assert_fixture_outcomes(&fixture, outcomes);
 }
 
+#[test]
+fn pocketbase_settings_fixture_matches_http_behavior() {
+    let fixture = load_server_fixture("settings");
+    assert_eq!(fixture.area, "settings");
+
+    let outcomes = run_settings_fixture();
+
+    assert_fixture_outcomes(&fixture, outcomes);
+}
+
 fn load_server_fixture(name: &str) -> PocketBaseServerFixture {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/pocketbase/server")
@@ -1871,12 +1881,244 @@ fn run_import_export_fixture() -> BTreeMap<String, FixtureOutcome> {
     outcomes
 }
 
+fn run_settings_fixture() -> BTreeMap<String, FixtureOutcome> {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+    let mut outcomes = BTreeMap::new();
+
+    let public_defaults = app.handle(HttpRequest::new("GET", "/api/settings"));
+    assert_eq!(public_defaults.body["meta"]["appName"], "Rusty Base");
+    assert_eq!(public_defaults.body["batch"]["maxRequests"], 50);
+    outcomes.insert(
+        "settings defaults are readable before superuser bootstrap".to_string(),
+        FixtureOutcome::from_response(&public_defaults),
+    );
+
+    let superusers = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "_superusers",
+                "type": "auth",
+                "fields": [{"name": "email", "kind": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(superusers.status, 200);
+
+    let first_superuser = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/_superusers/records",
+            json!({
+                "id": "su_1",
+                "email": "root@example.com",
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(first_superuser.status, 200);
+
+    let blocked = app.handle(HttpRequest::new("GET", "/api/settings"));
+    outcomes.insert(
+        "settings require superuser after bootstrap".to_string(),
+        FixtureOutcome::from_response(&blocked),
+    );
+
+    let superuser_token = superuser_login_token(&app);
+    let auth_header = format!("Bearer {superuser_token}");
+
+    let patched = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/settings",
+            json!({
+                "meta": {
+                    "appName": "Acme",
+                    "appURL": "https://example.com",
+                    "senderName": "Acme Ops",
+                    "senderAddress": "noreply@example.com",
+                    "hideControls": true
+                },
+                "logs": {
+                    "maxDays": 14,
+                    "minLevel": 1,
+                    "logIp": false,
+                    "logAuthId": true
+                },
+                "batch": {
+                    "enabled": true,
+                    "maxRequests": 2,
+                    "timeout": 30,
+                    "maxBodySize": 2048
+                },
+                "smtp": {
+                    "enabled": true,
+                    "host": "smtp.example.com",
+                    "port": 2525,
+                    "username": "mailer",
+                    "password": "smtp-secret",
+                    "authMethod": "plain",
+                    "tls": false,
+                    "localName": "rusty-base"
+                },
+                "s3": {
+                    "enabled": true,
+                    "bucket": "assets",
+                    "region": "auto",
+                    "endpoint": "https://s3.example.com",
+                    "accessKey": "access",
+                    "secret": "s3-secret",
+                    "forcePathStyle": true
+                },
+                "backups": {
+                    "cron": "0 3 * * *",
+                    "cronMaxKeep": 7,
+                    "s3": {
+                        "enabled": true,
+                        "bucket": "backups",
+                        "region": "auto",
+                        "endpoint": "https://s3.example.com",
+                        "accessKey": "backup-access",
+                        "secret": "backup-secret"
+                    }
+                },
+                "rateLimits": {
+                    "enabled": true,
+                    "rules": [{
+                        "label": "/api/custom",
+                        "audience": "@request.auth.id",
+                        "duration": 15,
+                        "maxRequests": 4
+                    }]
+                },
+                "trustedProxy": {
+                    "headers": ["X-Forwarded-For", "CF-Connecting-IP"],
+                    "useLeftmostIp": true
+                }
+            }),
+        )
+        .unwrap()
+        .with_header("Authorization", auth_header.clone()),
+    );
+    assert_eq!(patched.body["meta"]["appName"], "Acme");
+    assert_eq!(patched.body["meta"]["appURL"], "https://example.com");
+    assert_eq!(patched.body["batch"]["maxRequests"], 2);
+    assert_eq!(patched.body["smtp"]["password"], "******");
+    assert_eq!(patched.body["s3"]["secret"], "******");
+    assert_eq!(patched.body["backups"]["s3"]["secret"], "******");
+    assert_eq!(
+        patched.body["rateLimits"]["rules"][0]["label"],
+        "/api/custom"
+    );
+    assert_eq!(patched.body["trustedProxy"]["useLeftmostIp"], true);
+    outcomes.insert(
+        "superuser patch updates settings and redacts secrets".to_string(),
+        FixtureOutcome::from_response(&patched),
+    );
+
+    let redacted_patch = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/settings?fields=smtp.password,s3.secret,backups.s3.secret,batch.maxRequests",
+            json!({
+                "smtp": {"password": "******"},
+                "s3": {"secret": "******"},
+                "backups": {"s3": {"secret": "******"}},
+                "batch": {"maxRequests": 3}
+            }),
+        )
+        .unwrap()
+        .with_header("Authorization", auth_header.clone()),
+    );
+    assert_eq!(redacted_patch.body["smtp"]["password"], "******");
+    assert_eq!(redacted_patch.body["s3"]["secret"], "******");
+    assert_eq!(redacted_patch.body["backups"]["s3"]["secret"], "******");
+    assert_eq!(redacted_patch.body["batch"]["maxRequests"], 3);
+    let stored_settings = app.store().get_settings().unwrap();
+    assert_eq!(stored_settings.smtp.password, "smtp-secret");
+    assert_eq!(stored_settings.s3.secret, "s3-secret");
+    assert_eq!(stored_settings.backups.s3.secret, "backup-secret");
+    outcomes.insert(
+        "redacted secret placeholders preserve stored secrets".to_string(),
+        FixtureOutcome::from_response(&redacted_patch),
+    );
+
+    let projected = app.handle(
+        HttpRequest::new(
+            "GET",
+            "/api/settings?fields=meta.appName,batch.maxRequests,smtp.password",
+        )
+        .with_header("Authorization", auth_header.clone()),
+    );
+    assert_eq!(projected.body["meta"]["appName"], "Acme");
+    assert_eq!(projected.body["batch"]["maxRequests"], 3);
+    assert_eq!(projected.body["smtp"]["password"], "******");
+    assert!(projected.body.get("s3").is_none());
+    outcomes.insert(
+        "settings fields projection returns selected settings".to_string(),
+        FixtureOutcome::from_response(&projected),
+    );
+
+    let invalid_batch = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/settings",
+            json!({"batch": {"maxRequests": 0}}),
+        )
+        .unwrap()
+        .with_header("Authorization", auth_header.clone()),
+    );
+    outcomes.insert(
+        "invalid batch settings return field validation errors".to_string(),
+        FixtureOutcome::from_response(&invalid_batch).with_code(json_string(
+            &invalid_batch,
+            &["data", "batch.maxRequests", "code"],
+        )),
+    );
+
+    let invalid_backup = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/settings",
+            json!({"backups": {"s3": {"enabled": true, "secret": ""}}}),
+        )
+        .unwrap()
+        .with_header("Authorization", auth_header),
+    );
+    outcomes.insert(
+        "enabled backup s3 settings require a secret".to_string(),
+        FixtureOutcome::from_response(&invalid_backup).with_code(json_string(
+            &invalid_backup,
+            &["data", "backups.s3.secret", "code"],
+        )),
+    );
+
+    outcomes
+}
+
 fn login_token(app: &RustyBaseApp, identity: &str) -> String {
     let login = app.handle(
         HttpRequest::json(
             "POST",
             "/api/collections/users/auth-with-password",
             json!({"identity": identity, "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(login.status, 200);
+    login.body["token"].as_str().unwrap().to_string()
+}
+
+fn superuser_login_token(app: &RustyBaseApp) -> String {
+    let login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/_superusers/auth-with-password",
+            json!({"identity": "root@example.com", "password": "correct horse"}),
         )
         .unwrap(),
     );
