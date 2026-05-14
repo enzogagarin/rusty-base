@@ -257,9 +257,10 @@ Every engine should have:
 - benchmarks for pathological cases.
 
 The embedded admin shell is still an MVP/self-hosted surface. Its response sets
-a restrictive CSP and destructive actions require typing the target name or id,
-but the superuser token is stored in `localStorage` until the admin session model
-grows a nonce/hash-based script policy and optional httpOnly cookie flow.
+a restrictive CSP, serves CSS/JS as separate embedded assets, and destructive
+actions require typing the target name or id. The superuser token is still stored
+in `localStorage` until the admin session model grows an optional httpOnly cookie
+flow.
 
 ## First milestone
 

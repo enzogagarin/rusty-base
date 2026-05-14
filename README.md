@@ -182,10 +182,9 @@ cargo test --workspace
 
 Admin UI security note: the embedded admin shell is currently an MVP/self-hosted
 surface. It stores the superuser token in `localStorage` and ships with a CSP
-that blocks external sources, frames, forms, and objects while still allowing the
-current inline script/style bundle. Before a public alpha, this should move
-toward a nonce/hash-based script policy and an optional httpOnly session cookie
-flow so an XSS bug cannot directly read the superuser token.
+that blocks external sources, frames, forms, objects, and inline script/style
+execution. Before a public alpha, this should still grow an optional httpOnly
+session cookie flow so an XSS bug cannot directly read the superuser token.
 
 Run the current CLI smoke path:
 

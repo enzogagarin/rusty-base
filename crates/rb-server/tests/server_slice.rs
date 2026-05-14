@@ -99,6 +99,13 @@ fn serves_embedded_admin_ui_shell() {
             response.headers.get("cache-control").map(String::as_str),
             Some("no-store")
         );
+        assert_eq!(
+            response
+                .headers
+                .get("x-content-type-options")
+                .map(String::as_str),
+            Some("nosniff")
+        );
         let csp = response
             .headers
             .get("content-security-policy")
@@ -106,64 +113,119 @@ fn serves_embedded_admin_ui_shell() {
         assert!(csp.contains("default-src 'none'"));
         assert!(csp.contains("connect-src 'self'"));
         assert!(csp.contains("frame-ancestors 'none'"));
+        assert!(csp.contains("script-src 'self'"));
+        assert!(csp.contains("style-src 'self'"));
+        assert!(!csp.contains("'unsafe-inline'"));
 
         let html = String::from_utf8(response.raw_body).unwrap();
         assert!(html.contains("Rusty Base Admin"));
-        assert!(html.contains("/api/health"));
-        assert!(html.contains("/api/collections/_superusers/auth-with-password"));
-        assert!(html.contains("/api/collections?fields="));
-        assert!(html.contains("/api/settings?fields="));
+        assert!(html.contains(r#"href="/_/admin/styles.css""#));
+        assert!(html.contains(r#"src="/_/admin/app.js""#));
         assert!(html.contains(r#"data-view="records""#));
-        assert!(html.contains("collectionRecordsPath"));
-        assert!(html.contains("recordListPath"));
-        assert!(html.contains("URLSearchParams"));
-        assert!(html.contains("record-filter"));
-        assert!(html.contains("record-sort"));
-        assert!(html.contains("record-per-page"));
-        assert!(html.contains("record-next-page"));
-        assert!(html.contains("Login or initialize first"));
-        assert!(html.contains("collection-json-input"));
-        assert!(html.contains("Create collection"));
-        assert!(html.contains("Edit ${state.collectionEditorName}"));
-        assert!(html.contains("data-collection-edit"));
-        assert!(html.contains("data-collection-truncate"));
-        assert!(html.contains("data-collection-delete"));
-        assert!(html.contains("confirmDangerousAction"));
-        assert!(html.contains("window.prompt"));
-        assert!(!html.contains("confirm("));
-        assert!(html.contains("editableCollectionPayload"));
-        assert!(html.contains("collectionPath"));
-        assert!(html.contains("new-field-name"));
-        assert!(html.contains("addCollectionField"));
-        assert!(html.contains("removeCollectionField"));
-        assert!(html.contains("Field name is required"));
-        assert!(html.contains("Relation target collection is required"));
-        assert!(html.contains("Go to Collections"));
-        assert!(html.contains("record-json-input"));
-        assert!(html.contains("Create record"));
-        assert!(html.contains("ensureCollectionDetails"));
-        assert!(html.contains("recordFieldFormHtml"));
-        assert!(html.contains("data-record-field"));
-        assert!(html.contains("syncRecordFieldFromInput"));
-        assert!(html.contains("recordFieldValuePreview"));
-        assert!(html.contains("Fix record JSON before using field inputs"));
-        assert!(html.contains("recordValidationSummaryHtml"));
-        assert!(html.contains("validationDataFromError"));
-        assert!(html.contains("field-error"));
-        assert!(html.contains("clearRecordValidationFeedback"));
-        assert!(html.contains("error.body"));
-        assert!(html.contains("data-record-file"));
-        assert!(html.contains("recordEditorFileUploads"));
-        assert!(html.contains("recordFormDataPayload"));
-        assert!(html.contains("FormData"));
-        assert!(html.contains("recordFileValueHtml"));
-        assert!(html.contains("data-record-file-delete"));
-        assert!(html.contains("recordEditorFileDeletes"));
-        assert!(html.contains("applyRecordFileDeletes"));
-        assert!(html.contains("Initialized and logged in"));
-        assert!(html.contains(r#""PATCH""#));
-        assert!(html.contains(r#"method: "DELETE""#));
+        assert!(!html.contains("<style>"));
+        assert!(!html.contains("const tokenKey"));
     }
+
+    let app_js = app.handle(HttpRequest::new("GET", "/_/admin/app.js"));
+    assert_eq!(app_js.status, 200);
+    assert_eq!(app_js.content_type, "text/javascript; charset=utf-8");
+    assert_eq!(
+        app_js.headers.get("cache-control").map(String::as_str),
+        Some("no-store")
+    );
+    assert_eq!(
+        app_js
+            .headers
+            .get("x-content-type-options")
+            .map(String::as_str),
+        Some("nosniff")
+    );
+    let js = String::from_utf8(app_js.raw_body).unwrap();
+
+    let state_js = app.handle(HttpRequest::new("GET", "/_/admin/state.js"));
+    assert_eq!(state_js.status, 200);
+    assert_eq!(state_js.content_type, "text/javascript; charset=utf-8");
+    let state_js = String::from_utf8(state_js.raw_body).unwrap();
+
+    let render_helpers_js = app.handle(HttpRequest::new("GET", "/_/admin/render_helpers.js"));
+    assert_eq!(render_helpers_js.status, 200);
+    assert_eq!(
+        render_helpers_js.content_type,
+        "text/javascript; charset=utf-8"
+    );
+    let render_helpers_js = String::from_utf8(render_helpers_js.raw_body).unwrap();
+
+    let js_bundle = format!("{js}\n{state_js}\n{render_helpers_js}");
+    assert!(js_bundle.contains("/api/health"));
+    assert!(js_bundle.contains("/api/collections/_superusers/auth-with-password"));
+    assert!(js_bundle.contains("/api/collections?fields="));
+    assert!(js_bundle.contains("/api/settings?fields="));
+    assert!(js_bundle.contains("collectionRecordsPath"));
+    assert!(js_bundle.contains("recordListPath"));
+    assert!(js_bundle.contains("URLSearchParams"));
+    assert!(js_bundle.contains("record-filter"));
+    assert!(js_bundle.contains("record-sort"));
+    assert!(js_bundle.contains("record-per-page"));
+    assert!(js_bundle.contains("record-next-page"));
+    assert!(js_bundle.contains("Login or initialize first"));
+    assert!(js_bundle.contains("collection-json-input"));
+    assert!(js_bundle.contains("Create collection"));
+    assert!(js_bundle.contains("Edit ${state.collectionEditorName}"));
+    assert!(js_bundle.contains("data-collection-edit"));
+    assert!(js_bundle.contains("data-collection-truncate"));
+    assert!(js_bundle.contains("data-collection-delete"));
+    assert!(js_bundle.contains("confirmDangerousAction"));
+    assert!(js_bundle.contains("window.prompt"));
+    assert!(!js_bundle.contains("confirm("));
+    assert!(js_bundle.contains("editableCollectionPayload"));
+    assert!(js_bundle.contains("collectionPath"));
+    assert!(js_bundle.contains("new-field-name"));
+    assert!(js_bundle.contains("addCollectionField"));
+    assert!(js_bundle.contains("removeCollectionField"));
+    assert!(js_bundle.contains("Field name is required"));
+    assert!(js_bundle.contains("Relation target collection is required"));
+    assert!(js_bundle.contains("Go to Collections"));
+    assert!(js_bundle.contains("record-json-input"));
+    assert!(js_bundle.contains("Create record"));
+    assert!(js_bundle.contains("ensureCollectionDetails"));
+    assert!(js_bundle.contains("recordFieldFormHtml"));
+    assert!(js_bundle.contains("data-record-field"));
+    assert!(js_bundle.contains("syncRecordFieldFromInput"));
+    assert!(js_bundle.contains("recordFieldValuePreview"));
+    assert!(js_bundle.contains("Fix record JSON before using field inputs"));
+    assert!(js_bundle.contains("recordValidationSummaryHtml"));
+    assert!(js_bundle.contains("validationDataFromError"));
+    assert!(js_bundle.contains("field-error"));
+    assert!(js_bundle.contains("clearRecordValidationFeedback"));
+    assert!(js_bundle.contains("error.body"));
+    assert!(js_bundle.contains("data-record-file"));
+    assert!(js_bundle.contains("recordEditorFileUploads"));
+    assert!(js_bundle.contains("recordFormDataPayload"));
+    assert!(js_bundle.contains("FormData"));
+    assert!(js_bundle.contains("recordFileValueHtml"));
+    assert!(js_bundle.contains("data-record-file-delete"));
+    assert!(js_bundle.contains("recordEditorFileDeletes"));
+    assert!(js_bundle.contains("applyRecordFileDeletes"));
+    assert!(js_bundle.contains("Initialized and logged in"));
+    assert!(js_bundle.contains(r#""PATCH""#));
+    assert!(js_bundle.contains(r#"method: "DELETE""#));
+
+    let styles = app.handle(HttpRequest::new("GET", "/_/admin/styles.css"));
+    assert_eq!(styles.status, 200);
+    assert_eq!(styles.content_type, "text/css; charset=utf-8");
+    assert_eq!(
+        styles
+            .headers
+            .get("x-content-type-options")
+            .map(String::as_str),
+        Some("nosniff")
+    );
+    let css = String::from_utf8(styles.raw_body).unwrap();
+    assert!(css.contains(".shell"));
+    assert!(css.contains(".record-form-grid"));
+
+    let missing_asset = app.handle(HttpRequest::new("GET", "/_/admin/missing.js"));
+    assert_eq!(missing_asset.status, 404);
 
     let health = app.handle(HttpRequest::new("GET", "/api/health"));
     assert_eq!(health.status, 200);

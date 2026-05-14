@@ -39,6 +39,8 @@ impl RustyBaseApp {
         let segments = segments.iter().map(String::as_str).collect::<Vec<_>>();
 
         match (request.method.as_str(), segments.as_slice()) {
+            ("GET", ["_", "admin", asset]) => admin_asset_response(asset)
+                .ok_or_else(|| ServerError::NotFound(format!("admin asset '{asset}' not found"))),
             ("GET", ["admin", ..]) | ("GET", ["_", ..]) => Ok(admin_index_response()),
             ("GET", ["api", "health"]) => Ok(HttpResponse::json(
                 200,
