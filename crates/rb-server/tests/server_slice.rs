@@ -2095,6 +2095,133 @@ fn supports_email_change_tokens() {
 }
 
 #[test]
+fn expired_email_change_token_is_rejected_without_changing_email() {
+    let path = temp_db_path("expired-email-change-token");
+    let app = RustyBaseApp::new(Store::open(&path).unwrap());
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [
+                    {"name": "email", "type": "email"},
+                    {"name": "name", "kind": "text"},
+                    {"name": "verified", "kind": "bool"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(users.status, 200);
+
+    let user = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({
+                "id": "user_1",
+                "email": "burak@example.com",
+                "name": "Burak",
+                "verified": false,
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(user.status, 200);
+
+    let login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "burak@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(login.status, 200);
+    let old_token = login.body["token"].as_str().unwrap().to_string();
+
+    let request_change = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/request-email-change",
+            json!({"newEmail": "changed@example.com"}),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {old_token}")),
+    );
+    assert_eq!(request_change.status, 204);
+    let change_token = app
+        .store()
+        .latest_auth_action_token("users", "user_1", "emailChange")
+        .unwrap()
+        .unwrap();
+
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            r#"UPDATE "_rb_auth_action_tokens" SET expires = ?1 WHERE token = ?2"#,
+            params!["0", &change_token],
+        )
+        .unwrap();
+    }
+
+    let expired_change = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/confirm-email-change",
+            json!({"token": change_token, "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(expired_change.status, 400);
+    assert!(expired_change.body["message"]
+        .as_str()
+        .unwrap()
+        .contains("invalid or expired emailChange token"));
+    assert!(app
+        .store()
+        .latest_auth_action_token("users", "user_1", "emailChange")
+        .unwrap()
+        .is_none());
+
+    let old_token_refresh = app.handle(
+        HttpRequest::new("POST", "/api/collections/users/auth-refresh")
+            .with_header("Authorization", format!("Bearer {old_token}")),
+    );
+    assert_eq!(old_token_refresh.status, 200);
+
+    let old_email_login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "burak@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(old_email_login.status, 200);
+    assert_eq!(old_email_login.body["record"]["email"], "burak@example.com");
+    assert_eq!(old_email_login.body["record"]["verified"], false);
+
+    let new_email_login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "changed@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(new_email_login.status, 400);
+
+    drop(app);
+    fs::remove_file(path).ok();
+}
+
+#[test]
 fn returns_validation_data_for_auth_and_record_forms() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
