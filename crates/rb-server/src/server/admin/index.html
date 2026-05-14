@@ -388,8 +388,23 @@
 
     .empty {
       color: var(--muted);
+      display: grid;
+      gap: 10px;
+      justify-items: center;
       padding: 18px;
       text-align: center;
+    }
+
+    .empty strong {
+      color: var(--ink);
+      font-size: 15px;
+    }
+
+    .empty-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
     }
 
     .error {
@@ -486,6 +501,9 @@
       editorRecordId: "",
       editorText: "",
       editorError: "",
+      collectionEditorOpen: false,
+      collectionEditorText: "",
+      collectionEditorError: "",
       settings: null,
       error: ""
     };
@@ -561,6 +579,12 @@
           state.settings = null;
           state.error = error.message;
         }
+      } else {
+        state.collections = [];
+        state.selectedCollection = "";
+        state.records = [];
+        state.recordCount = 0;
+        state.settings = null;
       }
 
       render();
@@ -617,10 +641,16 @@
     }
 
     function renderCollections() {
-      if (!state.collections.length) {
-        $("content").innerHTML = `<div class="empty">No collections</div>`;
+      if (!state.token) {
+        $("content").innerHTML = `
+          <div class="empty">
+            <strong>Login or initialize first</strong>
+            <span>Collections are only available after a superuser session is active.</span>
+          </div>
+        `;
         return;
       }
+
       const rows = state.collections.map((collection) => `
         <tr>
           <td>
@@ -632,18 +662,36 @@
           <td>${collection.system ? "system" : "base"}</td>
         </tr>
       `).join("");
-      $("content").innerHTML = `
-        <div class="panel-head">
-          <h2>Collections</h2>
-          <button type="button" id="refresh">Refresh</button>
-        </div>
+
+      const body = state.collections.length ? `
         <div class="table-wrap">
           <table>
             <thead><tr><th>Name</th><th>Type</th><th>Scope</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
+      ` : `
+        <div class="empty">
+          <strong>No collections yet</strong>
+          <span>Create a collection to start browsing and editing records.</span>
+        </div>
       `;
+
+      $("content").innerHTML = `
+        <div class="panel-head">
+          <h2>Collections</h2>
+          <div class="record-actions">
+            <button type="button" id="new-collection" class="primary">New</button>
+            <button type="button" id="refresh">Refresh</button>
+          </div>
+        </div>
+        ${body}
+        ${collectionEditorHtml()}
+      `;
+      $("new-collection").addEventListener("click", () => {
+        openCollectionEditor();
+        render();
+      });
       $("refresh").addEventListener("click", refresh);
       document.querySelectorAll("[data-collection-name]").forEach((button) => {
         button.addEventListener("click", async () => {
@@ -654,12 +702,112 @@
           render();
         });
       });
+      const save = $("save-collection");
+      if (save) {
+        save.addEventListener("click", saveCollection);
+      }
+      const cancel = $("cancel-collection");
+      if (cancel) {
+        cancel.addEventListener("click", () => {
+          closeCollectionEditor();
+          render();
+        });
+      }
+    }
+
+    function collectionEditorHtml() {
+      if (!state.collectionEditorOpen) {
+        return "";
+      }
+
+      return `
+        <div class="record-editor">
+          <h2>Create collection</h2>
+          ${state.collectionEditorError ? `<div class="error">${escapeHtml(state.collectionEditorError)}</div>` : ""}
+          <textarea id="collection-json-input" spellcheck="false">${escapeHtml(state.collectionEditorText)}</textarea>
+          <div class="editor-actions">
+            <button type="button" id="cancel-collection">Cancel</button>
+            <button type="button" id="save-collection" class="primary">Save</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function openCollectionEditor() {
+      state.collectionEditorOpen = true;
+      state.collectionEditorText = JSON.stringify({
+        name: "posts",
+        fields: [
+          { name: "title", type: "text" }
+        ]
+      }, null, 2);
+      state.collectionEditorError = "";
+    }
+
+    function closeCollectionEditor() {
+      state.collectionEditorOpen = false;
+      state.collectionEditorText = "";
+      state.collectionEditorError = "";
+    }
+
+    async function saveCollection() {
+      const input = $("collection-json-input");
+      if (!input) {
+        return;
+      }
+
+      let payload = null;
+      try {
+        payload = JSON.parse(input.value || "{}");
+      } catch (error) {
+        state.collectionEditorText = input.value;
+        state.collectionEditorError = error.message;
+        render();
+        return;
+      }
+
+      try {
+        const created = await jsonApi("/api/collections", payload, "POST");
+        closeCollectionEditor();
+        state.selectedCollection = created && created.name ? created.name : payload.name || "";
+        if (state.selectedCollection) {
+          localStorage.setItem("rusty-base.admin.collection", state.selectedCollection);
+        }
+        state.view = "records";
+        status("Collection created");
+        await refresh();
+      } catch (error) {
+        state.collectionEditorText = input.value;
+        state.collectionEditorError = error.message;
+        render();
+      }
     }
 
     function renderRecords() {
       const collection = currentCollection();
+      if (!state.token) {
+        $("content").innerHTML = `
+          <div class="empty">
+            <strong>Login or initialize first</strong>
+            <span>Records are available after a superuser session is active.</span>
+          </div>
+        `;
+        return;
+      }
+
       if (!collection) {
-        $("content").innerHTML = `<div class="empty">No collection selected</div>`;
+        $("content").innerHTML = `
+          <div class="empty">
+            <strong>No collection selected</strong>
+            <span>Create or select a collection before browsing records.</span>
+            <div class="empty-actions">
+              <button type="button" id="go-collections" class="primary">Go to Collections</button>
+            </div>
+          </div>
+        `;
+        $("go-collections").addEventListener("click", async () => {
+          await setView("collections");
+        });
         return;
       }
 
@@ -693,7 +841,12 @@
               <tbody>${rows}</tbody>
             </table>
           </div>
-        ` : `<div class="empty">No records</div>`}
+        ` : `
+          <div class="empty">
+            <strong>No records yet</strong>
+            <span>Create the first record in this collection.</span>
+          </div>
+        `}
         ${recordEditorHtml()}
       `;
       $("new-record").addEventListener("click", () => {
@@ -970,7 +1123,13 @@
           password: $("password").value,
           passwordConfirm: $("password").value
         });
-        status("Initialized");
+        const body = await jsonApi("/api/collections/_superusers/auth-with-password", {
+          identity: $("email").value,
+          password: $("password").value
+        });
+        state.token = body.token || "";
+        localStorage.setItem(tokenKey, state.token);
+        status("Initialized and logged in");
         await refresh();
       } catch (error) {
         status(error.message, true);
@@ -985,6 +1144,7 @@
       state.recordCount = 0;
       state.settings = null;
       closeRecordEditor();
+      closeCollectionEditor();
       await refresh();
     });
 

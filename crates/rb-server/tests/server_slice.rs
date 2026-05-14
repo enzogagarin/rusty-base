@@ -109,8 +109,13 @@ fn serves_embedded_admin_ui_shell() {
         assert!(html.contains(r#"data-view="records""#));
         assert!(html.contains("collectionRecordsPath"));
         assert!(html.contains("perPage=20&sort=-created"));
+        assert!(html.contains("Login or initialize first"));
+        assert!(html.contains("collection-json-input"));
+        assert!(html.contains("Create collection"));
+        assert!(html.contains("Go to Collections"));
         assert!(html.contains("record-json-input"));
         assert!(html.contains("Create record"));
+        assert!(html.contains("Initialized and logged in"));
         assert!(html.contains(r#""PATCH""#));
         assert!(html.contains(r#"method: "DELETE""#));
     }
