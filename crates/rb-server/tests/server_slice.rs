@@ -147,6 +147,14 @@ fn serves_embedded_admin_ui_shell() {
     assert_eq!(state_js.content_type, "text/javascript; charset=utf-8");
     let state_js = String::from_utf8(state_js.raw_body).unwrap();
 
+    let collections_ui_js = app.handle(HttpRequest::new("GET", "/_/admin/collections_ui.js"));
+    assert_eq!(collections_ui_js.status, 200);
+    assert_eq!(
+        collections_ui_js.content_type,
+        "text/javascript; charset=utf-8"
+    );
+    let collections_ui_js = String::from_utf8(collections_ui_js.raw_body).unwrap();
+
     let render_helpers_js = app.handle(HttpRequest::new("GET", "/_/admin/render_helpers.js"));
     assert_eq!(render_helpers_js.status, 200);
     assert_eq!(
@@ -155,7 +163,16 @@ fn serves_embedded_admin_ui_shell() {
     );
     let render_helpers_js = String::from_utf8(render_helpers_js.raw_body).unwrap();
 
-    let js_bundle = format!("{js}\n{state_js}\n{render_helpers_js}");
+    let data_helpers_js = app.handle(HttpRequest::new("GET", "/_/admin/data_helpers.js"));
+    assert_eq!(data_helpers_js.status, 200);
+    assert_eq!(
+        data_helpers_js.content_type,
+        "text/javascript; charset=utf-8"
+    );
+    let data_helpers_js = String::from_utf8(data_helpers_js.raw_body).unwrap();
+
+    let js_bundle =
+        format!("{js}\n{state_js}\n{collections_ui_js}\n{render_helpers_js}\n{data_helpers_js}");
     assert!(js_bundle.contains("/api/health"));
     assert!(js_bundle.contains("/api/collections/_superusers/auth-with-password"));
     assert!(js_bundle.contains("/api/collections?fields="));
