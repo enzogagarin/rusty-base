@@ -2,6 +2,7 @@ import { $, api, confirmDangerousAction, jsonApi, state, status } from "./state.
 import {
   collectionRecordsPath,
   editableRecordPayload,
+  filePath,
   normalizedRecordPerPage,
   recordFieldInputDisplayValue,
   recordFieldIsMulti,
@@ -212,6 +213,11 @@ export function renderRecords(nextActions) {
   document.querySelectorAll("[data-record-file-delete]").forEach((input) => {
     input.addEventListener("change", () => {
       clearRecordFieldValidationFeedback(input);
+    });
+  });
+  document.querySelectorAll("[data-record-file-download]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await downloadRecordFile(button.dataset.recordFileDownload || "");
     });
   });
 }
@@ -503,7 +509,7 @@ function recordFieldInputHtml(field, value, index) {
     return `
       <div class="${fieldClass}">
         ${label}
-        ${recordFileValueHtml(name, value)}
+        ${recordFileValueHtml(name, value, currentEditorRecordId())}
         <input id="${inputId}" data-record-file="${escapeAttribute(name)}" data-record-multi="${recordFieldIsMulti(field) ? "true" : "false"}" type="file"${recordFieldIsMulti(field) ? " multiple" : ""}${accept}>
         ${fieldError}
       </div>
@@ -617,7 +623,7 @@ function recordValidationMessage(detail) {
   return detail.message || detail.code || "Invalid value";
 }
 
-function recordFileValueHtml(fieldName, value) {
+function recordFileValueHtml(fieldName, value, recordId) {
   const names = Array.isArray(value)
     ? value
     : value
@@ -629,13 +635,20 @@ function recordFileValueHtml(fieldName, value) {
   return `
     <div class="record-file-list">
       ${names.map((name) => `
-        <label>
-          <input type="checkbox" data-record-file-delete="${escapeAttribute(fieldName)}" value="${escapeAttribute(name)}">
-          <code>${escapeHtml(name)}</code>
-        </label>
+        <div class="record-file-item">
+          <label>
+            <input type="checkbox" data-record-file-delete="${escapeAttribute(fieldName)}" value="${escapeAttribute(name)}">
+            <code>${escapeHtml(name)}</code>
+          </label>
+          ${recordId ? `<button type="button" class="link-button" data-record-file-download="${escapeAttribute(name)}">Download</button>` : ""}
+        </div>
       `).join("")}
     </div>
   `;
+}
+
+function currentEditorRecordId() {
+  return state.editorMode === "edit" ? state.editorRecordId : "";
 }
 
 function recordEditorDraft() {
@@ -832,6 +845,46 @@ function applyRecordFileDeletes(payload, deletes) {
       payload[`${fieldName}-`] = names;
     }
   });
+}
+
+async function downloadRecordFile(filename) {
+  const collection = actions.currentCollection();
+  const recordId = currentEditorRecordId();
+  if (!collection || !recordId || !filename) {
+    return;
+  }
+
+  try {
+    const response = await fetch(filePath(collection.name, recordId, filename), {
+      headers: state.token ? { Authorization: `Bearer ${state.token}` } : {}
+    });
+    if (!response.ok) {
+      throw new Error(await recordFileResponseError(response));
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    status("File downloaded");
+  } catch (error) {
+    status(error.message, true);
+  }
+}
+
+async function recordFileResponseError(response) {
+  const text = await response.text();
+  try {
+    const body = JSON.parse(text);
+    return body && body.message ? body.message : `${response.status}`;
+  } catch (_) {
+    return text || `${response.status}`;
+  }
 }
 
 function recordFormDataPayload(collection, payload, uploads) {

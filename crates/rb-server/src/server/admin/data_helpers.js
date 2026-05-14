@@ -12,6 +12,10 @@ export function recordPath(collectionName, id) {
   return `${collectionRecordsPath(collectionName)}/${encodeURIComponent(id)}`;
 }
 
+export function filePath(collectionName, recordId, filename) {
+  return `/api/files/${encodeURIComponent(collectionName)}/${encodeURIComponent(recordId)}/${encodeURIComponent(filename)}`;
+}
+
 export function relationTargetCollectionName(field) {
   return field && (field.collection || field.collectionId || field.targetCollection || "");
 }

@@ -551,6 +551,19 @@ tr:last-child td {
   gap: 6px;
 }
 
+.record-file-item {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.record-file-item .link-button {
+  min-height: 26px;
+  padding: 2px 4px;
+  font-size: 12px;
+}
+
 .record-file-list code {
   border: 1px solid var(--line);
   border-radius: 6px;

@@ -238,6 +238,10 @@ fn serves_embedded_admin_ui_shell() {
     assert!(js_bundle.contains("recordFormDataPayload"));
     assert!(js_bundle.contains("FormData"));
     assert!(js_bundle.contains("recordFileValueHtml"));
+    assert!(js_bundle.contains("filePath"));
+    assert!(js_bundle.contains("data-record-file-download"));
+    assert!(js_bundle.contains("downloadRecordFile"));
+    assert!(js_bundle.contains("URL.createObjectURL"));
     assert!(js_bundle.contains("data-record-file-delete"));
     assert!(js_bundle.contains("recordEditorFileDeletes"));
     assert!(js_bundle.contains("applyRecordFileDeletes"));
