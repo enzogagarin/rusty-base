@@ -1,7 +1,7 @@
 import { $, api, jsonApi, state, status, tokenKey } from "./state.js";
 import { closeCollectionEditor, renderCollections } from "./collections_ui.js";
 import { closeRecordEditor, ensureRelationOptionsForCollection, renderRecords } from "./records_ui.js";
-import { collectionPath, collectionRecordsPath, normalizedRecordPerPage } from "./data_helpers.js";
+import { collectionPath, collectionRecordsPath, normalizedRecordPerPage, relationFieldNames } from "./data_helpers.js";
 import { metric, row, title } from "./render_helpers.js";
 
 async function refresh() {
@@ -160,7 +160,7 @@ async function loadRecords(showErrors = true) {
   try {
     collection = await ensureCollectionDetails(collection.name);
     await ensureRelationOptionsForCollection(collection);
-    const page = await api(recordListPath(collection.name));
+    const page = await api(recordListPath(collection));
     state.records = page.items || [];
     state.recordCount = page.totalItems == null ? state.records.length : page.totalItems;
     state.recordPage = Number(page.page) || state.recordPage || 1;
@@ -179,7 +179,8 @@ async function loadRecords(showErrors = true) {
   }
 }
 
-function recordListPath(collectionName) {
+function recordListPath(collection) {
+  const collectionName = typeof collection === "string" ? collection : collection.name;
   state.recordPage = Math.max(1, Number(state.recordPage) || 1);
   state.recordPerPage = normalizedRecordPerPage(state.recordPerPage);
 
@@ -193,6 +194,10 @@ function recordListPath(collectionName) {
   }
   if (filter) {
     params.set("filter", filter);
+  }
+  const expands = typeof collection === "string" ? [] : relationFieldNames(collection);
+  if (expands.length) {
+    params.set("expand", expands.join(","));
   }
   return `${collectionRecordsPath(collectionName)}?${params.toString()}`;
 }

@@ -28,6 +28,12 @@ export function userCollectionFields(collection) {
   return collection.fields.filter((field) => field && field.name && !isResponseOnlyCollectionField(field));
 }
 
+export function relationFieldNames(collection) {
+  return userCollectionFields(collection)
+    .filter((field) => (field.type || field.kind) === "relation" && relationTargetCollectionName(field))
+    .map((field) => field.name);
+}
+
 export function editableCollectionPayload(collection) {
   const copy = { ...collection };
   delete copy.id;

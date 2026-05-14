@@ -97,7 +97,7 @@ export function renderRecords(nextActions) {
     <tr>
       <td>${escapeHtml(record.id || "")}</td>
       ${visibleFields.length
-        ? visibleFields.map((field) => `<td>${recordFieldValuePreview(record, field)}</td>`).join("")
+        ? visibleFields.map((field) => `<td>${recordValuePreview(record, field)}</td>`).join("")
         : `<td><code class="record-json">${escapeHtml(recordPreview(record))}</code></td>`}
       <td>${escapeHtml(record.created || "-")}</td>
       <td>${escapeHtml(record.updated || "-")}</td>
@@ -231,6 +231,44 @@ function recordBrowserControlsHtml() {
       </div>
     </div>
   `;
+}
+
+function recordValuePreview(record, field) {
+  const type = field.type || field.kind || "text";
+  if (type === "relation") {
+    return relationFieldValuePreview(record, field);
+  }
+  return recordFieldValuePreview(record, field);
+}
+
+function relationFieldValuePreview(record, field) {
+  const value = record[field.name];
+  if (value == null || value === "" || (Array.isArray(value) && !value.length)) {
+    return `<span class="muted">-</span>`;
+  }
+
+  const values = Array.isArray(value) ? value : [value];
+  const labels = values.map((id) => relationDisplayLabel(record, field, String(id)));
+  const text = labels.filter(Boolean).join(", ");
+  const preview = text.length > 120 ? `${text.slice(0, 117)}...` : text;
+  return escapeHtml(preview || recordFieldInputDisplayValue(value));
+}
+
+function relationDisplayLabel(record, field, id) {
+  const expanded = record.expand && record.expand[field.name];
+  const expandedRecord = Array.isArray(expanded)
+    ? expanded.find((item) => String((item && item.id) || "") === id)
+    : expanded && String(expanded.id || "") === id
+      ? expanded
+      : null;
+  if (expandedRecord) {
+    return relationOptionLabel(expandedRecord);
+  }
+
+  const target = relationTargetCollectionName(field);
+  const option = (state.relationOptions[target] || [])
+    .find((item) => String(item.id || "") === id);
+  return option ? relationOptionLabel(option) : id;
 }
 
 function bindRecordBrowserControls() {

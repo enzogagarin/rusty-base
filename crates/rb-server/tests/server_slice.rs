@@ -184,6 +184,8 @@ fn serves_embedded_admin_ui_shell() {
     assert!(js_bundle.contains("/api/settings?fields="));
     assert!(js_bundle.contains("collectionRecordsPath"));
     assert!(js_bundle.contains("recordListPath"));
+    assert!(js_bundle.contains("relationFieldNames"));
+    assert!(js_bundle.contains("params.set(\"expand\""));
     assert!(js_bundle.contains("URLSearchParams"));
     assert!(js_bundle.contains("record-filter"));
     assert!(js_bundle.contains("record-sort"));
@@ -218,6 +220,8 @@ fn serves_embedded_admin_ui_shell() {
     assert!(js_bundle.contains("relationFieldInputHtml"));
     assert!(js_bundle.contains("relationOptionLabel"));
     assert!(js_bundle.contains("relationTargetCollectionName"));
+    assert!(js_bundle.contains("relationFieldValuePreview"));
+    assert!(js_bundle.contains("relationDisplayLabel"));
     assert!(js_bundle.contains("data-record-relation-target"));
     assert!(js_bundle.contains("selectedOptions"));
     assert!(js_bundle.contains("Fix record JSON before using field inputs"));
