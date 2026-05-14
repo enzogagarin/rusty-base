@@ -362,11 +362,8 @@ fn hashes_auth_passwords_and_uses_login_tokens_for_rules() {
         HttpRequest::new("GET", "/api/collections/posts/records")
             .with_header("Authorization", format!("Bearer {refreshed_token}")),
     );
-    assert_eq!(logged_out.status, 403);
-    assert!(logged_out.body["message"]
-        .as_str()
-        .unwrap()
-        .contains("invalid auth token"));
+    assert_eq!(logged_out.status, 200);
+    assert_eq!(logged_out.body["totalItems"], 0);
 
     let second_login = app.handle(
         HttpRequest::json(
@@ -384,8 +381,15 @@ fn hashes_auth_passwords_and_uses_login_tokens_for_rules() {
         HttpRequest::new("GET", "/api/collections/posts/records")
             .with_header("Authorization", format!("Bearer {expiring_token}")),
     );
-    assert_eq!(expired.status, 403);
-    assert!(expired.body["message"]
+    assert_eq!(expired.status, 200);
+    assert_eq!(expired.body["totalItems"], 0);
+
+    let expired_refresh = app.handle(
+        HttpRequest::new("POST", "/api/collections/users/auth-refresh")
+            .with_header("Authorization", format!("Bearer {expiring_token}")),
+    );
+    assert_eq!(expired_refresh.status, 403);
+    assert!(expired_refresh.body["message"]
         .as_str()
         .unwrap()
         .contains("expired auth token"));

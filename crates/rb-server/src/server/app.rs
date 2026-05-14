@@ -596,7 +596,11 @@ impl RustyBaseApp {
             return Ok(context);
         };
 
-        self.store.context_for_token(token, context)
+        match self.store.context_for_token(token, context.clone()) {
+            Ok(context) => Ok(context),
+            Err(ServerError::Forbidden(_)) => Ok(context),
+            Err(err) => Err(err),
+        }
     }
 
     pub(crate) fn file_request_context(
