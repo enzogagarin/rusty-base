@@ -1800,6 +1800,115 @@ fn supports_verification_and_password_reset_tokens() {
 }
 
 #[test]
+fn expired_password_reset_token_is_rejected_without_changing_password() {
+    let path = temp_db_path("expired-password-reset-token");
+    let app = RustyBaseApp::new(Store::open(&path).unwrap());
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [
+                    {"name": "email", "type": "email"},
+                    {"name": "name", "kind": "text"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(users.status, 200);
+
+    let user = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({
+                "id": "user_1",
+                "email": "burak@example.com",
+                "name": "Burak",
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(user.status, 200);
+
+    let request_reset = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/request-password-reset",
+            json!({"email": "burak@example.com"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(request_reset.status, 204);
+    let reset_token = app
+        .store()
+        .latest_auth_action_token("users", "user_1", "passwordReset")
+        .unwrap()
+        .unwrap();
+
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            r#"UPDATE "_rb_auth_action_tokens" SET expires = ?1 WHERE token = ?2"#,
+            params!["0", &reset_token],
+        )
+        .unwrap();
+    }
+
+    let expired_reset = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/confirm-password-reset",
+            json!({
+                "token": reset_token,
+                "password": "new correct horse",
+                "passwordConfirm": "new correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(expired_reset.status, 400);
+    assert!(expired_reset.body["message"]
+        .as_str()
+        .unwrap()
+        .contains("invalid or expired passwordReset token"));
+    assert!(app
+        .store()
+        .latest_auth_action_token("users", "user_1", "passwordReset")
+        .unwrap()
+        .is_none());
+
+    let old_password = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "burak@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(old_password.status, 200);
+
+    let new_password = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "burak@example.com", "password": "new correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(new_password.status, 400);
+
+    drop(app);
+    fs::remove_file(path).ok();
+}
+
+#[test]
 fn supports_email_change_tokens() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
