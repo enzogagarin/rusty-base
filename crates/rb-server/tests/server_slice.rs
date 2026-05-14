@@ -5366,7 +5366,7 @@ fn expands_single_multi_and_nested_relation_records() {
         let response = app.handle(
             HttpRequest::json(
                 "POST",
-                &format!("/api/collections/{collection}/records"),
+                format!("/api/collections/{collection}/records"),
                 record,
             )
             .unwrap(),
@@ -5524,7 +5524,7 @@ fn omits_expanded_relations_blocked_by_view_rule() {
         let response = app.handle(
             HttpRequest::json(
                 "POST",
-                &format!("/api/collections/{collection}/records"),
+                format!("/api/collections/{collection}/records"),
                 record,
             )
             .unwrap(),

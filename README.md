@@ -154,9 +154,9 @@ uses `image 0.25.x`, whose current transitive stack includes crates that require
 Cargo/Rust support newer than 1.84.
 
 ```bash
-cargo test
-cargo fmt --check
-cargo check --workspace
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
 Run the current CLI smoke path:
@@ -222,9 +222,10 @@ curl -s http://127.0.0.1:8090/api/collections \
   -H 'content-type: application/json' \
   -d '{"name":"users","type":"auth","fields":[{"name":"email","kind":"text"},{"name":"name","kind":"text"}]}'
 
-curl -s http://127.0.0.1:8090/api/collections/users/records \
+USER_ID=$(curl -s http://127.0.0.1:8090/api/collections/users/records \
   -H 'content-type: application/json' \
-  -d '{"email":"burak@example.com","name":"Burak","password":"correct horse","passwordConfirm":"correct horse"}'
+  -d '{"email":"burak@example.com","name":"Burak","password":"correct horse","passwordConfirm":"correct horse"}' \
+  | jq -r '.id')
 
 TOKEN=$(curl -s http://127.0.0.1:8090/api/collections/users/auth-with-password \
   -H 'content-type: application/json' \
@@ -235,18 +236,18 @@ TOKEN=$(curl -s http://127.0.0.1:8090/api/collections/users/auth-refresh \
   -H "authorization: Bearer $TOKEN" \
   | jq -r '.token')
 
-curl -s -X POST http://127.0.0.1:8090/api/collections/users/auth-logout \
-  -H "authorization: Bearer $TOKEN"
-
 curl -s http://127.0.0.1:8090/api/collections \
   -H 'content-type: application/json' \
   -d '{"name":"posts","fields":[{"name":"title","kind":"text"},{"name":"published","kind":"bool"},{"name":"owner","kind":"text"}],"listRule":"owner = @request.auth.id"}'
 
 curl -s http://127.0.0.1:8090/api/collections/posts/records \
   -H 'content-type: application/json' \
-  -d '{"title":"Rusty Base","published":true,"owner":"user_1"}'
+  -d "{\"title\":\"Rusty Base\",\"published\":true,\"owner\":\"$USER_ID\"}"
 
 curl -s 'http://127.0.0.1:8090/api/collections/posts/records?filter=published%20%3D%20true' \
+  -H "authorization: Bearer $TOKEN"
+
+curl -s -X POST http://127.0.0.1:8090/api/collections/users/auth-logout \
   -H "authorization: Bearer $TOKEN"
 ```
 
