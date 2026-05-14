@@ -35,6 +35,7 @@
 
     button,
     input,
+    select,
     textarea {
       font: inherit;
       letter-spacing: 0;
@@ -78,6 +79,7 @@
     }
 
     input,
+    select,
     textarea {
       width: 100%;
       border: 1px solid var(--line);
@@ -87,7 +89,8 @@
       padding: 8px 10px;
     }
 
-    input {
+    input,
+    select {
       min-height: 38px;
     }
 
@@ -98,6 +101,7 @@
     }
 
     input:focus,
+    select:focus,
     textarea:focus {
       border-color: var(--accent);
       outline: 2px solid rgba(15, 118, 110, 0.18);
@@ -369,6 +373,44 @@
       justify-content: flex-end;
     }
 
+    .field-tools {
+      display: grid;
+      gap: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcf8;
+      padding: 12px;
+    }
+
+    .field-tools-head {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .field-tools-form {
+      display: grid;
+      grid-template-columns: minmax(120px, 1fr) 150px minmax(160px, 1fr) auto auto;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .check-field {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      color: var(--muted);
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .check-field input {
+      width: auto;
+      min-height: 0;
+    }
+
     .kv {
       display: grid;
       grid-template-columns: 180px minmax(0, 1fr);
@@ -432,6 +474,7 @@
       }
 
       .auth-actions,
+      .field-tools-form,
       .kv {
         grid-template-columns: 1fr;
       }
@@ -747,6 +790,15 @@
           render();
         });
       }
+      const addField = $("add-collection-field");
+      if (addField) {
+        addField.addEventListener("click", addCollectionField);
+      }
+      document.querySelectorAll("[data-field-remove]").forEach((button) => {
+        button.addEventListener("click", () => {
+          removeCollectionField(Number(button.dataset.fieldRemove));
+        });
+      });
     }
 
     function collectionEditorHtml() {
@@ -757,14 +809,76 @@
       const title = state.collectionEditorMode === "edit"
         ? `Edit ${state.collectionEditorName}`
         : "Create collection";
+      const draft = collectionEditorDraft();
       return `
         <div class="record-editor">
           <h2>${escapeHtml(title)}</h2>
           ${state.collectionEditorError ? `<div class="error">${escapeHtml(state.collectionEditorError)}</div>` : ""}
+          ${collectionFieldToolsHtml(draft)}
           <textarea id="collection-json-input" spellcheck="false">${escapeHtml(state.collectionEditorText)}</textarea>
           <div class="editor-actions">
             <button type="button" id="cancel-collection">Cancel</button>
             <button type="button" id="save-collection" class="primary">Save</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function collectionFieldToolsHtml(draft) {
+      if (!draft.ok) {
+        return `
+          <div class="field-tools">
+            <div class="field-tools-head">
+              <h2>Fields</h2>
+              <span class="muted">Fix the collection JSON to use field tools.</span>
+            </div>
+          </div>
+        `;
+      }
+
+      const fields = Array.isArray(draft.value.fields) ? draft.value.fields : [];
+      const rows = fields.map((field, index) => `
+        <tr>
+          <td>${escapeHtml(field.name || "")}</td>
+          <td><span class="pill">${escapeHtml(field.type || field.kind || "")}</span></td>
+          <td>${field.required ? "required" : "-"}</td>
+          <td>${escapeHtml(collectionFieldExtra(field))}</td>
+          <td><button type="button" class="danger" data-field-remove="${index}">Remove</button></td>
+        </tr>
+      `).join("");
+
+      return `
+        <div class="field-tools">
+          <div class="field-tools-head">
+            <h2>Fields</h2>
+            <span class="muted">${fields.length} user field${fields.length === 1 ? "" : "s"}</span>
+          </div>
+          ${fields.length ? `
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Name</th><th>Type</th><th>Required</th><th>Options</th><th></th></tr></thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+          ` : `<div class="empty"><strong>No user fields yet</strong><span>Add a field or edit the JSON directly.</span></div>`}
+          <div class="field-tools-form">
+            <input id="new-field-name" placeholder="field name">
+            <select id="new-field-type">
+              <option value="text">text</option>
+              <option value="email">email</option>
+              <option value="number">number</option>
+              <option value="bool">bool</option>
+              <option value="date">date</option>
+              <option value="select">select</option>
+              <option value="relation">relation</option>
+              <option value="file">file</option>
+              <option value="json">json</option>
+              <option value="url">url</option>
+              <option value="editor">editor</option>
+            </select>
+            <input id="new-field-option" placeholder="select values or relation target">
+            <label class="check-field"><input id="new-field-required" type="checkbox">Required</label>
+            <button type="button" id="add-collection-field" class="primary">Add</button>
           </div>
         </div>
       `;
@@ -807,6 +921,112 @@
       state.collectionEditorName = "";
       state.collectionEditorText = "";
       state.collectionEditorError = "";
+    }
+
+    function collectionEditorDraft() {
+      try {
+        return { ok: true, value: JSON.parse(state.collectionEditorText || "{}") };
+      } catch (error) {
+        return { ok: false, error };
+      }
+    }
+
+    function readCollectionEditorPayload() {
+      const input = $("collection-json-input");
+      const text = input ? input.value : state.collectionEditorText;
+      return JSON.parse(text || "{}");
+    }
+
+    function writeCollectionEditorPayload(payload) {
+      state.collectionEditorText = JSON.stringify(payload, null, 2);
+      state.collectionEditorError = "";
+      render();
+    }
+
+    function addCollectionField() {
+      let payload = null;
+      try {
+        payload = readCollectionEditorPayload();
+      } catch (error) {
+        state.collectionEditorText = $("collection-json-input") ? $("collection-json-input").value : state.collectionEditorText;
+        state.collectionEditorError = error.message;
+        render();
+        return;
+      }
+
+      const name = ($("new-field-name") ? $("new-field-name").value : "").trim();
+      const fieldType = $("new-field-type") ? $("new-field-type").value : "text";
+      const option = ($("new-field-option") ? $("new-field-option").value : "").trim();
+      const required = Boolean($("new-field-required") && $("new-field-required").checked);
+      if (!name) {
+        state.collectionEditorError = "Field name is required";
+        state.collectionEditorText = $("collection-json-input") ? $("collection-json-input").value : state.collectionEditorText;
+        render();
+        return;
+      }
+
+      const fields = Array.isArray(payload.fields) ? payload.fields : [];
+      if (fields.some((field) => field && field.name === name)) {
+        state.collectionEditorError = `Field '${name}' already exists`;
+        state.collectionEditorText = $("collection-json-input") ? $("collection-json-input").value : state.collectionEditorText;
+        render();
+        return;
+      }
+      if (fieldType === "relation" && !option) {
+        state.collectionEditorError = "Relation target collection is required";
+        state.collectionEditorText = $("collection-json-input") ? $("collection-json-input").value : state.collectionEditorText;
+        render();
+        return;
+      }
+
+      const field = { name, type: fieldType };
+      if (required) {
+        field.required = true;
+      }
+      if (fieldType === "relation") {
+        if (option) {
+          field.collection = option;
+        }
+        field.maxSelect = 1;
+      } else if (fieldType === "select" && option) {
+        field.values = option.split(",").map((value) => value.trim()).filter(Boolean);
+      } else if (fieldType === "file") {
+        field.maxSelect = 1;
+      }
+
+      payload.fields = fields.concat(field);
+      writeCollectionEditorPayload(payload);
+    }
+
+    function removeCollectionField(index) {
+      let payload = null;
+      try {
+        payload = readCollectionEditorPayload();
+      } catch (error) {
+        state.collectionEditorText = $("collection-json-input") ? $("collection-json-input").value : state.collectionEditorText;
+        state.collectionEditorError = error.message;
+        render();
+        return;
+      }
+
+      if (!Array.isArray(payload.fields) || !Number.isInteger(index) || index < 0 || index >= payload.fields.length) {
+        return;
+      }
+      payload.fields = payload.fields.filter((_, fieldIndex) => fieldIndex !== index);
+      writeCollectionEditorPayload(payload);
+    }
+
+    function collectionFieldExtra(field) {
+      if (field.collection) {
+        return `target: ${field.collection}`;
+      }
+      if (Array.isArray(field.values) && field.values.length) {
+        return `values: ${field.values.join(", ")}`;
+      }
+      if (field.maxSelect != null) {
+        return `max: ${field.maxSelect}`;
+      }
+      return "";
     }
 
     async function saveCollection() {

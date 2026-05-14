@@ -118,6 +118,11 @@ fn serves_embedded_admin_ui_shell() {
         assert!(html.contains("data-collection-delete"));
         assert!(html.contains("editableCollectionPayload"));
         assert!(html.contains("collectionPath"));
+        assert!(html.contains("new-field-name"));
+        assert!(html.contains("addCollectionField"));
+        assert!(html.contains("removeCollectionField"));
+        assert!(html.contains("Field name is required"));
+        assert!(html.contains("Relation target collection is required"));
         assert!(html.contains("Go to Collections"));
         assert!(html.contains("record-json-input"));
         assert!(html.contains("Create record"));
