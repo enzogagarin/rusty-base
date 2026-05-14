@@ -256,6 +256,11 @@ Every engine should have:
 - fuzz targets before public use;
 - benchmarks for pathological cases.
 
+The embedded admin shell is still an MVP/self-hosted surface. Its response sets
+a restrictive CSP and destructive actions require typing the target name or id,
+but the superuser token is stored in `localStorage` until the admin session model
+grows a nonce/hash-based script policy and optional httpOnly cookie flow.
+
 ## First milestone
 
 The first milestone is a hardened filter compiler that supports a useful subset:

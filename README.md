@@ -175,9 +175,17 @@ Cargo/Rust support newer than 1.84. Local development is pinned with
 
 ```bash
 cargo fmt --all -- --check
+node scripts/check_admin_js.mjs
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
+
+Admin UI security note: the embedded admin shell is currently an MVP/self-hosted
+surface. It stores the superuser token in `localStorage` and ships with a CSP
+that blocks external sources, frames, forms, and objects while still allowing the
+current inline script/style bundle. Before a public alpha, this should move
+toward a nonce/hash-based script policy and an optional httpOnly session cookie
+flow so an XSS bug cannot directly read the superuser token.
 
 Run the current CLI smoke path:
 

@@ -99,6 +99,13 @@ fn serves_embedded_admin_ui_shell() {
             response.headers.get("cache-control").map(String::as_str),
             Some("no-store")
         );
+        let csp = response
+            .headers
+            .get("content-security-policy")
+            .expect("admin shell should set a CSP header");
+        assert!(csp.contains("default-src 'none'"));
+        assert!(csp.contains("connect-src 'self'"));
+        assert!(csp.contains("frame-ancestors 'none'"));
 
         let html = String::from_utf8(response.raw_body).unwrap();
         assert!(html.contains("Rusty Base Admin"));
@@ -121,6 +128,9 @@ fn serves_embedded_admin_ui_shell() {
         assert!(html.contains("data-collection-edit"));
         assert!(html.contains("data-collection-truncate"));
         assert!(html.contains("data-collection-delete"));
+        assert!(html.contains("confirmDangerousAction"));
+        assert!(html.contains("window.prompt"));
+        assert!(!html.contains("confirm("));
         assert!(html.contains("editableCollectionPayload"));
         assert!(html.contains("collectionPath"));
         assert!(html.contains("new-field-name"));

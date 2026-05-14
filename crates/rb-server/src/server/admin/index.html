@@ -807,6 +807,15 @@
       return view.charAt(0).toUpperCase() + view.slice(1);
     }
 
+    function confirmDangerousAction(message, expected) {
+      if (!expected) {
+        return false;
+      }
+      const expectedText = String(expected);
+      const typed = window.prompt(`${message}\n\nType "${expectedText}" to confirm.`);
+      return typed === expectedText;
+    }
+
     function renderOverview() {
       $("content").innerHTML = `
         <div class="panel-head">
@@ -1211,7 +1220,7 @@
     }
 
     async function truncateCollection(name) {
-      if (!name || !confirm(`Delete all records in ${name}?`)) {
+      if (!name || !confirmDangerousAction(`Delete all records in ${name}?`, name)) {
         return;
       }
 
@@ -1228,7 +1237,7 @@
     }
 
     async function deleteCollection(name) {
-      if (!name || !confirm(`Delete collection ${name}?`)) {
+      if (!name || !confirmDangerousAction(`Delete collection ${name}?`, name)) {
         return;
       }
 
@@ -1958,7 +1967,7 @@
 
     async function deleteRecord(id) {
       const collection = currentCollection();
-      if (!collection || !id || !confirm(`Delete record ${id}?`)) {
+      if (!collection || !id || !confirmDangerousAction(`Delete record ${id} from ${collection.name}?`, id)) {
         return;
       }
 

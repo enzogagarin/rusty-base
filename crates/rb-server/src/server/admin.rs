@@ -9,4 +9,8 @@ pub(crate) fn admin_index_response() -> HttpResponse {
         ADMIN_INDEX_HTML.as_bytes().to_vec(),
     )
     .with_header("Cache-Control", "no-store")
+    .with_header(
+        "Content-Security-Policy",
+        "default-src 'none'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+    )
 }
