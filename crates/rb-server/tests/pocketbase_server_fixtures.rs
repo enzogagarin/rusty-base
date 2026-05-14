@@ -142,6 +142,16 @@ fn pocketbase_settings_fixture_matches_http_behavior() {
     assert_fixture_outcomes(&fixture, outcomes);
 }
 
+#[test]
+fn pocketbase_admin_bootstrap_fixture_matches_http_behavior() {
+    let fixture = load_server_fixture("admin_bootstrap");
+    assert_eq!(fixture.area, "admin_bootstrap");
+
+    let outcomes = run_admin_bootstrap_fixture();
+
+    assert_fixture_outcomes(&fixture, outcomes);
+}
+
 fn load_server_fixture(name: &str) -> PocketBaseServerFixture {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/pocketbase/server")
@@ -2095,6 +2105,230 @@ fn run_settings_fixture() -> BTreeMap<String, FixtureOutcome> {
             &invalid_backup,
             &["data", "backups.s3.secret", "code"],
         )),
+    );
+
+    outcomes
+}
+
+fn run_admin_bootstrap_fixture() -> BTreeMap<String, FixtureOutcome> {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+    let mut outcomes = BTreeMap::new();
+
+    let superusers = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "_superusers",
+                "type": "auth",
+                "fields": [{"name": "email", "kind": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(superusers.body["name"], "_superusers");
+    assert_eq!(superusers.body["type"], "auth");
+    outcomes.insert(
+        "superusers collection can be created before bootstrap".to_string(),
+        FixtureOutcome::from_response(&superusers),
+    );
+
+    let first_superuser = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/_superusers/records",
+            json!({
+                "id": "su_1",
+                "email": "root@example.com",
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(first_superuser.body["id"], "su_1");
+    outcomes.insert(
+        "first superuser record can bootstrap without token".to_string(),
+        FixtureOutcome::from_response(&first_superuser),
+    );
+
+    let blocked_second_superuser = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/_superusers/records",
+            json!({
+                "id": "su_2",
+                "email": "other-root@example.com",
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    outcomes.insert(
+        "second superuser create without token is rejected".to_string(),
+        FixtureOutcome::from_response(&blocked_second_superuser),
+    );
+
+    let blocked_collections = app.handle(HttpRequest::new("GET", "/api/collections"));
+    outcomes.insert(
+        "admin collection list is guarded after bootstrap".to_string(),
+        FixtureOutcome::from_response(&blocked_collections),
+    );
+
+    let login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/_superusers/auth-with-password",
+            json!({"identity": "root@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert!(login.body["token"]
+        .as_str()
+        .is_some_and(|token| !token.is_empty()));
+    assert_eq!(login.body["record"]["id"], "su_1");
+    let superuser_token = login.body["token"].as_str().unwrap().to_string();
+    let auth_header = format!("Bearer {superuser_token}");
+    outcomes.insert(
+        "superuser password auth returns an admin token".to_string(),
+        FixtureOutcome::from_response(&login),
+    );
+
+    let collection_list = app.handle(
+        HttpRequest::new("GET", "/api/collections")
+            .with_header("Authorization", auth_header.clone()),
+    );
+    assert_eq!(collection_list.body["totalItems"], 1);
+    assert_eq!(collection_list.body["items"][0]["name"], "_superusers");
+    assert_eq!(collection_list.body["items"][0]["system"], true);
+    outcomes.insert(
+        "superuser token can list collection metadata".to_string(),
+        FixtureOutcome::from_response(&collection_list),
+    );
+
+    let auth_methods = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/_superusers/auth-methods",
+    ));
+    assert_eq!(auth_methods.body["password"]["enabled"], true);
+    assert_eq!(auth_methods.body["emailPassword"], true);
+    outcomes.insert(
+        "superuser auth methods are available for login UI".to_string(),
+        FixtureOutcome::from_response(&auth_methods),
+    );
+
+    let scaffolds = app.handle(
+        HttpRequest::new("GET", "/api/collections/meta/scaffolds")
+            .with_header("Authorization", auth_header.clone()),
+    );
+    assert_eq!(scaffolds.body["base"]["type"], "base");
+    assert_eq!(scaffolds.body["auth"]["type"], "auth");
+    assert_eq!(scaffolds.body["view"]["type"], "view");
+    outcomes.insert(
+        "superuser token can read collection scaffolds".to_string(),
+        FixtureOutcome::from_response(&scaffolds),
+    );
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [
+                    {"name": "email", "type": "email"},
+                    {"name": "username", "kind": "text"}
+                ]
+            }),
+        )
+        .unwrap()
+        .with_header("Authorization", auth_header.clone()),
+    );
+    assert_eq!(users.status, 200);
+
+    let user = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({
+                "id": "user_1",
+                "email": "normal@example.com",
+                "username": "normal",
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(user.status, 200);
+    let normal_token = login_token(&app, "normal@example.com");
+    let normal_blocked = app.handle(
+        HttpRequest::new("GET", "/api/collections")
+            .with_header("Authorization", format!("Bearer {normal_token}")),
+    );
+    outcomes.insert(
+        "normal auth token cannot access admin metadata".to_string(),
+        FixtureOutcome::from_response(&normal_blocked),
+    );
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [{"name": "title", "kind": "text"}],
+                "listRule": "id = 'never'",
+                "viewRule": "id = 'never'",
+                "createRule": "title = 'rule-allowed'",
+                "updateRule": "title = 'rule-allowed'",
+                "deleteRule": "title = 'rule-allowed'"
+            }),
+        )
+        .unwrap()
+        .with_header("Authorization", auth_header.clone()),
+    );
+    assert_eq!(posts.body["name"], "posts");
+    outcomes.insert(
+        "superuser token can create collection metadata".to_string(),
+        FixtureOutcome::from_response(&posts),
+    );
+
+    let admin_record = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"id": "post_1", "title": "Admin Created"}),
+        )
+        .unwrap()
+        .with_header("Authorization", auth_header.clone()),
+    );
+    assert_eq!(admin_record.body["id"], "post_1");
+    let admin_list = app.handle(
+        HttpRequest::new("GET", "/api/collections/posts/records")
+            .with_header("Authorization", auth_header.clone()),
+    );
+    assert_eq!(admin_list.body["totalItems"], 1);
+    outcomes.insert(
+        "superuser token bypasses protected record rules".to_string(),
+        FixtureOutcome::from_response(&admin_record),
+    );
+
+    let exported = app.handle(
+        HttpRequest::new("GET", "/api/collections/meta/export")
+            .with_header("Authorization", auth_header),
+    );
+    assert_eq!(
+        collection_by_name(&exported.body, "_superusers")["type"],
+        "auth"
+    );
+    assert_eq!(collection_by_name(&exported.body, "users")["type"], "auth");
+    assert_eq!(collection_by_name(&exported.body, "posts")["type"], "base");
+    outcomes.insert(
+        "superuser token can export admin metadata".to_string(),
+        FixtureOutcome::from_response(&exported),
     );
 
     outcomes

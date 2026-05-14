@@ -1,0 +1,79 @@
+{
+  "name": "PocketBase admin bootstrap behavior",
+  "area": "admin_bootstrap",
+  "pocketBaseNote": "PocketBase admin bootstrap flows allow the first superuser setup, then require a superuser token for collection metadata, scaffolds, exports, and admin record browsing.",
+  "cases": [
+    {
+      "name": "superusers collection can be created before bootstrap",
+      "route": "POST /api/collections",
+      "expectedStatus": 200,
+      "pocketBaseNote": "Before any superuser exists, bootstrap code can create the _superusers auth collection."
+    },
+    {
+      "name": "first superuser record can bootstrap without token",
+      "route": "POST /api/collections/_superusers/records",
+      "expectedStatus": 200,
+      "pocketBaseNote": "The first superuser record can be created without an existing admin token."
+    },
+    {
+      "name": "second superuser create without token is rejected",
+      "route": "POST /api/collections/_superusers/records",
+      "expectedStatus": 403,
+      "pocketBaseNote": "After bootstrap, creating more superusers requires an authenticated superuser token."
+    },
+    {
+      "name": "admin collection list is guarded after bootstrap",
+      "route": "GET /api/collections",
+      "expectedStatus": 403,
+      "pocketBaseNote": "Collection metadata APIs become superuser-only after the first superuser exists."
+    },
+    {
+      "name": "superuser password auth returns an admin token",
+      "route": "POST /api/collections/_superusers/auth-with-password",
+      "expectedStatus": 200,
+      "pocketBaseNote": "The admin login flow returns a bearer token tied to the _superusers collection."
+    },
+    {
+      "name": "superuser token can list collection metadata",
+      "route": "GET /api/collections",
+      "expectedStatus": 200,
+      "pocketBaseNote": "A valid superuser token can access collection metadata needed by the admin UI."
+    },
+    {
+      "name": "superuser auth methods are available for login UI",
+      "route": "GET /api/collections/_superusers/auth-methods",
+      "expectedStatus": 200,
+      "pocketBaseNote": "The admin login UI can discover enabled _superusers auth methods."
+    },
+    {
+      "name": "superuser token can read collection scaffolds",
+      "route": "GET /api/collections/meta/scaffolds",
+      "expectedStatus": 200,
+      "pocketBaseNote": "The admin UI can fetch base/auth/view collection scaffolds after login."
+    },
+    {
+      "name": "normal auth token cannot access admin metadata",
+      "route": "GET /api/collections",
+      "expectedStatus": 403,
+      "pocketBaseNote": "A normal auth collection token must not satisfy superuser-only admin metadata guards."
+    },
+    {
+      "name": "superuser token can create collection metadata",
+      "route": "POST /api/collections",
+      "expectedStatus": 200,
+      "pocketBaseNote": "A superuser can create collection metadata from the admin UI."
+    },
+    {
+      "name": "superuser token bypasses protected record rules",
+      "route": "POST /api/collections/posts/records",
+      "expectedStatus": 200,
+      "pocketBaseNote": "Superuser tokens bypass record rules so the admin record browser can manage protected records."
+    },
+    {
+      "name": "superuser token can export admin metadata",
+      "route": "GET /api/collections/meta/export",
+      "expectedStatus": 200,
+      "pocketBaseNote": "A superuser can export collection metadata for backups or import/export workflows."
+    }
+  ]
+}
