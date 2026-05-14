@@ -34,7 +34,8 @@
     }
 
     button,
-    input {
+    input,
+    textarea {
       font: inherit;
       letter-spacing: 0;
     }
@@ -66,9 +67,19 @@
       background: var(--accent-strong);
     }
 
-    input {
+    button.danger {
+      border-color: #d8b7aa;
+      color: var(--warn);
+    }
+
+    button.danger:hover {
+      border-color: var(--warn);
+      background: #fff6f1;
+    }
+
+    input,
+    textarea {
       width: 100%;
-      min-height: 38px;
       border: 1px solid var(--line);
       border-radius: 7px;
       background: #ffffff;
@@ -76,7 +87,18 @@
       padding: 8px 10px;
     }
 
-    input:focus {
+    input {
+      min-height: 38px;
+    }
+
+    textarea {
+      min-height: 230px;
+      resize: vertical;
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    input:focus,
+    textarea:focus {
       border-color: var(--accent);
       outline: 2px solid rgba(15, 118, 110, 0.18);
     }
@@ -327,6 +349,26 @@
       white-space: pre-wrap;
     }
 
+    .record-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .record-editor {
+      display: grid;
+      gap: 10px;
+      border-top: 1px solid var(--line);
+      padding: 14px;
+    }
+
+    .editor-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
     .kv {
       display: grid;
       grid-template-columns: 180px minmax(0, 1fr);
@@ -440,6 +482,10 @@
       selectedCollection: localStorage.getItem("rusty-base.admin.collection") || "",
       records: [],
       recordCount: 0,
+      editorMode: "",
+      editorRecordId: "",
+      editorText: "",
+      editorError: "",
       settings: null,
       error: ""
     };
@@ -474,9 +520,9 @@
       return body;
     }
 
-    async function jsonApi(path, body) {
+    async function jsonApi(path, body, method = "POST") {
       return api(path, {
-        method: "POST",
+        method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       });
@@ -617,46 +663,167 @@
         return;
       }
 
-      if (!state.records.length) {
-        $("content").innerHTML = `
-          <div class="panel-head">
-            <h2>${escapeHtml(collection.name)} records</h2>
-            <button type="button" id="refresh-records">Refresh</button>
-          </div>
-          <div class="empty">No records</div>
-        `;
-        $("refresh-records").addEventListener("click", async () => {
-          await loadRecords(false);
-          render();
-        });
-        return;
-      }
-
       const rows = state.records.map((record) => `
         <tr>
           <td>${escapeHtml(record.id || "")}</td>
           <td>${escapeHtml(record.created || "-")}</td>
           <td>${escapeHtml(record.updated || "-")}</td>
           <td><code class="record-json">${escapeHtml(recordPreview(record))}</code></td>
+          <td>
+            <div class="record-actions">
+              <button type="button" data-edit-record="${escapeAttribute(record.id || "")}">Edit</button>
+              <button type="button" class="danger" data-delete-record="${escapeAttribute(record.id || "")}">Delete</button>
+            </div>
+          </td>
         </tr>
       `).join("");
 
       $("content").innerHTML = `
         <div class="panel-head">
           <h2>${escapeHtml(collection.name)} records</h2>
-          <button type="button" id="refresh-records">Refresh</button>
+          <div class="record-actions">
+            <button type="button" id="new-record" class="primary">New</button>
+            <button type="button" id="refresh-records">Refresh</button>
+          </div>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>ID</th><th>Created</th><th>Updated</th><th>Data</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
+        ${state.records.length ? `
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>ID</th><th>Created</th><th>Updated</th><th>Data</th><th>Actions</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        ` : `<div class="empty">No records</div>`}
+        ${recordEditorHtml()}
       `;
+      $("new-record").addEventListener("click", () => {
+        openCreateEditor();
+        render();
+      });
       $("refresh-records").addEventListener("click", async () => {
         await loadRecords(false);
         render();
       });
+      document.querySelectorAll("[data-edit-record]").forEach((button) => {
+        button.addEventListener("click", () => {
+          openEditEditor(button.dataset.editRecord || "");
+          render();
+        });
+      });
+      document.querySelectorAll("[data-delete-record]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          await deleteRecord(button.dataset.deleteRecord || "");
+        });
+      });
+      const save = $("save-record");
+      if (save) {
+        save.addEventListener("click", saveRecord);
+      }
+      const cancel = $("cancel-record");
+      if (cancel) {
+        cancel.addEventListener("click", () => {
+          closeRecordEditor();
+          render();
+        });
+      }
+    }
+
+    function recordEditorHtml() {
+      if (!state.editorMode) {
+        return "";
+      }
+
+      const title = state.editorMode === "edit" ? `Edit ${state.editorRecordId}` : "Create record";
+      return `
+        <div class="record-editor">
+          <h2>${escapeHtml(title)}</h2>
+          ${state.editorError ? `<div class="error">${escapeHtml(state.editorError)}</div>` : ""}
+          <textarea id="record-json-input" spellcheck="false">${escapeHtml(state.editorText)}</textarea>
+          <div class="editor-actions">
+            <button type="button" id="cancel-record">Cancel</button>
+            <button type="button" id="save-record" class="primary">Save</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function openCreateEditor() {
+      state.editorMode = "create";
+      state.editorRecordId = "";
+      state.editorText = "{}";
+      state.editorError = "";
+    }
+
+    function openEditEditor(id) {
+      const record = state.records.find((item) => item.id === id);
+      if (!record) {
+        state.editorError = "Record not found";
+        return;
+      }
+      state.editorMode = "edit";
+      state.editorRecordId = id;
+      state.editorText = JSON.stringify(editableRecordPayload(record), null, 2);
+      state.editorError = "";
+    }
+
+    function closeRecordEditor() {
+      state.editorMode = "";
+      state.editorRecordId = "";
+      state.editorText = "";
+      state.editorError = "";
+    }
+
+    async function saveRecord() {
+      const collection = currentCollection();
+      const input = $("record-json-input");
+      if (!collection || !input) {
+        return;
+      }
+
+      let payload = null;
+      try {
+        payload = JSON.parse(input.value || "{}");
+      } catch (error) {
+        state.editorText = input.value;
+        state.editorError = error.message;
+        render();
+        return;
+      }
+
+      try {
+        if (state.editorMode === "edit") {
+          await jsonApi(recordPath(collection.name, state.editorRecordId), payload, "PATCH");
+        } else {
+          await jsonApi(collectionRecordsPath(collection.name), payload, "POST");
+        }
+        closeRecordEditor();
+        status("Saved");
+        await loadRecords(true);
+        render();
+      } catch (error) {
+        state.editorText = input.value;
+        state.editorError = error.message;
+        render();
+      }
+    }
+
+    async function deleteRecord(id) {
+      const collection = currentCollection();
+      if (!collection || !id || !confirm(`Delete record ${id}?`)) {
+        return;
+      }
+
+      try {
+        await api(recordPath(collection.name, id), { method: "DELETE" });
+        if (state.editorRecordId === id) {
+          closeRecordEditor();
+        }
+        status("Deleted");
+        await loadRecords(true);
+        render();
+      } catch (error) {
+        status(error.message, true);
+      }
     }
 
     function renderSettings() {
@@ -716,7 +883,7 @@
       }
 
       try {
-        const page = await api(`/api/collections/${encodeURIComponent(collection.name)}/records?perPage=20&sort=-created`);
+        const page = await api(`${collectionRecordsPath(collection.name)}?perPage=20&sort=-created`);
         state.records = page.items || [];
         state.recordCount = page.totalItems == null ? state.records.length : page.totalItems;
       } catch (error) {
@@ -726,6 +893,25 @@
           state.error = error.message;
         }
       }
+    }
+
+    function collectionRecordsPath(collectionName) {
+      return `/api/collections/${encodeURIComponent(collectionName)}/records`;
+    }
+
+    function recordPath(collectionName, id) {
+      return `${collectionRecordsPath(collectionName)}/${encodeURIComponent(id)}`;
+    }
+
+    function editableRecordPayload(record) {
+      const copy = { ...record };
+      delete copy.id;
+      delete copy.created;
+      delete copy.updated;
+      delete copy.collectionId;
+      delete copy.collectionName;
+      delete copy.expand;
+      return copy;
     }
 
     function recordPreview(record) {
@@ -798,6 +984,7 @@
       state.records = [];
       state.recordCount = 0;
       state.settings = null;
+      closeRecordEditor();
       await refresh();
     });
 

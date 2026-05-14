@@ -107,7 +107,12 @@ fn serves_embedded_admin_ui_shell() {
         assert!(html.contains("/api/collections?fields="));
         assert!(html.contains("/api/settings?fields="));
         assert!(html.contains(r#"data-view="records""#));
-        assert!(html.contains("/records?perPage=20"));
+        assert!(html.contains("collectionRecordsPath"));
+        assert!(html.contains("perPage=20&sort=-created"));
+        assert!(html.contains("record-json-input"));
+        assert!(html.contains("Create record"));
+        assert!(html.contains(r#""PATCH""#));
+        assert!(html.contains(r#"method: "DELETE""#));
     }
 
     let health = app.handle(HttpRequest::new("GET", "/api/health"));
