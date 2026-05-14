@@ -323,6 +323,8 @@ Exit criteria:
   unicode-ish generated inputs, and depth-limit behavior, plus a lightweight
   benchmark example for normal, request-context, function, JSON/array, and wide
   OR-chain compile paths.
+- Added an index execution plan and regression coverage that locks collection
+  `indexes` as metadata-only until a Rust-owned SQLite index planner exists.
 
 ## Next Sprint
 
@@ -331,8 +333,8 @@ Exit criteria:
    relation/file subset.
 2. Harden view collection compatibility around field inference, relation expand
    edge cases, and SQLite-authorizer-backed query execution safety.
-3. Design safe SQLite index execution for JSON-backed record tables instead of
-   running raw PocketBase index SQL strings directly.
+3. Implement the first safe SQLite index planner for JSON-backed record tables,
+   without running raw PocketBase index SQL strings directly.
 4. Expand OAuth2 provider presets and harden callback validation around
    redirect URLs and provider-specific response edge cases.
 5. Expand compatibility fixtures around placeholder-like wildcard cases and

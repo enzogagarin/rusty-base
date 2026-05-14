@@ -152,6 +152,7 @@ Target capabilities:
 ├── docs
 │   ├── ARCHITECTURE.md
 │   ├── FILTER_COMPATIBILITY.md
+│   ├── INDEX_PLAN.md
 │   ├── RELATION_QUERY_PLAN.md
 │   └── ROADMAP.md
 ├── fixtures

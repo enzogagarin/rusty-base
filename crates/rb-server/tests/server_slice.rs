@@ -5262,6 +5262,44 @@ fn returns_collection_scaffolds_and_import_ready_export_payload() {
 }
 
 #[test]
+fn collection_indexes_remain_metadata_only_until_safe_storage_pass() {
+    let path = temp_db_path("index-metadata-only");
+    let app = RustyBaseApp::new(Store::open(&path).unwrap());
+
+    let created = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [{"name": "title", "type": "text"}],
+                "indexes": ["CREATE INDEX idx_posts_title ON posts (title)"]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created.status, 200);
+    assert_eq!(
+        created.body["indexes"],
+        json!(["CREATE INDEX idx_posts_title ON posts (title)"])
+    );
+
+    let conn = Connection::open(&path).unwrap();
+    let index_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+            params!["idx_posts_title"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(index_count, 0);
+
+    drop(conn);
+    drop(app);
+    fs::remove_file(path).ok();
+}
+
+#[test]
 fn supports_read_only_view_collection_queries() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 
