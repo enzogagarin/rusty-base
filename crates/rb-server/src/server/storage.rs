@@ -77,10 +77,7 @@ pub(crate) fn generate_id() -> String {
         .unwrap_or_default()
         .as_nanos();
     let counter = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    format!("rb{:x}{:x}", nanos, counter)
-        .chars()
-        .take(32)
-        .collect()
+    format!("rb{nanos:x}{counter:x}").chars().take(32).collect()
 }
 
 pub(crate) fn generate_collection_id() -> String {

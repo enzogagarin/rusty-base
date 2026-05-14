@@ -167,7 +167,8 @@ Target capabilities:
 
 Rusty Base currently requires Rust 1.88 or newer. The locked dependency graph
 uses `image 0.25.x`, whose current transitive stack includes crates that require
-Cargo/Rust support newer than 1.84.
+Cargo/Rust support newer than 1.84. Local development is pinned with
+`rust-toolchain.toml` to match CI.
 
 ```bash
 cargo fmt --all -- --check
