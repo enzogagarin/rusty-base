@@ -1800,6 +1800,100 @@ fn supports_verification_and_password_reset_tokens() {
 }
 
 #[test]
+fn expired_verification_token_is_rejected_without_verifying_record() {
+    let path = temp_db_path("expired-verification-token");
+    let app = RustyBaseApp::new(Store::open(&path).unwrap());
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [
+                    {"name": "email", "type": "email"},
+                    {"name": "name", "kind": "text"},
+                    {"name": "verified", "kind": "bool"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(users.status, 200);
+
+    let user = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({
+                "id": "user_1",
+                "email": "burak@example.com",
+                "name": "Burak",
+                "verified": false,
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(user.status, 200);
+
+    let request_verification = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/request-verification",
+            json!({"email": "burak@example.com"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(request_verification.status, 204);
+    let verification_token = app
+        .store()
+        .latest_auth_action_token("users", "user_1", "verification")
+        .unwrap()
+        .unwrap();
+
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            r#"UPDATE "_rb_auth_action_tokens" SET expires = ?1 WHERE token = ?2"#,
+            params!["0", &verification_token],
+        )
+        .unwrap();
+    }
+
+    let expired_verification = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/confirm-verification",
+            json!({"token": verification_token}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(expired_verification.status, 400);
+    assert!(expired_verification.body["message"]
+        .as_str()
+        .unwrap()
+        .contains("invalid or expired verification token"));
+    assert!(app
+        .store()
+        .latest_auth_action_token("users", "user_1", "verification")
+        .unwrap()
+        .is_none());
+
+    let record = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/users/records/user_1",
+    ));
+    assert_eq!(record.status, 200);
+    assert_eq!(record.body["verified"], false);
+
+    drop(app);
+    fs::remove_file(path).ok();
+}
+
+#[test]
 fn expired_password_reset_token_is_rejected_without_changing_password() {
     let path = temp_db_path("expired-password-reset-token");
     let app = RustyBaseApp::new(Store::open(&path).unwrap());
