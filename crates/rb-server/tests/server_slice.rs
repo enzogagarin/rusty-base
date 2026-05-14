@@ -112,6 +112,12 @@ fn serves_embedded_admin_ui_shell() {
         assert!(html.contains("Login or initialize first"));
         assert!(html.contains("collection-json-input"));
         assert!(html.contains("Create collection"));
+        assert!(html.contains("Edit ${state.collectionEditorName}"));
+        assert!(html.contains("data-collection-edit"));
+        assert!(html.contains("data-collection-truncate"));
+        assert!(html.contains("data-collection-delete"));
+        assert!(html.contains("editableCollectionPayload"));
+        assert!(html.contains("collectionPath"));
         assert!(html.contains("Go to Collections"));
         assert!(html.contains("record-json-input"));
         assert!(html.contains("Create record"));
