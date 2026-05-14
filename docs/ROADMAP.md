@@ -303,6 +303,12 @@ Exit criteria:
   `server/*` modules, kept `lib.rs` as the public re-export layer, raised the
   declared workspace Rust minimum to 1.88 for the locked `image 0.25.x`
   dependency graph, and cleaned the workspace so fmt/check/clippy/test pass.
+- Pinned CI to Rust 1.88.0, documented the exact fmt/clippy/test checks, and
+  cleaned the README smoke curl flow so auth examples keep a valid bearer token
+  until logout.
+- Split auth internals into password, token, action-token, OAuth2, OTP,
+  superuser, and impersonation modules while preserving the existing public
+  `rb-server` re-export surface.
 
 ## Next Sprint
 

@@ -180,9 +180,14 @@ Internal layout:
   surface.
 - `rb-server/src/server/storage.rs` owns `Store` initialization and SQLite
   connection helpers.
-- `collections.rs`, `records.rs`, `auth.rs`, `files.rs`, `realtime.rs`,
-  `settings.rs`, and `validation.rs` keep PocketBase-style server behavior
-  grouped by domain instead of accumulating in one monolithic server file.
+- `collections.rs`, `records.rs`, `files.rs`, `realtime.rs`, `settings.rs`,
+  and `validation.rs` keep PocketBase-style server behavior grouped by domain
+  instead of accumulating in one monolithic server file.
+- `auth.rs` is a small facade over `auth/password.rs`, `auth/tokens.rs`,
+  `auth/action_tokens.rs`, `auth/oauth.rs`, `auth/otp.rs`,
+  `auth/superusers.rs`, and `auth/impersonation.rs`, so token invalidation,
+  password reset, email change, OTP, OAuth2, and superuser flows can evolve
+  without colliding.
 
 ### rb-media-engine, planned
 
