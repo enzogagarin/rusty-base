@@ -261,6 +261,10 @@
       padding: 14px;
     }
 
+    .table-wrap {
+      overflow-x: auto;
+    }
+
     table {
       width: 100%;
       border-collapse: collapse;
@@ -295,6 +299,32 @@
       padding: 2px 8px;
       font-size: 12px;
       font-weight: 700;
+    }
+
+    .link-button {
+      min-height: 30px;
+      border: 0;
+      background: transparent;
+      color: var(--accent-strong);
+      padding: 0;
+      text-align: left;
+      white-space: normal;
+    }
+
+    .link-button:hover {
+      background: transparent;
+      color: var(--accent);
+      text-decoration: underline;
+    }
+
+    .record-json {
+      display: block;
+      max-width: 520px;
+      margin: 0;
+      overflow-wrap: anywhere;
+      color: var(--muted);
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
     }
 
     .kv {
@@ -365,6 +395,7 @@
       <nav class="nav" aria-label="Admin views">
         <button type="button" class="active" data-view="overview">Overview</button>
         <button type="button" data-view="collections">Collections</button>
+        <button type="button" data-view="records">Records</button>
         <button type="button" data-view="settings">Settings</button>
       </nav>
 
@@ -406,6 +437,9 @@
       view: "overview",
       health: "unknown",
       collections: [],
+      selectedCollection: localStorage.getItem("rusty-base.admin.collection") || "",
+      records: [],
+      recordCount: 0,
       settings: null,
       error: ""
     };
@@ -462,9 +496,17 @@
         try {
           const collections = await api("/api/collections?fields=items.id,items.name,items.type,items.system,totalItems");
           state.collections = collections.items || [];
+          ensureSelectedCollection();
         } catch (error) {
           state.collections = [];
+          state.selectedCollection = "";
+          state.records = [];
+          state.recordCount = 0;
           state.error = error.message;
+        }
+
+        if (state.selectedCollection) {
+          await loadRecords(false);
         }
 
         try {
@@ -490,12 +532,14 @@
       $("metrics").innerHTML = [
         metric("App", appName),
         metric("Collections", String(state.collections.length)),
-        metric("Batch max", state.settings && state.settings.batch ? String(state.settings.batch.maxRequests) : "-")
+        metric("Records", state.selectedCollection ? String(state.recordCount) : "-")
       ].join("");
 
       $("view-title").textContent = title(state.view);
       if (state.view === "collections") {
         renderCollections();
+      } else if (state.view === "records") {
+        renderRecords();
       } else if (state.view === "settings") {
         renderSettings();
       } else {
@@ -533,7 +577,11 @@
       }
       const rows = state.collections.map((collection) => `
         <tr>
-          <td>${escapeHtml(collection.name || "")}</td>
+          <td>
+            <button type="button" class="link-button" data-collection-name="${escapeAttribute(collection.name || "")}">
+              ${escapeHtml(collection.name || "")}
+            </button>
+          </td>
           <td><span class="pill">${escapeHtml(collection.type || "")}</span></td>
           <td>${collection.system ? "system" : "base"}</td>
         </tr>
@@ -543,12 +591,72 @@
           <h2>Collections</h2>
           <button type="button" id="refresh">Refresh</button>
         </div>
-        <table>
-          <thead><tr><th>Name</th><th>Type</th><th>Scope</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Type</th><th>Scope</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
       `;
       $("refresh").addEventListener("click", refresh);
+      document.querySelectorAll("[data-collection-name]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          state.selectedCollection = button.dataset.collectionName || "";
+          localStorage.setItem("rusty-base.admin.collection", state.selectedCollection);
+          state.view = "records";
+          await loadRecords(true);
+          render();
+        });
+      });
+    }
+
+    function renderRecords() {
+      const collection = currentCollection();
+      if (!collection) {
+        $("content").innerHTML = `<div class="empty">No collection selected</div>`;
+        return;
+      }
+
+      if (!state.records.length) {
+        $("content").innerHTML = `
+          <div class="panel-head">
+            <h2>${escapeHtml(collection.name)} records</h2>
+            <button type="button" id="refresh-records">Refresh</button>
+          </div>
+          <div class="empty">No records</div>
+        `;
+        $("refresh-records").addEventListener("click", async () => {
+          await loadRecords(false);
+          render();
+        });
+        return;
+      }
+
+      const rows = state.records.map((record) => `
+        <tr>
+          <td>${escapeHtml(record.id || "")}</td>
+          <td>${escapeHtml(record.created || "-")}</td>
+          <td>${escapeHtml(record.updated || "-")}</td>
+          <td><code class="record-json">${escapeHtml(recordPreview(record))}</code></td>
+        </tr>
+      `).join("");
+
+      $("content").innerHTML = `
+        <div class="panel-head">
+          <h2>${escapeHtml(collection.name)} records</h2>
+          <button type="button" id="refresh-records">Refresh</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Created</th><th>Updated</th><th>Data</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+      $("refresh-records").addEventListener("click", async () => {
+        await loadRecords(false);
+        render();
+      });
     }
 
     function renderSettings() {
@@ -576,6 +684,58 @@
       return `<div class="kv"><span>${escapeHtml(label)}</span><span>${escapeHtml(value)}</span></div>`;
     }
 
+    async function setView(view) {
+      state.view = view;
+      if (view === "records") {
+        ensureSelectedCollection();
+        await loadRecords(true);
+      }
+      render();
+    }
+
+    function ensureSelectedCollection() {
+      if (state.collections.some((collection) => collection.name === state.selectedCollection)) {
+        return;
+      }
+      state.selectedCollection = state.collections[0] ? state.collections[0].name : "";
+      if (state.selectedCollection) {
+        localStorage.setItem("rusty-base.admin.collection", state.selectedCollection);
+      }
+    }
+
+    function currentCollection() {
+      return state.collections.find((collection) => collection.name === state.selectedCollection) || null;
+    }
+
+    async function loadRecords(showErrors = true) {
+      const collection = currentCollection();
+      if (!state.token || !collection) {
+        state.records = [];
+        state.recordCount = 0;
+        return;
+      }
+
+      try {
+        const page = await api(`/api/collections/${encodeURIComponent(collection.name)}/records?perPage=20&sort=-created`);
+        state.records = page.items || [];
+        state.recordCount = page.totalItems == null ? state.records.length : page.totalItems;
+      } catch (error) {
+        state.records = [];
+        state.recordCount = 0;
+        if (showErrors) {
+          state.error = error.message;
+        }
+      }
+    }
+
+    function recordPreview(record) {
+      const copy = { ...record };
+      delete copy.collectionId;
+      delete copy.collectionName;
+      const text = JSON.stringify(copy, null, 2);
+      return text.length > 360 ? `${text.slice(0, 357)}...` : text;
+    }
+
     function escapeHtml(value) {
       return String(value).replace(/[&<>"']/g, (char) => ({
         "&": "&amp;",
@@ -586,10 +746,13 @@
       }[char]));
     }
 
+    function escapeAttribute(value) {
+      return escapeHtml(value).replace(/`/g, "&#96;");
+    }
+
     document.querySelectorAll(".nav button").forEach((button) => {
       button.addEventListener("click", () => {
-        state.view = button.dataset.view;
-        render();
+        setView(button.dataset.view);
       });
     });
 
@@ -632,6 +795,8 @@
       state.token = "";
       localStorage.removeItem(tokenKey);
       state.collections = [];
+      state.records = [];
+      state.recordCount = 0;
       state.settings = null;
       await refresh();
     });

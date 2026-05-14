@@ -106,6 +106,8 @@ fn serves_embedded_admin_ui_shell() {
         assert!(html.contains("/api/collections/_superusers/auth-with-password"));
         assert!(html.contains("/api/collections?fields="));
         assert!(html.contains("/api/settings?fields="));
+        assert!(html.contains(r#"data-view="records""#));
+        assert!(html.contains("/records?perPage=20"));
     }
 
     let health = app.handle(HttpRequest::new("GET", "/api/health"));
