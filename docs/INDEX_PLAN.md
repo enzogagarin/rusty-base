@@ -1,7 +1,7 @@
 # Index Plan
 
-Rusty Base currently preserves PocketBase-style collection `indexes` metadata,
-but it does not execute raw index SQL.
+Rusty Base preserves PocketBase-style collection `indexes` metadata and executes
+only the small subset it can safely plan itself.
 
 That is intentional. PocketBase index strings target PocketBase's storage
 layout, while Rusty Base records currently live in JSON-backed SQLite tables
@@ -12,22 +12,26 @@ compatibility with storage execution and make future migrations brittle.
 
 - Collection `indexes` are normalized, deduplicated, persisted, patched,
   imported, and exported.
-- Raw index SQL is metadata-only.
-- A server integration test asserts that persisted index metadata does not
-  create a SQLite index.
+- Raw index SQL is never executed directly.
+- Simple non-unique single-field indexes such as
+  `CREATE INDEX idx_posts_title ON posts (title)` are parsed as metadata and
+  compiled into Rust-owned SQLite expression indexes on `_rb_records_posts`.
+- Generated SQLite indexes use internal names like `_rb_idx_posts_*` instead of
+  the imported raw index name.
+- A server integration test asserts that the raw index name is not created and
+  that the safe internal index is removed when metadata is patched away.
 
 ## Safe Execution Direction
 
-The first executable index pass should compile a small Rust-owned plan instead
-of running imported SQL directly:
+Index execution should continue through Rust-owned plans:
 
 - map known collection fields to safe SQLite expressions;
 - quote all generated identifiers internally;
 - use JSON expression indexes for scalar record fields, for example
   `json_extract(data, '$.title')`;
-- skip relation arrays, file arrays, and nested JSON indexes until they have
-  dedicated compatibility fixtures;
-- make execution idempotent by checking SQLite metadata before applying a plan.
+- skip relation arrays, file arrays, unique indexes, compound indexes, and
+  nested JSON indexes until they have dedicated compatibility fixtures;
+- keep execution idempotent with `CREATE INDEX IF NOT EXISTS`.
 
 ## Not Yet
 
@@ -35,3 +39,4 @@ of running imported SQL directly:
 - No automatic generated-column migration yet.
 - No unique-index behavior until record validation and conflict reporting match
   the server API shape.
+- No compound indexes yet.

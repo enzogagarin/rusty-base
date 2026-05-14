@@ -367,9 +367,9 @@ The first server slice supports:
   export helper;
 - `PUT /api/collections/import` for bulk collection metadata import, accepting
   both `fields`/`kind` and PocketBase-style `schema`/`type` field input;
-- collection `indexes` metadata is persisted, patched, imported, and exported
-  for admin UI compatibility; executing those indexes against the JSON-backed
-  record tables is intentionally left for a dedicated storage pass;
+- collection `indexes` metadata is persisted, patched, imported, exported, and
+  planned into safe SQLite expression indexes for simple scalar fields without
+  executing raw PocketBase index SQL;
 - first read-only `view` collection MVP with persisted `viewQuery`, list/view
   records backed by a single SELECT query, filter/sort support through the Rust
   filter engine, rejected record mutations, and an internal-table denylist for

@@ -5262,8 +5262,8 @@ fn returns_collection_scaffolds_and_import_ready_export_payload() {
 }
 
 #[test]
-fn collection_indexes_remain_metadata_only_until_safe_storage_pass() {
-    let path = temp_db_path("index-metadata-only");
+fn collection_indexes_execute_only_safe_scalar_plans() {
+    let path = temp_db_path("safe-index-plan");
     let app = RustyBaseApp::new(Store::open(&path).unwrap());
 
     let created = app.handle(
@@ -5272,8 +5272,16 @@ fn collection_indexes_remain_metadata_only_until_safe_storage_pass() {
             "/api/collections",
             json!({
                 "name": "posts",
-                "fields": [{"name": "title", "type": "text"}],
-                "indexes": ["CREATE INDEX idx_posts_title ON posts (title)"]
+                "fields": [
+                    {"name": "title", "type": "text"},
+                    {"name": "meta", "type": "json"}
+                ],
+                "indexes": [
+                    "CREATE INDEX idx_posts_title ON posts (title)",
+                    "CREATE UNIQUE INDEX idx_posts_unique_title ON posts (title)",
+                    "CREATE INDEX idx_posts_title_meta ON posts (title, meta)",
+                    "CREATE INDEX idx_posts_meta ON posts (meta)"
+                ]
             }),
         )
         .unwrap(),
@@ -5281,18 +5289,82 @@ fn collection_indexes_remain_metadata_only_until_safe_storage_pass() {
     assert_eq!(created.status, 200);
     assert_eq!(
         created.body["indexes"],
-        json!(["CREATE INDEX idx_posts_title ON posts (title)"])
+        json!([
+            "CREATE INDEX idx_posts_title ON posts (title)",
+            "CREATE UNIQUE INDEX idx_posts_unique_title ON posts (title)",
+            "CREATE INDEX idx_posts_title_meta ON posts (title, meta)",
+            "CREATE INDEX idx_posts_meta ON posts (meta)"
+        ])
     );
 
+    {
+        let conn = Connection::open(&path).unwrap();
+        let raw_index_count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM sqlite_master
+                WHERE type = 'index'
+                    AND name IN (
+                        'idx_posts_title',
+                        'idx_posts_unique_title',
+                        'idx_posts_title_meta',
+                        'idx_posts_meta'
+                    )
+                "#,
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(raw_index_count, 0);
+
+        let safe_index_count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM sqlite_master
+                WHERE type = 'index'
+                    AND tbl_name = '_rb_records_posts'
+                    AND name LIKE '_rb_idx_posts_%'
+                "#,
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(safe_index_count, 1);
+
+        let (safe_index_name, safe_index_sql): (String, String) = conn
+            .query_row(
+                r#"
+                SELECT name, sql
+                FROM sqlite_master
+                WHERE type = 'index'
+                    AND tbl_name = '_rb_records_posts'
+                    AND name LIKE '_rb_idx_posts_%'
+                "#,
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(safe_index_name.starts_with("_rb_idx_posts_"));
+        assert!(safe_index_sql.contains(r#"json_extract("data""#));
+        assert!(safe_index_sql.contains("$.title"));
+    }
+
+    let patched = app.handle(
+        HttpRequest::json("PATCH", "/api/collections/posts", json!({"indexes": []})).unwrap(),
+    );
+    assert_eq!(patched.status, 200);
+
     let conn = Connection::open(&path).unwrap();
-    let index_count: i64 = conn
+    let remaining_safe_indexes: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
-            params!["idx_posts_title"],
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE '_rb_idx_posts_%'",
+            [],
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(index_count, 0);
+    assert_eq!(remaining_safe_indexes, 0);
 
     drop(conn);
     drop(app);

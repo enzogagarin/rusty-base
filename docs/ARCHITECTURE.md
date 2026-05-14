@@ -136,8 +136,8 @@ Responsibility:
   collections and fields;
 - export import-ready collection metadata through a Rusty Base helper route;
 - persist, patch, import, and export collection `indexes` metadata for admin UI
-  compatibility without executing raw index SQL yet. The safe execution path is
-  tracked in `docs/INDEX_PLAN.md`;
+  compatibility, and execute only Rust-planned scalar expression indexes. The
+  safe execution path is tracked in `docs/INDEX_PLAN.md`;
 - support a first read-only `view` collection path with persisted `viewQuery`,
   list/view records from a single SELECT query, and filter/sort predicates
   compiled by the Rust filter engine against view columns;
