@@ -1,0 +1,43 @@
+{
+  "name": "PocketBase import/export behavior",
+  "area": "import_export",
+  "pocketBaseNote": "PocketBase collection metadata can be exported as an import-ready payload, imported into a fresh app, merged into existing metadata, or used as a deleteMissing replacement snapshot.",
+  "cases": [
+    {
+      "name": "export payload preserves collection metadata",
+      "route": "GET /api/collections/meta/export",
+      "expectedStatus": 200,
+      "pocketBaseNote": "Metadata export should preserve collection type, schema field ids, indexes, and record rules in an import-ready shape."
+    },
+    {
+      "name": "export payload imports into a fresh app",
+      "route": "PUT /api/collections/import",
+      "expectedStatus": 204,
+      "pocketBaseNote": "A metadata export payload should be accepted by a fresh app and recreate the exported collection options."
+    },
+    {
+      "name": "merge import preserves omitted fields and records",
+      "route": "PUT /api/collections/import",
+      "expectedStatus": 204,
+      "pocketBaseNote": "Import without deleteMissing merges with existing metadata, preserving omitted fields and record data."
+    },
+    {
+      "name": "deleteMissing import replaces missing metadata and prunes record fields",
+      "route": "PUT /api/collections/import",
+      "expectedStatus": 204,
+      "pocketBaseNote": "Import with deleteMissing behaves like a replacement snapshot: missing collections are removed and omitted record fields are pruned."
+    },
+    {
+      "name": "array root import payload is accepted",
+      "route": "PUT /api/collections/import",
+      "expectedStatus": 204,
+      "pocketBaseNote": "PocketBase-style import flows may provide a root collection array; Rusty Base accepts that shape for compatibility."
+    },
+    {
+      "name": "duplicate collection names are rejected before import",
+      "route": "PUT /api/collections/import",
+      "expectedStatus": 400,
+      "pocketBaseNote": "Duplicate collection names in a single import payload are invalid and should be rejected before applying metadata changes."
+    }
+  ]
+}

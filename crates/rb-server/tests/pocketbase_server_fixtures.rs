@@ -122,6 +122,16 @@ fn pocketbase_batch_fixture_matches_http_behavior() {
     assert_fixture_outcomes(&fixture, outcomes);
 }
 
+#[test]
+fn pocketbase_import_export_fixture_matches_http_behavior() {
+    let fixture = load_server_fixture("import_export");
+    assert_eq!(fixture.area, "import_export");
+
+    let outcomes = run_import_export_fixture();
+
+    assert_fixture_outcomes(&fixture, outcomes);
+}
+
 fn load_server_fixture(name: &str) -> PocketBaseServerFixture {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/pocketbase/server")
@@ -1639,6 +1649,228 @@ fn run_batch_fixture() -> BTreeMap<String, FixtureOutcome> {
     outcomes
 }
 
+fn run_import_export_fixture() -> BTreeMap<String, FixtureOutcome> {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+    let mut outcomes = BTreeMap::new();
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"id": "title_field", "name": "title", "type": "text", "required": true},
+                    {"name": "legacy", "type": "text"},
+                    {"name": "published", "type": "bool"}
+                ],
+                "indexes": ["CREATE INDEX idx_posts_title ON posts (title)"],
+                "listRule": "published = true"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(posts.status, 200);
+
+    let comments = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "comments",
+                "fields": [{"name": "body", "type": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(comments.status, 200);
+
+    let created = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({
+                "id": "post_1",
+                "title": "Rusty Base",
+                "legacy": "keep for merge",
+                "published": true
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created.status, 200);
+
+    let exported = app.handle(HttpRequest::new("GET", "/api/collections/meta/export"));
+    assert_eq!(exported.status, 200);
+    let exported_posts = collection_by_name(&exported.body, "posts");
+    assert_eq!(exported_posts["type"], "base");
+    assert_eq!(exported_posts["listRule"], "published = true");
+    assert_eq!(
+        exported_posts["indexes"],
+        json!(["CREATE INDEX idx_posts_title ON posts (title)"])
+    );
+    assert_eq!(field_by_name(exported_posts, "title")["id"], "title_field");
+    assert_eq!(field_by_name(exported_posts, "title")["type"], "text");
+    assert!(field_by_name(exported_posts, "title").get("kind").is_none());
+    outcomes.insert(
+        "export payload preserves collection metadata".to_string(),
+        FixtureOutcome::from_response(&exported),
+    );
+
+    let fresh = RustyBaseApp::new(Store::open_in_memory().unwrap());
+    let fresh_import = fresh.handle(
+        HttpRequest::json("PUT", "/api/collections/import", exported.body.clone()).unwrap(),
+    );
+    assert_eq!(fresh_import.status, 204);
+    let fresh_posts = fresh.handle(HttpRequest::new("GET", "/api/collections/posts"));
+    assert_eq!(fresh_posts.status, 200);
+    assert_eq!(
+        collection_field_by_name(&fresh_posts.body, "title")["id"],
+        "title_field"
+    );
+    assert_eq!(
+        fresh_posts.body["indexes"],
+        json!(["CREATE INDEX idx_posts_title ON posts (title)"])
+    );
+    assert_eq!(fresh_posts.body["listRule"], "published = true");
+    outcomes.insert(
+        "export payload imports into a fresh app".to_string(),
+        FixtureOutcome::from_response(&fresh_import),
+    );
+
+    let merge_import = app.handle(
+        HttpRequest::json(
+            "PUT",
+            "/api/collections/import",
+            json!({
+                "collections": [{
+                    "name": "posts",
+                    "schema": [
+                        {"name": "title", "type": "text"},
+                        {"name": "tags", "type": "array"}
+                    ],
+                    "listRule": "title ~ 'Rusty'"
+                }]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(merge_import.status, 204);
+    let comments_after_merge = app.handle(HttpRequest::new("GET", "/api/collections/comments"));
+    assert_eq!(comments_after_merge.status, 200);
+    let posts_after_merge = app.handle(HttpRequest::new("GET", "/api/collections/posts"));
+    assert_eq!(posts_after_merge.status, 200);
+    assert_eq!(user_collection_fields(&posts_after_merge.body).len(), 4);
+    assert_eq!(posts_after_merge.body["listRule"], "title ~ 'Rusty'");
+    let records_after_merge = app.handle(HttpRequest::new("GET", "/api/collections/posts/records"));
+    assert_eq!(records_after_merge.status, 200);
+    assert_eq!(
+        records_after_merge.body["items"][0]["legacy"],
+        "keep for merge"
+    );
+    outcomes.insert(
+        "merge import preserves omitted fields and records".to_string(),
+        FixtureOutcome::from_response(&merge_import),
+    );
+
+    let replace_import = app.handle(
+        HttpRequest::json(
+            "PUT",
+            "/api/collections/import",
+            json!({
+                "deleteMissing": true,
+                "collections": [
+                    {
+                        "name": "posts",
+                        "schema": [
+                            {"name": "title", "type": "text"},
+                            {"name": "tags", "type": "array"}
+                        ],
+                        "listRule": "title ~ 'Rusty'"
+                    },
+                    {
+                        "name": "authors",
+                        "schema": [{"name": "name", "type": "text"}]
+                    }
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(replace_import.status, 204);
+    let comments_after_replace = app.handle(HttpRequest::new("GET", "/api/collections/comments"));
+    assert_eq!(comments_after_replace.status, 404);
+    let posts_after_replace = app.handle(HttpRequest::new("GET", "/api/collections/posts"));
+    assert_eq!(posts_after_replace.status, 200);
+    assert_eq!(user_collection_fields(&posts_after_replace.body).len(), 2);
+    let records_after_replace =
+        app.handle(HttpRequest::new("GET", "/api/collections/posts/records"));
+    assert_eq!(records_after_replace.status, 200);
+    assert_eq!(
+        records_after_replace.body["items"][0]["title"],
+        "Rusty Base"
+    );
+    assert!(records_after_replace.body["items"][0]
+        .get("legacy")
+        .is_none());
+    let author = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/authors/records",
+            json!({"id": "author_1", "name": "Ada"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(author.status, 200);
+    outcomes.insert(
+        "deleteMissing import replaces missing metadata and prunes record fields".to_string(),
+        FixtureOutcome::from_response(&replace_import),
+    );
+
+    let array_app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+    let array_import = array_app.handle(
+        HttpRequest::json(
+            "PUT",
+            "/api/collections/import",
+            json!([
+                {
+                    "name": "array_posts",
+                    "schema": [{"name": "title", "type": "text"}]
+                }
+            ]),
+        )
+        .unwrap(),
+    );
+    assert_eq!(array_import.status, 204);
+    let array_posts = array_app.handle(HttpRequest::new("GET", "/api/collections/array_posts"));
+    assert_eq!(array_posts.status, 200);
+    outcomes.insert(
+        "array root import payload is accepted".to_string(),
+        FixtureOutcome::from_response(&array_import),
+    );
+
+    let duplicate_import = app.handle(
+        HttpRequest::json(
+            "PUT",
+            "/api/collections/import",
+            json!({
+                "collections": [
+                    {"name": "dupes", "schema": [{"name": "title", "type": "text"}]},
+                    {"name": "dupes", "schema": [{"name": "body", "type": "text"}]}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(duplicate_import.status, 400);
+    outcomes.insert(
+        "duplicate collection names are rejected before import".to_string(),
+        FixtureOutcome::from_response(&duplicate_import),
+    );
+
+    outcomes
+}
+
 fn login_token(app: &RustyBaseApp, identity: &str) -> String {
     let login = app.handle(
         HttpRequest::json(
@@ -1689,6 +1921,43 @@ fn json_string(response: &HttpResponse, path: &[&str]) -> String {
         .as_str()
         .unwrap_or_else(|| panic!("response JSON path {path:?} is not a string"))
         .to_string()
+}
+
+fn collection_by_name<'a>(payload: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    payload["collections"]
+        .as_array()
+        .unwrap_or_else(|| panic!("payload has no collections array: {payload:?}"))
+        .iter()
+        .find(|collection| collection["name"] == name)
+        .unwrap_or_else(|| panic!("missing collection {name} in payload: {payload:?}"))
+}
+
+fn field_by_name<'a>(collection: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    collection["schema"]
+        .as_array()
+        .unwrap_or_else(|| panic!("collection has no schema array: {collection:?}"))
+        .iter()
+        .find(|field| field["name"] == name)
+        .unwrap_or_else(|| panic!("missing field {name} in collection: {collection:?}"))
+}
+
+fn collection_field_by_name<'a>(
+    collection: &'a serde_json::Value,
+    name: &str,
+) -> &'a serde_json::Value {
+    user_collection_fields(collection)
+        .into_iter()
+        .find(|field| field["name"] == name)
+        .unwrap_or_else(|| panic!("missing field {name} in collection response: {collection:?}"))
+}
+
+fn user_collection_fields(collection: &serde_json::Value) -> Vec<&serde_json::Value> {
+    collection["fields"]
+        .as_array()
+        .unwrap_or_else(|| panic!("collection has no fields array: {collection:?}"))
+        .iter()
+        .filter(|field| !matches!(field["name"].as_str(), Some("id" | "created" | "updated")))
+        .collect()
 }
 
 struct MultipartTestPart {
