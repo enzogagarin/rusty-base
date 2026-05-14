@@ -80,6 +80,6 @@ Status legend:
 | Parentheses depth limit | supported | Configurable through `FilterSettings`. |
 | Parameterized values | supported | User values are emitted as bound parameters. |
 | Named parameters | supported | Named output APIs can reuse the same placeholder for repeated values, including repeated function arguments. Positional output remains the default. |
-| Parser resilience smoke test | supported | Deterministic generated-input test exists. |
-| Fuzz target | planned | `cargo-fuzz` target is still needed. |
-| Benchmarks | planned | Normal and pathological filter benches are still needed. |
+| Parser resilience smoke test | supported | Deterministic generated-input, seed corpus, unicode-ish, and depth-limit tests exist. |
+| Fuzz target | partial | Dependency-free fuzz-smoke coverage exists; full `cargo-fuzz` corpus and CI target are still needed. |
+| Benchmarks | partial | `cargo run -p rb-filter-engine --example bench_filter --release` covers normal and wide-filter compile paths; Criterion benches are still needed. |

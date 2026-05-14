@@ -30,8 +30,8 @@ Deliverables:
   quoted by the integration layer instead of emitted raw.
 - Preserve parameterized SQL output.
 - Document known compatibility gaps.
-- Add property tests and fuzz targets for parser resilience.
-- Add microbenchmarks for normal and pathological filters.
+- Add property/fuzz-smoke tests for parser resilience.
+- Add a lightweight benchmark example for normal and pathological filters.
 
 Exit criteria:
 
@@ -319,6 +319,10 @@ Exit criteria:
 - Added JSON PocketBase compatibility fixtures for filter SQL, parameters,
   allowed/denied behavior, and short behavior notes, with a test loader that
   compiles the fixture set against the Rust filter engine.
+- Added dependency-free filter-engine fuzz-smoke coverage for seed corpus,
+  unicode-ish generated inputs, and depth-limit behavior, plus a lightweight
+  benchmark example for normal, request-context, function, JSON/array, and wide
+  OR-chain compile paths.
 
 ## Next Sprint
 
@@ -338,3 +342,5 @@ Exit criteria:
    examples.
 8. Add file option parity and uploaded/protected-file compatibility fixtures
    around edge cases.
+9. Upgrade fuzz/benchmark infrastructure to `cargo-fuzz` and Criterion once the
+   lightweight smoke harness has stabilized.

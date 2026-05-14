@@ -187,6 +187,12 @@ sql: name = ? AND age >= ?
 params: [string:Burak, number:30]
 ```
 
+Run the local filter-engine benchmark smoke:
+
+```bash
+cargo run -p rb-filter-engine --example bench_filter --release
+```
+
 Build a local executable:
 
 ```bash
@@ -475,8 +481,9 @@ Not implemented yet:
   production keepalive behavior;
 - admin UI;
 - Go FFI bindings;
-- `cargo-fuzz` corpus and CI fuzz target;
-- benchmark suite.
+- full `cargo-fuzz` corpus and CI fuzz target;
+- full Criterion benchmark suite beyond the current lightweight filter-engine
+  benchmark example.
 
 Those gaps are deliberate. This repo will grow through verified steps, not hand-wavy rewrites.
 
