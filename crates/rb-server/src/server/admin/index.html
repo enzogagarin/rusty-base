@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rusty Base Admin</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f2;
+      --panel: #ffffff;
+      --panel-soft: #eef3ee;
+      --ink: #17201b;
+      --muted: #5d695f;
+      --line: #d8ded7;
+      --accent: #0f766e;
+      --accent-strong: #0b4f4a;
+      --warn: #a9441f;
+      --shadow: 0 12px 34px rgba(23, 32, 27, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    input {
+      font: inherit;
+      letter-spacing: 0;
+    }
+
+    button {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      color: var(--ink);
+      cursor: pointer;
+      padding: 8px 12px;
+      transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+      white-space: nowrap;
+    }
+
+    button:hover {
+      border-color: #aeb9b0;
+      background: #f9faf7;
+    }
+
+    button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #ffffff;
+    }
+
+    button.primary:hover {
+      background: var(--accent-strong);
+    }
+
+    input {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #ffffff;
+      color: var(--ink);
+      padding: 8px 10px;
+    }
+
+    input:focus {
+      border-color: var(--accent);
+      outline: 2px solid rgba(15, 118, 110, 0.18);
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      border-right: 1px solid var(--line);
+      background: #fbfcf8;
+      padding: 20px;
+    }
+
+    .brand {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+    }
+
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #ffffff;
+      font-weight: 800;
+    }
+
+    .brand strong {
+      display: block;
+      overflow-wrap: anywhere;
+      font-size: 15px;
+      line-height: 1.2;
+    }
+
+    .brand span,
+    .muted {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav button {
+      display: flex;
+      justify-content: flex-start;
+      width: 100%;
+      background: transparent;
+      border-color: transparent;
+      text-align: left;
+    }
+
+    .nav button.active {
+      background: var(--panel-soft);
+      border-color: var(--line);
+      color: var(--accent-strong);
+      font-weight: 700;
+    }
+
+    .auth {
+      display: grid;
+      gap: 10px;
+      margin-top: auto;
+    }
+
+    .field {
+      display: grid;
+      gap: 5px;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .auth-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .main {
+      min-width: 0;
+      padding: 22px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+
+    h1,
+    h2 {
+      margin: 0;
+      line-height: 1.2;
+      font-weight: 750;
+    }
+
+    h1 {
+      font-size: 24px;
+    }
+
+    h2 {
+      font-size: 16px;
+    }
+
+    .status {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--muted);
+      padding: 8px 10px;
+      overflow-wrap: anywhere;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .metric,
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .metric {
+      min-height: 86px;
+      padding: 14px;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 8px;
+      overflow-wrap: anywhere;
+      font-size: 22px;
+      line-height: 1.1;
+    }
+
+    .panel {
+      overflow: hidden;
+    }
+
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      padding: 12px 14px;
+    }
+
+    .panel-body {
+      padding: 14px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel-soft);
+      color: var(--accent-strong);
+      padding: 2px 8px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 180px minmax(0, 1fr);
+      gap: 10px;
+      border-bottom: 1px solid var(--line);
+      padding: 10px 0;
+    }
+
+    .kv:last-child {
+      border-bottom: 0;
+    }
+
+    .kv span:first-child {
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .empty {
+      color: var(--muted);
+      padding: 18px;
+      text-align: center;
+    }
+
+    .error {
+      color: var(--warn);
+      font-weight: 700;
+    }
+
+    @media (max-width: 780px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .auth-actions,
+      .kv {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="mark">RB</div>
+        <div>
+          <strong>Rusty Base Admin</strong>
+          <span id="health">checking</span>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Admin views">
+        <button type="button" class="active" data-view="overview">Overview</button>
+        <button type="button" data-view="collections">Collections</button>
+        <button type="button" data-view="settings">Settings</button>
+      </nav>
+
+      <form class="auth" id="auth-form">
+        <div class="field">
+          <label for="email">Email</label>
+          <input id="email" name="email" autocomplete="username" value="root@example.com">
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password">
+        </div>
+        <div class="auth-actions">
+          <button type="submit" class="primary">Login</button>
+          <button type="button" id="init">Initialize</button>
+        </div>
+        <button type="button" id="logout">Logout</button>
+      </form>
+    </aside>
+
+    <main class="main">
+      <div class="topbar">
+        <div>
+          <h1 id="view-title">Overview</h1>
+          <div class="muted" id="session">No token</div>
+        </div>
+        <div class="status" id="status">Ready</div>
+      </div>
+
+      <section class="grid" id="metrics"></section>
+      <section class="panel" id="content"></section>
+    </main>
+  </div>
+
+  <script>
+    const tokenKey = "rusty-base.admin.token";
+    const state = {
+      token: localStorage.getItem(tokenKey) || "",
+      view: "overview",
+      health: "unknown",
+      collections: [],
+      settings: null,
+      error: ""
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const status = (text, failed = false) => {
+      $("status").textContent = text;
+      $("status").classList.toggle("error", failed);
+    };
+
+    const headers = () => state.token ? { Authorization: `Bearer ${state.token}` } : {};
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, {
+        ...options,
+        headers: {
+          ...headers(),
+          ...(options.headers || {})
+        }
+      });
+      const text = await response.text();
+      let body = null;
+      try {
+        body = text ? JSON.parse(text) : null;
+      } catch (_) {
+        body = text;
+      }
+      if (!response.ok) {
+        const message = body && body.message ? body.message : `${response.status}`;
+        throw new Error(message);
+      }
+      return body;
+    }
+
+    async function jsonApi(path, body) {
+      return api(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+    }
+
+    async function refresh() {
+      state.error = "";
+      try {
+        const health = await api("/api/health");
+        state.health = health.message || "ok";
+      } catch (error) {
+        state.health = "offline";
+        state.error = error.message;
+      }
+
+      if (state.token) {
+        try {
+          const collections = await api("/api/collections?fields=items.id,items.name,items.type,items.system,totalItems");
+          state.collections = collections.items || [];
+        } catch (error) {
+          state.collections = [];
+          state.error = error.message;
+        }
+
+        try {
+          state.settings = await api("/api/settings?fields=meta.appName,meta.appURL,batch.enabled,batch.maxRequests,rateLimits.enabled");
+        } catch (error) {
+          state.settings = null;
+          state.error = error.message;
+        }
+      }
+
+      render();
+    }
+
+    function render() {
+      $("health").textContent = state.health;
+      $("session").textContent = state.token ? "Superuser token active" : "No token";
+      status(state.error || "Ready", Boolean(state.error));
+      document.querySelectorAll(".nav button").forEach((button) => {
+        button.classList.toggle("active", button.dataset.view === state.view);
+      });
+
+      const appName = state.settings && state.settings.meta ? state.settings.meta.appName : "Rusty Base";
+      $("metrics").innerHTML = [
+        metric("App", appName),
+        metric("Collections", String(state.collections.length)),
+        metric("Batch max", state.settings && state.settings.batch ? String(state.settings.batch.maxRequests) : "-")
+      ].join("");
+
+      $("view-title").textContent = title(state.view);
+      if (state.view === "collections") {
+        renderCollections();
+      } else if (state.view === "settings") {
+        renderSettings();
+      } else {
+        renderOverview();
+      }
+    }
+
+    function metric(label, value) {
+      return `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+    }
+
+    function title(view) {
+      return view.charAt(0).toUpperCase() + view.slice(1);
+    }
+
+    function renderOverview() {
+      $("content").innerHTML = `
+        <div class="panel-head">
+          <h2>Instance</h2>
+          <button type="button" id="refresh">Refresh</button>
+        </div>
+        <div class="panel-body">
+          ${row("Health", state.health)}
+          ${row("Session", state.token ? "active" : "none")}
+          ${row("Collections", String(state.collections.length))}
+        </div>
+      `;
+      $("refresh").addEventListener("click", refresh);
+    }
+
+    function renderCollections() {
+      if (!state.collections.length) {
+        $("content").innerHTML = `<div class="empty">No collections</div>`;
+        return;
+      }
+      const rows = state.collections.map((collection) => `
+        <tr>
+          <td>${escapeHtml(collection.name || "")}</td>
+          <td><span class="pill">${escapeHtml(collection.type || "")}</span></td>
+          <td>${collection.system ? "system" : "base"}</td>
+        </tr>
+      `).join("");
+      $("content").innerHTML = `
+        <div class="panel-head">
+          <h2>Collections</h2>
+          <button type="button" id="refresh">Refresh</button>
+        </div>
+        <table>
+          <thead><tr><th>Name</th><th>Type</th><th>Scope</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+      $("refresh").addEventListener("click", refresh);
+    }
+
+    function renderSettings() {
+      const settings = state.settings || {};
+      const meta = settings.meta || {};
+      const batch = settings.batch || {};
+      const rateLimits = settings.rateLimits || {};
+      $("content").innerHTML = `
+        <div class="panel-head">
+          <h2>Settings</h2>
+          <button type="button" id="refresh">Refresh</button>
+        </div>
+        <div class="panel-body">
+          ${row("App name", meta.appName || "-")}
+          ${row("App URL", meta.appURL || "-")}
+          ${row("Batch", batch.enabled === false ? "disabled" : "enabled")}
+          ${row("Max requests", batch.maxRequests == null ? "-" : String(batch.maxRequests))}
+          ${row("Rate limits", rateLimits.enabled ? "enabled" : "disabled")}
+        </div>
+      `;
+      $("refresh").addEventListener("click", refresh);
+    }
+
+    function row(label, value) {
+      return `<div class="kv"><span>${escapeHtml(label)}</span><span>${escapeHtml(value)}</span></div>`;
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      }[char]));
+    }
+
+    document.querySelectorAll(".nav button").forEach((button) => {
+      button.addEventListener("click", () => {
+        state.view = button.dataset.view;
+        render();
+      });
+    });
+
+    $("auth-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        const body = await jsonApi("/api/collections/_superusers/auth-with-password", {
+          identity: $("email").value,
+          password: $("password").value
+        });
+        state.token = body.token || "";
+        localStorage.setItem(tokenKey, state.token);
+        status("Logged in");
+        await refresh();
+      } catch (error) {
+        status(error.message, true);
+      }
+    });
+
+    $("init").addEventListener("click", async () => {
+      try {
+        await jsonApi("/api/collections", {
+          name: "_superusers",
+          type: "auth",
+          fields: [{ name: "email", type: "email" }]
+        }).catch(() => null);
+        await jsonApi("/api/collections/_superusers/records", {
+          email: $("email").value,
+          password: $("password").value,
+          passwordConfirm: $("password").value
+        });
+        status("Initialized");
+        await refresh();
+      } catch (error) {
+        status(error.message, true);
+      }
+    });
+
+    $("logout").addEventListener("click", async () => {
+      state.token = "";
+      localStorage.removeItem(tokenKey);
+      state.collections = [];
+      state.settings = null;
+      await refresh();
+    });
+
+    refresh();
+  </script>
+</body>
+</html>

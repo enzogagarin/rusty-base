@@ -1,7 +1,7 @@
 use super::*;
 use super::{
-    auth::*, collections::*, files::*, http::*, realtime::*, records::*, settings::*, storage::*,
-    validation::*,
+    admin::*, auth::*, collections::*, files::*, http::*, realtime::*, records::*, settings::*,
+    storage::*, validation::*,
 };
 
 #[derive(Clone)]
@@ -39,6 +39,7 @@ impl RustyBaseApp {
         let segments = segments.iter().map(String::as_str).collect::<Vec<_>>();
 
         match (request.method.as_str(), segments.as_slice()) {
+            ("GET", ["admin", ..]) | ("GET", ["_", ..]) => Ok(admin_index_response()),
             ("GET", ["api", "health"]) => Ok(HttpResponse::json(
                 200,
                 json!({"code": 200, "message": "API is healthy."}),

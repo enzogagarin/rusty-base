@@ -129,6 +129,9 @@ Target capabilities:
 │       ├── Cargo.toml
 │       ├── src/lib.rs
 │       ├── src/server
+│       │   ├── admin
+│       │   │   └── index.html
+│       │   ├── admin.rs
 │       │   ├── app.rs
 │       │   ├── auth
 │       │   │   ├── action_tokens.rs
@@ -342,6 +345,7 @@ compatibility matrix.
 
 The first server slice supports:
 
+- embedded admin UI shell at `GET /admin` and PocketBase-style `GET /_/`;
 - SQLite-backed collection metadata;
 - per-collection record tables with JSON record data;
 - PocketBase-style UTC `created`/`updated` timestamps for collection and
@@ -497,7 +501,7 @@ Not implemented yet:
 - complete relation `expand` edge-case parity and relation permission fixtures;
 - complete realtime parity, including subscription options, SDK edge cases, and
   production keepalive behavior;
-- admin UI;
+- complete admin UI beyond the current embedded shell;
 - Go FFI bindings;
 - full `cargo-fuzz` corpus and CI fuzz target;
 - full Criterion benchmark suite beyond the current lightweight benchmark

@@ -30,6 +30,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+pub(crate) mod admin;
 pub(crate) mod app;
 pub(crate) mod auth;
 pub(crate) mod collections;

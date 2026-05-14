@@ -88,6 +88,31 @@ fn write_oauth2_fixture_json(stream: &mut TcpStream, status: u16, body: &str) {
 }
 
 #[test]
+fn serves_embedded_admin_ui_shell() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    for path in ["/admin", "/admin/collections", "/_/"] {
+        let response = app.handle(HttpRequest::new("GET", path));
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "text/html; charset=utf-8");
+        assert_eq!(
+            response.headers.get("cache-control").map(String::as_str),
+            Some("no-store")
+        );
+
+        let html = String::from_utf8(response.raw_body).unwrap();
+        assert!(html.contains("Rusty Base Admin"));
+        assert!(html.contains("/api/health"));
+        assert!(html.contains("/api/collections/_superusers/auth-with-password"));
+        assert!(html.contains("/api/collections?fields="));
+        assert!(html.contains("/api/settings?fields="));
+    }
+
+    let health = app.handle(HttpRequest::new("GET", "/api/health"));
+    assert_eq!(health.status, 200);
+}
+
+#[test]
 fn stores_collection_records_and_filters_with_filter_engine() {
     let store = Store::open_in_memory().unwrap();
     store.create_collection(posts_collection()).unwrap();
