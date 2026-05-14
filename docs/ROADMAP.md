@@ -313,6 +313,9 @@ Exit criteria:
   for auth tokens, auth action tokens, settings, and stored files, and documented
   that a future SQLite authorizer hook is still needed for table-level execution
   safety.
+- Added integration edge-case coverage for protected file token expiration and
+  cyclic relation cascade deletes so the server keeps moving toward
+  PocketBase-like safety under less friendly workflows.
 
 ## Next Sprint
 

@@ -3043,7 +3043,8 @@ fn validates_file_field_upload_options() {
 
 #[test]
 fn generates_file_tokens_for_protected_file_access() {
-    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+    let path = temp_db_path("protected-file-token-expiry");
+    let app = RustyBaseApp::new(Store::open(&path).unwrap());
 
     let users = app.handle(
         HttpRequest::json(
@@ -3139,7 +3140,10 @@ fn generates_file_tokens_for_protected_file_access() {
         HttpRequest::new("POST", "/api/files/token").with_header("Authorization", owner_auth_token),
     );
     assert_eq!(owner_file_token_response.status, 200);
-    let owner_file_token = owner_file_token_response.body["token"].as_str().unwrap();
+    let owner_file_token = owner_file_token_response.body["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let allowed = app.handle(HttpRequest::new(
         "GET",
@@ -3148,6 +3152,24 @@ fn generates_file_tokens_for_protected_file_access() {
     assert_eq!(allowed.status, 200);
     assert_eq!(allowed.content_type, "application/pdf");
     assert_eq!(allowed.raw_body, b"contract bytes");
+
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            r#"UPDATE "_rb_file_tokens" SET expires = ?1 WHERE token = ?2"#,
+            params!["0", &owner_file_token],
+        )
+        .unwrap();
+    }
+    let expired = app.handle(HttpRequest::new(
+        "GET",
+        format!("/api/files/docs/doc_1/{contract}?token={owner_file_token}"),
+    ));
+    assert_eq!(expired.status, 403);
+    assert!(expired.body["message"]
+        .as_str()
+        .unwrap()
+        .contains("expired file token"));
 
     let other_login = app.handle(
         HttpRequest::json(
@@ -3171,6 +3193,8 @@ fn generates_file_tokens_for_protected_file_access() {
         format!("/api/files/docs/doc_1/{contract}?token={other_file_token}"),
     ));
     assert_eq!(denied.status, 404);
+    drop(app);
+    fs::remove_file(path).ok();
 }
 
 #[test]
@@ -4148,6 +4172,80 @@ fn cascades_relation_deletes_for_configured_fields() {
         .unwrap(),
     );
     assert_eq!(invalid_kind.status, 400);
+}
+
+#[test]
+fn relation_cascade_delete_handles_cycles() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    for collection in [
+        json!({
+            "name": "nodes_a",
+            "fields": [{
+                "name": "b",
+                "type": "relation",
+                "collection": "nodes_b",
+                "cascadeDelete": true
+            }]
+        }),
+        json!({
+            "name": "nodes_b",
+            "fields": [{
+                "name": "a",
+                "type": "relation",
+                "collection": "nodes_a",
+                "cascadeDelete": true
+            }]
+        }),
+    ] {
+        let response =
+            app.handle(HttpRequest::json("POST", "/api/collections", collection).unwrap());
+        assert_eq!(response.status, 200);
+    }
+
+    let node_a = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/nodes_a/records",
+            json!({"id": "node_a_1"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(node_a.status, 200);
+
+    let node_b = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/nodes_b/records",
+            json!({"id": "node_b_1", "a": "node_a_1"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(node_b.status, 200);
+
+    let linked_a = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/nodes_a/records/node_a_1",
+            json!({"b": "node_b_1"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(linked_a.status, 200);
+
+    let deleted = app.handle(HttpRequest::new(
+        "DELETE",
+        "/api/collections/nodes_a/records/node_a_1",
+    ));
+    assert_eq!(deleted.status, 204);
+
+    let remaining_a = app.handle(HttpRequest::new("GET", "/api/collections/nodes_a/records"));
+    assert_eq!(remaining_a.status, 200);
+    assert_eq!(remaining_a.body["totalItems"], 0);
+
+    let remaining_b = app.handle(HttpRequest::new("GET", "/api/collections/nodes_b/records"));
+    assert_eq!(remaining_b.status, 200);
+    assert_eq!(remaining_b.body["totalItems"], 0);
 }
 
 #[test]
