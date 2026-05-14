@@ -1,6 +1,6 @@
 import { $, api, jsonApi, state, status, tokenKey } from "./state.js";
 import { closeCollectionEditor, renderCollections } from "./collections_ui.js";
-import { closeRecordEditor, renderRecords } from "./records_ui.js";
+import { closeRecordEditor, ensureRelationOptionsForCollection, renderRecords } from "./records_ui.js";
 import { collectionPath, collectionRecordsPath, normalizedRecordPerPage } from "./data_helpers.js";
 import { metric, row, title } from "./render_helpers.js";
 
@@ -22,6 +22,8 @@ async function refresh() {
     } catch (error) {
       state.collections = [];
       state.collectionDetails = {};
+      state.relationOptionErrors = {};
+      state.relationOptions = {};
       state.selectedCollection = "";
       state.records = [];
       state.recordCount = 0;
@@ -42,6 +44,8 @@ async function refresh() {
   } else {
     state.collections = [];
     state.collectionDetails = {};
+    state.relationOptionErrors = {};
+    state.relationOptions = {};
     state.selectedCollection = "";
     state.records = [];
     state.recordCount = 0;
@@ -155,6 +159,7 @@ async function loadRecords(showErrors = true) {
 
   try {
     collection = await ensureCollectionDetails(collection.name);
+    await ensureRelationOptionsForCollection(collection);
     const page = await api(recordListPath(collection.name));
     state.records = page.items || [];
     state.recordCount = page.totalItems == null ? state.records.length : page.totalItems;
@@ -265,6 +270,8 @@ $("logout").addEventListener("click", async () => {
   localStorage.removeItem(tokenKey);
   state.collections = [];
   state.collectionDetails = {};
+  state.relationOptionErrors = {};
+  state.relationOptions = {};
   resetRecordBrowser();
   state.settings = null;
   closeCollectionEditor();

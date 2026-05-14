@@ -12,6 +12,10 @@ export function recordPath(collectionName, id) {
   return `${collectionRecordsPath(collectionName)}/${encodeURIComponent(id)}`;
 }
 
+export function relationTargetCollectionName(field) {
+  return field && (field.collection || field.collectionId || field.targetCollection || "");
+}
+
 export function normalizedRecordPerPage(value) {
   const perPage = Number(value) || 20;
   return [10, 20, 50, 100].includes(perPage) ? perPage : 20;
@@ -49,6 +53,14 @@ export function isResponseOnlyCollectionField(field) {
 
 export function recordFieldIsMulti(field) {
   return Number(field.maxSelect || 1) > 1;
+}
+
+export function relationOptionLabel(record) {
+  if (!record || typeof record !== "object") {
+    return "";
+  }
+  const label = record.name || record.title || record.label || record.username || record.email;
+  return label ? `${label} (${record.id || ""})` : String(record.id || "");
 }
 
 export function recordFieldInputDisplayValue(value) {

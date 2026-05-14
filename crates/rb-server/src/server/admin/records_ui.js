@@ -8,6 +8,8 @@ import {
   recordFieldValuePreview,
   recordPath,
   recordPreview,
+  relationOptionLabel,
+  relationTargetCollectionName,
   userCollectionFields
 } from "./data_helpers.js";
 import { escapeAttribute, escapeHtml } from "./render_helpers.js";
@@ -18,6 +20,46 @@ let actions = {
   loadRecords: async () => {},
   setView: async () => {}
 };
+const relationOptionLoads = new Map();
+
+export async function ensureRelationOptionsForCollection(collection) {
+  const targets = userCollectionFields(collection)
+    .filter((field) => (field.type || field.kind) === "relation")
+    .map(relationTargetCollectionName)
+    .filter(Boolean);
+  const uniqueTargets = [...new Set(targets)];
+  await Promise.all(uniqueTargets.map((target) => ensureRelationOptions(target)));
+}
+
+async function ensureRelationOptions(targetCollection) {
+  if (Object.prototype.hasOwnProperty.call(state.relationOptions, targetCollection)) {
+    return;
+  }
+  if (relationOptionLoads.has(targetCollection)) {
+    await relationOptionLoads.get(targetCollection);
+    return;
+  }
+
+  const params = new URLSearchParams();
+  params.set("page", "1");
+  params.set("perPage", "100");
+  params.set("sort", "-updated");
+  params.set("fields", "id,name,title,label,email,username,created,updated,collectionName");
+  const load = api(`${collectionRecordsPath(targetCollection)}?${params.toString()}`)
+    .then((page) => {
+      state.relationOptions[targetCollection] = Array.isArray(page.items) ? page.items : [];
+      delete state.relationOptionErrors[targetCollection];
+    })
+    .catch((error) => {
+      state.relationOptions[targetCollection] = [];
+      state.relationOptionErrors[targetCollection] = error.message;
+    })
+    .finally(() => {
+      relationOptionLoads.delete(targetCollection);
+    });
+  relationOptionLoads.set(targetCollection, load);
+  await load;
+}
 
 export function renderRecords(nextActions) {
   actions = nextActions;
@@ -345,6 +387,10 @@ function recordFieldInputHtml(field, value, index) {
     `;
   }
 
+  if (type === "relation") {
+    return relationFieldInputHtml(field, value, inputId, common, label, fieldClass, fieldError);
+  }
+
   if (type === "file") {
     const accept = Array.isArray(field.mimeTypes) && field.mimeTypes.length
       ? ` accept="${escapeAttribute(field.mimeTypes.join(","))}"`
@@ -369,6 +415,62 @@ function recordFieldInputHtml(field, value, index) {
     <div class="${fieldClass}">
       ${label}
       <input ${common} type="${inputType}" value="${escapeAttribute(recordFieldInputDisplayValue(value))}" placeholder="${escapeAttribute(placeholder)}">
+      ${fieldError}
+    </div>
+  `;
+}
+
+function relationFieldInputHtml(field, value, inputId, common, label, fieldClass, fieldError) {
+  const target = relationTargetCollectionName(field);
+  const options = target ? state.relationOptions[target] : null;
+  const error = target ? state.relationOptionErrors[target] : "";
+  if (!target || !Array.isArray(options)) {
+    return `
+      <div class="${fieldClass}">
+        ${label}
+        <input ${common} data-record-relation-target="${escapeAttribute(target)}" type="text" value="${escapeAttribute(recordFieldInputDisplayValue(value))}" placeholder="${recordFieldIsMulti(field) ? "record ids, comma separated" : "record id"}">
+        <span class="muted">${escapeHtml(target ? `Loading ${target} records...` : "Relation target is missing")}</span>
+        ${fieldError}
+      </div>
+    `;
+  }
+
+  const selected = new Set((Array.isArray(value) ? value : value ? [value] : []).map(String));
+  const optionHtml = options.map((record) => {
+    const id = String(record.id || "");
+    return `
+      <option value="${escapeAttribute(id)}" ${selected.has(id) ? "selected" : ""}>
+        ${escapeHtml(relationOptionLabel(record))}
+      </option>
+    `;
+  }).concat([...selected]
+    .filter((id) => id && !options.some((record) => String(record.id || "") === id))
+    .map((id) => `
+      <option value="${escapeAttribute(id)}" selected>${escapeHtml(`${id} (not loaded)`)}</option>
+    `)).join("");
+  const hint = error
+    ? `<span class="field-error">${escapeHtml(error)}</span>`
+    : `<span class="muted">${escapeHtml(target)} records</span>`;
+  if (recordFieldIsMulti(field)) {
+    const size = Math.min(Math.max(options.length || 2, 2), 6);
+    return `
+      <div class="${fieldClass}">
+        ${label}
+        <select ${common} data-record-relation-target="${escapeAttribute(target)}" multiple size="${size}">${optionHtml}</select>
+        ${hint}
+        ${fieldError}
+      </div>
+    `;
+  }
+
+  return `
+    <div class="${fieldClass}">
+      ${label}
+      <select ${common} data-record-relation-target="${escapeAttribute(target)}">
+        <option value=""></option>
+        ${optionHtml}
+      </select>
+      ${hint}
       ${fieldError}
     </div>
   `;
@@ -510,6 +612,12 @@ function recordFieldInputValue(input) {
   if (type === "bool") {
     return input.checked;
   }
+  if (input.tagName === "SELECT" && input.multiple) {
+    return Array.from(input.selectedOptions).map((option) => option.value).filter(Boolean);
+  }
+  if (input.tagName === "SELECT") {
+    return input.value || undefined;
+  }
 
   const raw = (input.value || "").trim();
   if (!raw) {
@@ -558,6 +666,7 @@ async function saveRecord() {
       : collectionRecordsPath(collection.name);
     await saveRecordPayload(collection, path, payload, uploads, method);
     closeRecordEditor();
+    invalidateRelationOptions(collection.name);
     status("Saved");
     await actions.loadRecords(true);
     actions.render();
@@ -740,6 +849,7 @@ async function deleteRecord(id) {
     if (state.editorRecordId === id) {
       closeRecordEditor();
     }
+    invalidateRelationOptions(collection.name);
     status("Deleted");
     await actions.loadRecords(true);
     actions.render();
@@ -748,3 +858,10 @@ async function deleteRecord(id) {
   }
 }
 
+function invalidateRelationOptions(collectionName) {
+  if (!collectionName) {
+    return;
+  }
+  delete state.relationOptions[collectionName];
+  delete state.relationOptionErrors[collectionName];
+}

@@ -8,6 +8,8 @@ export const state = {
   collectionDetails: {},
   selectedCollection: localStorage.getItem("rusty-base.admin.collection") || "",
   records: [],
+  relationOptionErrors: {},
+  relationOptions: {},
   recordCount: 0,
   recordPage: 1,
   recordPerPage: Number(localStorage.getItem("rusty-base.admin.recordPerPage") || 20) || 20,

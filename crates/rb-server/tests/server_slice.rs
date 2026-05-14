@@ -214,6 +214,12 @@ fn serves_embedded_admin_ui_shell() {
     assert!(js_bundle.contains("data-record-field"));
     assert!(js_bundle.contains("syncRecordFieldFromInput"));
     assert!(js_bundle.contains("recordFieldValuePreview"));
+    assert!(js_bundle.contains("ensureRelationOptionsForCollection"));
+    assert!(js_bundle.contains("relationFieldInputHtml"));
+    assert!(js_bundle.contains("relationOptionLabel"));
+    assert!(js_bundle.contains("relationTargetCollectionName"));
+    assert!(js_bundle.contains("data-record-relation-target"));
+    assert!(js_bundle.contains("selectedOptions"));
     assert!(js_bundle.contains("Fix record JSON before using field inputs"));
     assert!(js_bundle.contains("recordValidationSummaryHtml"));
     assert!(js_bundle.contains("validationDataFromError"));
