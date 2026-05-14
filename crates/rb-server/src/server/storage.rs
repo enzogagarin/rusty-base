@@ -298,6 +298,34 @@ impl Store {
         Ok(())
     }
 
+    pub(crate) fn with_savepoint<T>(
+        &self,
+        name: &str,
+        work: impl FnOnce(&Connection) -> Result<T, ServerError>,
+    ) -> Result<T, ServerError> {
+        let savepoint = quote_identifier(name);
+        let begin = format!("SAVEPOINT {savepoint}");
+        let release = format!("RELEASE SAVEPOINT {savepoint}");
+        let rollback = format!("ROLLBACK TO SAVEPOINT {savepoint}; RELEASE SAVEPOINT {savepoint}");
+        let conn = self.connection()?;
+
+        conn.execute_batch(&begin)?;
+
+        match work(&conn) {
+            Ok(value) => match conn.execute_batch(&release) {
+                Ok(()) => Ok(value),
+                Err(err) => {
+                    let _ = conn.execute_batch(&rollback);
+                    Err(ServerError::Storage(err))
+                }
+            },
+            Err(err) => {
+                let _ = conn.execute_batch(&rollback);
+                Err(err)
+            }
+        }
+    }
+
     pub(crate) fn connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, ServerError> {
         self.conn
             .lock()

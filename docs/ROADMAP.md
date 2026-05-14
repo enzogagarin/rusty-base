@@ -295,7 +295,8 @@ Exit criteria:
 - Added relation `minSelect` metadata and create/update validation, including
   missing and too-few relation checks.
 - Added relation `cascadeDelete` metadata and recursive dependent-record
-  cleanup when a referenced target record is deleted.
+  cleanup inside one savepoint-backed operation when a referenced target record
+  is deleted.
 - Added a first read-only `view` collection MVP with persisted `viewQuery`,
   SELECT-backed list/view records, filter/sort support through `rb-filter-engine`,
   and mutation endpoints rejected as read-only.

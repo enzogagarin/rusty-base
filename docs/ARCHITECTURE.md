@@ -121,8 +121,8 @@ Responsibility:
 - apply first record value modifiers for number add/subtract and multi-select/
   relation append, prepend, and remove operations before rule and validation
   checks;
-- cascade-delete dependent relation records when a relation field opts into
-  `cascadeDelete`;
+- cascade-delete dependent relation records inside one savepoint-backed
+  operation when a relation field opts into `cascadeDelete`;
 - list records with PocketBase-style filtering, pagination, `skipTotal`,
   sorting, expand, and response projection;
 - execute JSON `/api/batch` record create/update/upsert/delete requests inside

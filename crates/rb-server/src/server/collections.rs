@@ -514,6 +514,40 @@ pub(crate) fn collection_id_sql() -> String {
     r#"COALESCE(NULLIF(json_extract("schema_json", '$.id'), ''), "name")"#.to_string()
 }
 
+pub(crate) fn get_collection_with_connection(
+    conn: &Connection,
+    name: &str,
+) -> Result<CollectionConfig, ServerError> {
+    validate_collection_identifier(name)?;
+    let schema_json = conn
+        .query_row(
+            &format!(
+                r#"
+                SELECT schema_json
+                FROM "_rb_collections"
+                WHERE name = ?1 OR {} = ?1
+                LIMIT 1
+                "#,
+                collection_id_sql()
+            ),
+            params![name],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or_else(|| ServerError::NotFound(format!("collection '{name}' not found")))?;
+
+    Ok(serde_json::from_str(&schema_json)?)
+}
+
+pub(crate) fn list_collections_with_connection(
+    conn: &Connection,
+) -> Result<Vec<CollectionConfig>, ServerError> {
+    let mut stmt =
+        conn.prepare(r#"SELECT schema_json FROM "_rb_collections" ORDER BY name ASC"#)?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+}
+
 pub(crate) fn collection_owns_record_table(collection: &CollectionConfig) -> bool {
     collection.collection_type != CollectionType::View
 }
@@ -1646,26 +1680,8 @@ impl Store {
     }
 
     pub fn get_collection(&self, name: &str) -> Result<CollectionConfig, ServerError> {
-        validate_collection_identifier(name)?;
         let conn = self.connection()?;
-        let schema_json = conn
-            .query_row(
-                &format!(
-                    r#"
-                    SELECT schema_json
-                    FROM "_rb_collections"
-                    WHERE name = ?1 OR {} = ?1
-                    LIMIT 1
-                    "#,
-                    collection_id_sql()
-                ),
-                params![name],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
-            .ok_or_else(|| ServerError::NotFound(format!("collection '{name}' not found")))?;
-
-        Ok(serde_json::from_str(&schema_json)?)
+        get_collection_with_connection(&conn, name)
     }
 
     pub fn get_collection_response(
@@ -1705,10 +1721,7 @@ impl Store {
 
     pub fn list_collections(&self) -> Result<Vec<CollectionConfig>, ServerError> {
         let conn = self.connection()?;
-        let mut stmt =
-            conn.prepare(r#"SELECT schema_json FROM "_rb_collections" ORDER BY name ASC"#)?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+        list_collections_with_connection(&conn)
     }
 
     pub fn list_collection_page(

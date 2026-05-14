@@ -1713,11 +1713,21 @@ impl Store {
         id: &str,
         context: FilterContext,
     ) -> Result<(), ServerError> {
-        self.delete_record_internal(collection_name, id, &context, &mut HashSet::new(), true)
+        self.with_savepoint("rb_delete_record_cascade", |conn| {
+            self.delete_record_internal(
+                conn,
+                collection_name,
+                id,
+                &context,
+                &mut HashSet::new(),
+                true,
+            )
+        })
     }
 
     pub(crate) fn delete_record_internal(
         &self,
+        conn: &Connection,
         collection_identifier: &str,
         id: &str,
         context: &FilterContext,
@@ -1725,7 +1735,7 @@ impl Store {
         enforce_rule: bool,
     ) -> Result<(), ServerError> {
         validate_record_id(id)?;
-        let collection = self.get_collection(collection_identifier)?;
+        let collection = get_collection_with_connection(conn, collection_identifier)?;
         if collection.collection_type == CollectionType::View {
             return Err(read_only_view_collection(&collection.name));
         }
@@ -1736,20 +1746,22 @@ impl Store {
             return Ok(());
         }
 
-        self.read_record(collection_name, id)?;
+        read_record_with_connection(conn, &collection, id)?;
         if enforce_rule && !is_superuser_context(context) {
-            self.enforce_existing_record_rule(
+            let allowed = self.existing_record_rule_allows_with_connection(
+                conn,
                 collection_name,
                 &collection,
                 collection.delete_rule.as_deref(),
                 id,
                 context.clone(),
-                "delete",
             )?;
+            if !allowed {
+                return Err(forbidden("delete", collection_name));
+            }
         }
 
         let table_sql = quote_identifier(&record_table_name(collection_name)?);
-        let conn = self.connection()?;
         let affected = conn.execute(
             &format!("DELETE FROM {table_sql} WHERE id = ?1"),
             params![id],
@@ -1779,11 +1791,12 @@ impl Store {
                 params![collection_name, id],
             )?;
         }
-        drop(conn);
 
-        let cascade_targets = self.cascade_delete_targets(collection_name, &collection_id, id)?;
+        let cascade_targets =
+            self.cascade_delete_targets_with_connection(conn, collection_name, &collection_id, id)?;
         for target in cascade_targets {
             self.delete_record_internal(
+                conn,
                 &target.collection_name,
                 &target.record_id,
                 context,
@@ -1795,14 +1808,14 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) fn cascade_delete_targets(
+    pub(crate) fn cascade_delete_targets_with_connection(
         &self,
+        conn: &Connection,
         source_collection_name: &str,
         source_collection_id: &str,
         source_record_id: &str,
     ) -> Result<Vec<CascadeDeleteTarget>, ServerError> {
-        let collections = self.list_collections()?;
-        let conn = self.connection()?;
+        let collections = list_collections_with_connection(conn)?;
         let mut targets = Vec::new();
         let mut seen = HashSet::new();
 
@@ -1989,17 +2002,8 @@ impl Store {
         validate_record_id(id)?;
 
         let collection = self.get_collection(collection_name)?;
-        let collection_name = collection.name.as_str();
-        let collection_id = record_collection_id(&collection);
-        let table_sql = quote_identifier(&record_table_name(collection_name)?);
         let conn = self.connection()?;
-        conn.query_row(
-            &format!("SELECT id, data, created, updated FROM {table_sql} WHERE id = ?1 LIMIT 1"),
-            params![id],
-            |row| row_to_record(collection_name, &collection_id, row),
-        )
-        .optional()?
-        .ok_or_else(|| ServerError::NotFound(format!("record '{id}' not found")))
+        read_record_with_connection(&conn, &collection, id)
     }
 
     pub(crate) fn record_exists(
@@ -2108,7 +2112,15 @@ impl Store {
         context: FilterContext,
         action: &str,
     ) -> Result<(), ServerError> {
-        if self.existing_record_rule_allows(collection_name, collection, rule, id, context)? {
+        let conn = self.connection()?;
+        if self.existing_record_rule_allows_with_connection(
+            &conn,
+            collection_name,
+            collection,
+            rule,
+            id,
+            context,
+        )? {
             Ok(())
         } else {
             Err(forbidden(action, collection_name))
@@ -2117,6 +2129,26 @@ impl Store {
 
     pub(crate) fn existing_record_rule_allows(
         &self,
+        collection_name: &str,
+        collection: &CollectionConfig,
+        rule: Option<&str>,
+        id: &str,
+        context: FilterContext,
+    ) -> Result<bool, ServerError> {
+        let conn = self.connection()?;
+        self.existing_record_rule_allows_with_connection(
+            &conn,
+            collection_name,
+            collection,
+            rule,
+            id,
+            context,
+        )
+    }
+
+    pub(crate) fn existing_record_rule_allows_with_connection(
+        &self,
+        conn: &Connection,
         collection_name: &str,
         collection: &CollectionConfig,
         rule: Option<&str>,
@@ -2141,7 +2173,6 @@ impl Store {
         let mut params = vec![SqlValue::Text(id.to_string())];
         params.extend(filter_params_to_sqlite(compiled.params)?);
 
-        let conn = self.connection()?;
         let allowed = conn
             .query_row(&sql, params_from_iter(params.iter()), |row| {
                 row.get::<_, i64>(0)
@@ -2151,4 +2182,22 @@ impl Store {
 
         Ok(allowed)
     }
+}
+
+pub(crate) fn read_record_with_connection(
+    conn: &Connection,
+    collection: &CollectionConfig,
+    id: &str,
+) -> Result<JsonValue, ServerError> {
+    validate_record_id(id)?;
+    let collection_name = collection.name.as_str();
+    let collection_id = record_collection_id(collection);
+    let table_sql = quote_identifier(&record_table_name(collection_name)?);
+    conn.query_row(
+        &format!("SELECT id, data, created, updated FROM {table_sql} WHERE id = ?1 LIMIT 1"),
+        params![id],
+        |row| row_to_record(collection_name, &collection_id, row),
+    )
+    .optional()?
+    .ok_or_else(|| ServerError::NotFound(format!("record '{id}' not found")))
 }

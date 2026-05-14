@@ -4175,6 +4175,68 @@ fn cascades_relation_deletes_for_configured_fields() {
 }
 
 #[test]
+fn cascade_delete_rolls_back_when_nested_delete_fails() {
+    let path = temp_db_path("cascade-rollback");
+    let store = Store::open(&path).unwrap();
+    store
+        .create_collection(CollectionConfig::new(
+            "posts",
+            [CollectionField::new("title", CollectionFieldKind::Text)],
+        ))
+        .unwrap();
+
+    let mut post_relation = CollectionField::relation("post", "posts");
+    post_relation.cascade_delete = true;
+    store
+        .create_collection(CollectionConfig::new(
+            "comments",
+            [
+                CollectionField::new("body", CollectionFieldKind::Text),
+                post_relation,
+            ],
+        ))
+        .unwrap();
+
+    store
+        .create_record("posts", json!({"id": "post_1", "title": "Keep me"}))
+        .unwrap();
+    store
+        .create_record(
+            "comments",
+            json!({"id": "comment_1", "body": "Keep me too", "post": "post_1"}),
+        )
+        .unwrap();
+
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TRIGGER fail_comment_delete
+            BEFORE DELETE ON "_rb_records_comments"
+            WHEN OLD.id = 'comment_1'
+            BEGIN
+                SELECT RAISE(ABORT, 'cascade child delete failed');
+            END;
+            "#,
+        )
+        .unwrap();
+    }
+
+    let err = store.delete_record("posts", "post_1").unwrap_err();
+    assert!(err.to_string().contains("cascade child delete failed"));
+
+    let posts = store.list_records("posts", ListOptions::default()).unwrap();
+    assert_eq!(posts.total_items, 1);
+    assert_eq!(posts.items[0]["id"], "post_1");
+
+    let comments = store
+        .list_records("comments", ListOptions::default())
+        .unwrap();
+    assert_eq!(comments.total_items, 1);
+    assert_eq!(comments.items[0]["id"], "comment_1");
+}
+
+#[test]
 fn relation_cascade_delete_handles_cycles() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 

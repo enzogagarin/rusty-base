@@ -359,8 +359,8 @@ The first server slice supports:
   the final record state on updates;
 - PocketBase-style record value modifiers for number add/subtract and
   multi-select/relation append, prepend, and remove operations;
-- relation `cascadeDelete` support for deleting dependent records when their
-  referenced target record is deleted;
+- relation `cascadeDelete` support for deleting dependent records atomically
+  when their referenced target record is deleted;
 - `GET /api/collections/meta/scaffolds` for PocketBase-style collection type
   scaffolds;
 - `GET /api/collections/meta/export` as a Rusty Base import-ready metadata
