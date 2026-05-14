@@ -512,6 +512,36 @@ pub(crate) fn statement_column_names(stmt: &rusqlite::Statement<'_>) -> Vec<Stri
         .collect()
 }
 
+pub(crate) fn validate_view_column_names(column_names: &[String]) -> Result<(), ServerError> {
+    let mut seen = HashSet::new();
+    for name in column_names {
+        if !is_safe_identifier_part(name) {
+            return Err(ServerError::BadRequest(format!(
+                "viewQuery returned invalid column name '{name}'"
+            )));
+        }
+        if is_reserved_view_column_name(name) {
+            return Err(ServerError::BadRequest(format!(
+                "viewQuery cannot return reserved column '{name}'"
+            )));
+        }
+        if !seen.insert(name.to_ascii_lowercase()) {
+            return Err(ServerError::BadRequest(format!(
+                "viewQuery returned duplicate column '{name}'"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn is_reserved_view_column_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "collectionid" | "collectionname" | "expand"
+    )
+}
+
 pub(crate) fn view_row_to_record(
     collection_name: &str,
     collection_id: &str,
@@ -1264,6 +1294,7 @@ impl Store {
         with_view_query_authorizer(&conn, || {
             let mut stmt = conn.prepare(&sql)?;
             let column_names = statement_column_names(&stmt);
+            validate_view_column_names(&column_names)?;
             let mut rows = stmt.query(params_from_iter(params.iter()))?;
             if let Some(row) = rows.next()? {
                 view_row_to_record(collection_name, &collection_id, &column_names, row)
@@ -1315,6 +1346,7 @@ impl Store {
 
                 let mut stmt = conn.prepare(&list_sql)?;
                 let column_names = statement_column_names(&stmt);
+                validate_view_column_names(&column_names)?;
                 let mut rows = stmt.query(params_from_iter(list_params.iter()))?;
                 let mut items = Vec::new();
                 while let Some(row) = rows.next()? {

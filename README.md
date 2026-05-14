@@ -375,7 +375,7 @@ The first server slice supports:
 - first read-only `view` collection MVP with persisted `viewQuery`, list/view
   records backed by a single SELECT query, filter/sort support through the Rust
   filter engine, rejected record mutations, an internal-table denylist, and a
-  SQLite authorizer plus progress guard for bounded view query execution;
+  SQLite authorizer plus progress/column guard for bounded view query execution;
 - `GET/PATCH /api/collections/:collection`, including safe metadata updates
   and record table renames;
 - `DELETE /api/collections/:collection` and

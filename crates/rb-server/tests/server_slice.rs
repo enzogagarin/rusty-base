@@ -5663,6 +5663,49 @@ fn supports_read_only_view_collection_queries() {
         .unwrap()
         .contains("viewQuery"));
 
+    for (name, query, expected_message) in [
+        (
+            "duplicate_view_columns",
+            r#"SELECT id, id AS id FROM "_rb_records_posts""#,
+            "invalid column name",
+        ),
+        (
+            "reserved_view_collection_name",
+            r#"SELECT id, 'spoof' AS collectionName FROM "_rb_records_posts""#,
+            "reserved column",
+        ),
+        (
+            "reserved_view_expand",
+            r#"SELECT id, '{}' AS expand FROM "_rb_records_posts""#,
+            "reserved column",
+        ),
+    ] {
+        let created = app.handle(
+            HttpRequest::json(
+                "POST",
+                "/api/collections",
+                json!({
+                    "name": name,
+                    "type": "view",
+                    "viewQuery": query,
+                    "fields": []
+                }),
+            )
+            .unwrap(),
+        );
+        assert_eq!(created.status, 200);
+
+        let listed = app.handle(HttpRequest::new(
+            "GET",
+            format!("/api/collections/{name}/records"),
+        ));
+        assert_eq!(listed.status, 400);
+        assert!(listed.body["message"]
+            .as_str()
+            .unwrap()
+            .contains(expected_message));
+    }
+
     let delete_view = app.handle(HttpRequest::new(
         "DELETE",
         "/api/collections/published_posts",

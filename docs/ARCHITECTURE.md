@@ -147,7 +147,8 @@ Responsibility:
   and SQLite catalog/pragma sources. View execution also installs a SQLite
   authorizer that allows normal SELECT reads but denies writes, DDL, selected
   unsafe functions, and non-record Rusty Base internal table reads, plus a
-  progress handler that interrupts expensive view queries.
+  progress handler that interrupts expensive view queries and a result-column
+  guard for duplicate, unsafe, or server-owned names.
 - record PocketBase compatibility expectations in `fixtures/pocketbase/*.json`
   as data: input filter, expected SQL, expected params, allowed/denied behavior,
   and a short PocketBase behavior note;

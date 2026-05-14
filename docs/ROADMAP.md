@@ -336,6 +336,8 @@ Exit criteria:
   functions, or non-record internal table reads.
 - Added a SQLite progress guard around view collection execution so expensive
   SELECTs are interrupted and surfaced as bounded `viewQuery` errors.
+- Added view result-column guards and fixture coverage for duplicate/collision
+  columns and server-owned names like `collectionName` and `expand`.
 
 ## Next Sprint
 
