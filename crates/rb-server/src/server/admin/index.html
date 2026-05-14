@@ -531,6 +531,21 @@
       font-weight: 700;
     }
 
+    .record-file-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .record-file-list code {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--muted);
+      padding: 3px 6px;
+      font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
     .validation-summary {
       display: grid;
       gap: 6px;
@@ -1334,6 +1349,11 @@
           syncRecordFieldFromInput(input);
         });
       });
+      document.querySelectorAll("[data-record-file]").forEach((input) => {
+        input.addEventListener("change", () => {
+          clearRecordFieldValidationFeedback(input);
+        });
+      });
     }
 
     function recordBrowserControlsHtml() {
@@ -1534,10 +1554,14 @@
       }
 
       if (type === "file") {
+        const accept = Array.isArray(field.mimeTypes) && field.mimeTypes.length
+          ? ` accept="${escapeAttribute(field.mimeTypes.join(","))}"`
+          : "";
         return `
           <div class="${fieldClass}">
             ${label}
-            <input disabled value="Use multipart upload API">
+            ${recordFileValueHtml(value)}
+            <input id="${inputId}" data-record-file="${escapeAttribute(name)}" type="file"${recordFieldIsMulti(field) ? " multiple" : ""}${accept}>
             ${fieldError}
           </div>
         `;
@@ -1592,6 +1616,22 @@
         return "Invalid value";
       }
       return detail.message || detail.code || "Invalid value";
+    }
+
+    function recordFileValueHtml(value) {
+      const names = Array.isArray(value)
+        ? value
+        : value
+          ? [value]
+          : [];
+      if (!names.length) {
+        return `<span class="muted">-</span>`;
+      }
+      return `
+        <div class="record-file-list">
+          ${names.map((name) => `<code>${escapeHtml(name)}</code>`).join("")}
+        </div>
+      `;
     }
 
     function recordEditorDraft() {
@@ -1713,11 +1753,12 @@
       }
 
       try {
-        if (state.editorMode === "edit") {
-          await jsonApi(recordPath(collection.name, state.editorRecordId), payload, "PATCH");
-        } else {
-          await jsonApi(collectionRecordsPath(collection.name), payload, "POST");
-        }
+        const uploads = recordEditorFileUploads();
+        const method = state.editorMode === "edit" ? "PATCH" : "POST";
+        const path = state.editorMode === "edit"
+          ? recordPath(collection.name, state.editorRecordId)
+          : collectionRecordsPath(collection.name);
+        await saveRecordPayload(collection, path, payload, uploads, method);
         closeRecordEditor();
         status("Saved");
         await loadRecords(true);
@@ -1728,6 +1769,90 @@
         state.editorValidation = validationDataFromError(error);
         render();
       }
+    }
+
+    async function saveRecordPayload(collection, path, payload, uploads, method) {
+      if (!uploads.length) {
+        await jsonApi(path, payload, method);
+        return;
+      }
+
+      await api(path, {
+        method,
+        body: recordFormDataPayload(collection, payload, uploads)
+      });
+    }
+
+    function recordEditorFileUploads() {
+      const uploads = [];
+      document.querySelectorAll("[data-record-file]").forEach((input) => {
+        Array.from(input.files || []).forEach((file) => {
+          if (file && input.dataset.recordFile) {
+            uploads.push({ fieldName: input.dataset.recordFile, file });
+          }
+        });
+      });
+      return uploads;
+    }
+
+    function recordFormDataPayload(collection, payload, uploads) {
+      const form = new FormData();
+      const uploadedFields = new Set(uploads.map((upload) => upload.fieldName));
+      const fileFields = new Set(userCollectionFields(collection)
+        .filter((field) => (field.type || field.kind) === "file")
+        .map((field) => field.name));
+
+      Object.entries(payload).forEach(([name, value]) => {
+        if (uploadedFields.has(name) && fileFields.has(name)) {
+          return;
+        }
+        appendRecordFormValue(form, collection, name, value);
+      });
+      uploads.forEach((upload) => {
+        form.append(upload.fieldName, upload.file, upload.file.name);
+      });
+      return form;
+    }
+
+    function appendRecordFormValue(form, collection, name, value) {
+      if (value === undefined) {
+        return;
+      }
+
+      const field = userCollectionFields(collection).find((item) => item.name === name);
+      const type = field ? (field.type || field.kind || "text") : "";
+      if (type === "file") {
+        return;
+      }
+      if (type === "relation" && recordFieldIsMulti(field) && Array.isArray(value)) {
+        value.forEach((item) => form.append(name, String(item)));
+        return;
+      }
+      if (name.endsWith("-") && Array.isArray(value)) {
+        value.forEach((item) => form.append(name, String(item)));
+        return;
+      }
+      if ((type === "json" || type === "array" || type === "geoPoint") && value != null) {
+        form.append(name, JSON.stringify(value));
+        return;
+      }
+      if (type === "select" && recordFieldIsMulti(field) && value != null) {
+        form.append(name, JSON.stringify(value));
+        return;
+      }
+      if (typeof value === "boolean") {
+        form.append(name, value ? "true" : "false");
+        return;
+      }
+      if (typeof value === "number") {
+        form.append(name, String(value));
+        return;
+      }
+      if (value == null) {
+        form.append(name, "");
+        return;
+      }
+      form.append(name, typeof value === "string" ? value : JSON.stringify(value));
     }
 
     function validationDataFromError(error) {
@@ -1756,7 +1881,7 @@
     }
 
     function clearRecordFieldValidationFeedback(input) {
-      const fieldName = input.dataset.recordField;
+      const fieldName = input.dataset.recordField || input.dataset.recordFile;
       if (!fieldName || !state.editorValidation[fieldName]) {
         return;
       }
