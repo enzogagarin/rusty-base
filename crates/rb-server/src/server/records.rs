@@ -859,12 +859,44 @@ pub(crate) fn view_record_id(value: &JsonValue) -> Option<String> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ViewQueryLimits {
+    timeout: Duration,
+    progress_ops: i32,
+    max_progress_callbacks: u64,
+}
+
+const DEFAULT_VIEW_QUERY_LIMITS: ViewQueryLimits = ViewQueryLimits {
+    timeout: Duration::from_secs(2),
+    progress_ops: 10_000,
+    max_progress_callbacks: 20_000,
+};
+
 fn with_view_query_authorizer<T>(
     conn: &Connection,
     work: impl FnOnce() -> Result<T, ServerError>,
 ) -> Result<T, ServerError> {
+    with_view_query_guard(conn, DEFAULT_VIEW_QUERY_LIMITS, work)
+}
+
+fn with_view_query_guard<T>(
+    conn: &Connection,
+    limits: ViewQueryLimits,
+    work: impl FnOnce() -> Result<T, ServerError>,
+) -> Result<T, ServerError> {
     conn.authorizer(Some(view_query_authorizer));
+    let started = Instant::now();
+    let mut progress_callbacks = 0_u64;
+    conn.progress_handler(
+        limits.progress_ops,
+        Some(move || {
+            progress_callbacks = progress_callbacks.saturating_add(1);
+            started.elapsed() >= limits.timeout
+                || progress_callbacks > limits.max_progress_callbacks
+        }),
+    );
     let result = work().map_err(map_view_query_authorizer_error);
+    conn.progress_handler(0, None::<fn() -> bool>);
     conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
     result
 }
@@ -899,6 +931,11 @@ fn is_denied_view_query_function(function_name: &str) -> bool {
 
 fn map_view_query_authorizer_error(err: ServerError) -> ServerError {
     match err {
+        ServerError::Storage(err)
+            if err.sqlite_error_code() == Some(ErrorCode::OperationInterrupted) =>
+        {
+            ServerError::BadRequest("viewQuery exceeded execution limits".to_string())
+        }
         ServerError::Storage(err)
             if err.sqlite_error_code() == Some(ErrorCode::AuthorizationForStatementDenied)
                 || err
@@ -961,6 +998,37 @@ mod tests {
         assert_eq!(view_query_authorizer(internal_read), Authorization::Deny);
         assert_eq!(view_query_authorizer(write), Authorization::Deny);
         assert_eq!(view_query_authorizer(unsafe_function), Authorization::Deny);
+    }
+
+    #[test]
+    fn view_query_progress_guard_interrupts_expensive_queries() {
+        let conn = Connection::open_in_memory().unwrap();
+        let limits = ViewQueryLimits {
+            timeout: Duration::from_secs(60),
+            progress_ops: 1,
+            max_progress_callbacks: 0,
+        };
+
+        let err = with_view_query_guard(&conn, limits, || {
+            conn.query_row(
+                r#"
+                WITH RECURSIVE numbers(value) AS (
+                    SELECT 1
+                    UNION ALL
+                    SELECT value + 1 FROM numbers WHERE value < 1000
+                )
+                SELECT sum(value) FROM numbers
+                "#,
+                [],
+                |row| row.get::<_, i64>(0),
+            )?;
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert_eq!(err.to_string(), "viewQuery exceeded execution limits");
+        let value: i64 = conn.query_row("SELECT 1", [], |row| row.get(0)).unwrap();
+        assert_eq!(value, 1);
     }
 }
 

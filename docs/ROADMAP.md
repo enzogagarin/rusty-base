@@ -332,6 +332,8 @@ Exit criteria:
 - Added a SQLite authorizer guard around view collection execution so view
   queries can perform normal SELECT reads but cannot perform writes, DDL, unsafe
   functions, or non-record internal table reads.
+- Added a SQLite progress guard around view collection execution so expensive
+  SELECTs are interrupted and surfaced as bounded `viewQuery` errors.
 
 ## Next Sprint
 

@@ -145,7 +145,8 @@ Responsibility:
   single SELECT shape and denies direct references to sensitive internal tables
   and SQLite catalog/pragma sources. View execution also installs a SQLite
   authorizer that allows normal SELECT reads but denies writes, DDL, selected
-  unsafe functions, and non-record Rusty Base internal table reads.
+  unsafe functions, and non-record Rusty Base internal table reads, plus a
+  progress handler that interrupts expensive view queries.
 - record PocketBase compatibility expectations in `fixtures/pocketbase/*.json`
   as data: input filter, expected SQL, expected params, allowed/denied behavior,
   and a short PocketBase behavior note;
