@@ -12,6 +12,11 @@ export function recordPath(collectionName, id) {
   return `${collectionRecordsPath(collectionName)}/${encodeURIComponent(id)}`;
 }
 
+export function normalizedRecordPerPage(value) {
+  const perPage = Number(value) || 20;
+  return [10, 20, 50, 100].includes(perPage) ? perPage : 20;
+}
+
 export function userCollectionFields(collection) {
   if (!collection || !Array.isArray(collection.fields)) {
     return [];

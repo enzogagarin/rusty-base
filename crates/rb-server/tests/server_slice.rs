@@ -155,6 +155,11 @@ fn serves_embedded_admin_ui_shell() {
     );
     let collections_ui_js = String::from_utf8(collections_ui_js.raw_body).unwrap();
 
+    let records_ui_js = app.handle(HttpRequest::new("GET", "/_/admin/records_ui.js"));
+    assert_eq!(records_ui_js.status, 200);
+    assert_eq!(records_ui_js.content_type, "text/javascript; charset=utf-8");
+    let records_ui_js = String::from_utf8(records_ui_js.raw_body).unwrap();
+
     let render_helpers_js = app.handle(HttpRequest::new("GET", "/_/admin/render_helpers.js"));
     assert_eq!(render_helpers_js.status, 200);
     assert_eq!(
@@ -172,7 +177,7 @@ fn serves_embedded_admin_ui_shell() {
     let data_helpers_js = String::from_utf8(data_helpers_js.raw_body).unwrap();
 
     let js_bundle =
-        format!("{js}\n{state_js}\n{collections_ui_js}\n{render_helpers_js}\n{data_helpers_js}");
+        format!("{js}\n{state_js}\n{collections_ui_js}\n{records_ui_js}\n{render_helpers_js}\n{data_helpers_js}");
     assert!(js_bundle.contains("/api/health"));
     assert!(js_bundle.contains("/api/collections/_superusers/auth-with-password"));
     assert!(js_bundle.contains("/api/collections?fields="));

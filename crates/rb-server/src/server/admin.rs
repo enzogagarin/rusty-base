@@ -4,6 +4,7 @@ const ADMIN_APP_JS: &str = include_str!("admin/app.js");
 const ADMIN_COLLECTIONS_UI_JS: &str = include_str!("admin/collections_ui.js");
 const ADMIN_DATA_HELPERS_JS: &str = include_str!("admin/data_helpers.js");
 const ADMIN_INDEX_HTML: &str = include_str!("admin/index.html");
+const ADMIN_RECORDS_UI_JS: &str = include_str!("admin/records_ui.js");
 const ADMIN_RENDER_HELPERS_JS: &str = include_str!("admin/render_helpers.js");
 const ADMIN_STATE_JS: &str = include_str!("admin/state.js");
 const ADMIN_STYLES_CSS: &str = include_str!("admin/styles.css");
@@ -35,6 +36,11 @@ pub(crate) fn admin_asset_response(asset: &str) -> Option<HttpResponse> {
             200,
             "text/javascript; charset=utf-8",
             ADMIN_DATA_HELPERS_JS.as_bytes().to_vec(),
+        )),
+        "records_ui.js" => Some(admin_response(
+            200,
+            "text/javascript; charset=utf-8",
+            ADMIN_RECORDS_UI_JS.as_bytes().to_vec(),
         )),
         "render_helpers.js" => Some(admin_response(
             200,
