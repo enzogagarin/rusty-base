@@ -195,6 +195,12 @@ Run the local filter-engine benchmark smoke:
 cargo run -p rb-filter-engine --example bench_filter --release
 ```
 
+Run the local server benchmark smoke:
+
+```bash
+cargo run -p rb-server --example bench_server --release
+```
+
 Build a local executable:
 
 ```bash
@@ -486,8 +492,8 @@ Not implemented yet:
 - admin UI;
 - Go FFI bindings;
 - full `cargo-fuzz` corpus and CI fuzz target;
-- full Criterion benchmark suite beyond the current lightweight filter-engine
-  benchmark example.
+- full Criterion benchmark suite beyond the current lightweight benchmark
+  examples.
 
 Those gaps are deliberate. This repo will grow through verified steps, not hand-wavy rewrites.
 
