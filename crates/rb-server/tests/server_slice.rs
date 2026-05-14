@@ -137,6 +137,11 @@ fn serves_embedded_admin_ui_shell() {
         assert!(html.contains("syncRecordFieldFromInput"));
         assert!(html.contains("recordFieldValuePreview"));
         assert!(html.contains("Fix record JSON before using field inputs"));
+        assert!(html.contains("recordValidationSummaryHtml"));
+        assert!(html.contains("validationDataFromError"));
+        assert!(html.contains("field-error"));
+        assert!(html.contains("clearRecordValidationFeedback"));
+        assert!(html.contains("error.body"));
         assert!(html.contains("Initialized and logged in"));
         assert!(html.contains(r#""PATCH""#));
         assert!(html.contains(r#"method: "DELETE""#));

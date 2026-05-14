@@ -519,6 +519,33 @@
       font-weight: 700;
     }
 
+    .field.has-error input,
+    .field.has-error select,
+    .field.has-error textarea {
+      border-color: var(--warn);
+    }
+
+    .field-error {
+      color: var(--warn);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .validation-summary {
+      display: grid;
+      gap: 6px;
+      border: 1px solid #d8b7aa;
+      border-radius: 8px;
+      background: #fff6f1;
+      color: var(--warn);
+      padding: 10px 12px;
+    }
+
+    .validation-summary ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+
     @media (max-width: 780px) {
       .shell {
         grid-template-columns: 1fr;
@@ -617,6 +644,7 @@
       editorRecordId: "",
       editorText: "",
       editorError: "",
+      editorValidation: {},
       collectionEditorOpen: false,
       collectionEditorMode: "",
       collectionEditorName: "",
@@ -651,7 +679,10 @@
       }
       if (!response.ok) {
         const message = body && body.message ? body.message : `${response.status}`;
-        throw new Error(message);
+        const error = new Error(message);
+        error.status = response.status;
+        error.body = body;
+        throw error;
       }
       return body;
     }
@@ -1294,6 +1325,7 @@
       if (jsonInput) {
         jsonInput.addEventListener("input", () => {
           state.editorText = jsonInput.value;
+          clearRecordValidationFeedback();
         });
       }
       document.querySelectorAll("[data-record-field]").forEach((input) => {
@@ -1412,6 +1444,7 @@
         <div class="record-editor">
           <h2>${escapeHtml(title)}</h2>
           ${state.editorError ? `<div class="error">${escapeHtml(state.editorError)}</div>` : ""}
+          ${recordValidationSummaryHtml(collection)}
           ${recordFieldFormHtml(collection, draft)}
           <textarea id="record-json-input" spellcheck="false">${escapeHtml(state.editorText)}</textarea>
           <div class="editor-actions">
@@ -1456,6 +1489,9 @@
       const type = field.type || field.kind || "text";
       const inputId = `record-field-${index}`;
       const common = `id="${inputId}" data-record-field="${escapeAttribute(name)}" data-record-type="${escapeAttribute(type)}" data-record-multi="${recordFieldIsMulti(field) ? "true" : "false"}"`;
+      const validation = recordFieldValidation(name);
+      const fieldClass = validation ? "field has-error" : "field";
+      const fieldError = validation ? `<div class="field-error">${escapeHtml(recordValidationMessage(validation))}</div>` : "";
       const label = `
         <label for="${inputId}">
           <span>${escapeHtml(name)}</span>
@@ -1466,18 +1502,20 @@
 
       if (type === "bool") {
         return `
-          <div class="field">
+          <div class="${fieldClass}">
             ${label}
             <label class="check-field"><input ${common} type="checkbox" ${value === true ? "checked" : ""}>true</label>
+            ${fieldError}
           </div>
         `;
       }
 
       if (type === "editor" || type === "json") {
         return `
-          <div class="field">
+          <div class="${fieldClass}">
             ${label}
             <textarea ${common} spellcheck="false">${escapeHtml(recordFieldInputDisplayValue(value))}</textarea>
+            ${fieldError}
           </div>
         `;
       }
@@ -1487,18 +1525,20 @@
           <option value="${escapeAttribute(option)}" ${String(value ?? "") === String(option) ? "selected" : ""}>${escapeHtml(option)}</option>
         `)).join("");
         return `
-          <div class="field">
+          <div class="${fieldClass}">
             ${label}
             <select ${common}>${options}</select>
+            ${fieldError}
           </div>
         `;
       }
 
       if (type === "file") {
         return `
-          <div class="field">
+          <div class="${fieldClass}">
             ${label}
             <input disabled value="Use multipart upload API">
+            ${fieldError}
           </div>
         `;
       }
@@ -1510,11 +1550,48 @@
           ? "record id"
           : "";
       return `
-        <div class="field">
+        <div class="${fieldClass}">
           ${label}
           <input ${common} type="${inputType}" value="${escapeAttribute(recordFieldInputDisplayValue(value))}" placeholder="${escapeAttribute(placeholder)}">
+          ${fieldError}
         </div>
       `;
+    }
+
+    function recordValidationSummaryHtml(collection) {
+      const data = recordEditorValidationData();
+      const fieldNames = new Set(userCollectionFields(collection).map((field) => field.name));
+      const entries = Object.entries(data).filter(([name]) => !fieldNames.has(name));
+      if (!entries.length) {
+        return "";
+      }
+
+      return `
+        <div class="validation-summary" id="record-validation-summary">
+          <strong>Validation details</strong>
+          <ul>
+            ${entries.map(([name, detail]) => `<li><code>${escapeHtml(name)}</code>: ${escapeHtml(recordValidationMessage(detail))}</li>`).join("")}
+          </ul>
+        </div>
+      `;
+    }
+
+    function recordFieldValidation(name) {
+      const data = recordEditorValidationData();
+      const detail = data[name];
+      return detail && typeof detail === "object" && !Array.isArray(detail) ? detail : null;
+    }
+
+    function recordEditorValidationData() {
+      const data = state.editorValidation;
+      return data && typeof data === "object" && !Array.isArray(data) ? data : {};
+    }
+
+    function recordValidationMessage(detail) {
+      if (!detail || typeof detail !== "object") {
+        return "Invalid value";
+      }
+      return detail.message || detail.code || "Invalid value";
     }
 
     function recordEditorDraft() {
@@ -1530,18 +1607,21 @@
       state.editorRecordId = "";
       state.editorText = "{}";
       state.editorError = "";
+      state.editorValidation = {};
     }
 
     function openEditEditor(id) {
       const record = state.records.find((item) => item.id === id);
       if (!record) {
         state.editorError = "Record not found";
+        state.editorValidation = {};
         return;
       }
       state.editorMode = "edit";
       state.editorRecordId = id;
       state.editorText = JSON.stringify(editableRecordPayload(record), null, 2);
       state.editorError = "";
+      state.editorValidation = {};
     }
 
     function closeRecordEditor() {
@@ -1549,6 +1629,7 @@
       state.editorRecordId = "";
       state.editorText = "";
       state.editorError = "";
+      state.editorValidation = {};
     }
 
     function readRecordEditorPayload() {
@@ -1583,7 +1664,7 @@
       if (jsonInput) {
         jsonInput.value = state.editorText;
       }
-      state.editorError = "";
+      clearRecordFieldValidationFeedback(input);
     }
 
     function recordFieldInputValue(input) {
@@ -1626,6 +1707,7 @@
       } catch (error) {
         state.editorText = input.value;
         state.editorError = error.message;
+        state.editorValidation = {};
         render();
         return;
       }
@@ -1643,7 +1725,57 @@
       } catch (error) {
         state.editorText = input.value;
         state.editorError = error.message;
+        state.editorValidation = validationDataFromError(error);
         render();
+      }
+    }
+
+    function validationDataFromError(error) {
+      const body = error && error.body;
+      const data = body && body.data;
+      return data && typeof data === "object" && !Array.isArray(data) ? data : {};
+    }
+
+    function clearRecordValidationFeedback() {
+      state.editorError = "";
+      state.editorValidation = {};
+      const summary = $("record-validation-summary");
+      if (summary) {
+        summary.remove();
+      }
+      const editorError = document.querySelector(".record-editor > .error");
+      if (editorError) {
+        editorError.remove();
+      }
+      document.querySelectorAll(".field.has-error").forEach((field) => {
+        field.classList.remove("has-error");
+      });
+      document.querySelectorAll(".field-error").forEach((fieldError) => {
+        fieldError.remove();
+      });
+    }
+
+    function clearRecordFieldValidationFeedback(input) {
+      const fieldName = input.dataset.recordField;
+      if (!fieldName || !state.editorValidation[fieldName]) {
+        return;
+      }
+
+      delete state.editorValidation[fieldName];
+      const field = input.closest(".field");
+      if (field) {
+        field.classList.remove("has-error");
+        const fieldError = field.querySelector(".field-error");
+        if (fieldError) {
+          fieldError.remove();
+        }
+      }
+      if (!Object.keys(recordEditorValidationData()).length) {
+        const editorError = document.querySelector(".record-editor > .error");
+        if (editorError) {
+          editorError.remove();
+        }
+        state.editorError = "";
       }
     }
 
