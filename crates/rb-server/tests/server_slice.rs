@@ -160,6 +160,47 @@ fn serves_embedded_admin_ui_shell() {
     assert_eq!(records_ui_js.content_type, "text/javascript; charset=utf-8");
     let records_ui_js = String::from_utf8(records_ui_js.raw_body).unwrap();
 
+    let records_browser_js = app.handle(HttpRequest::new("GET", "/_/admin/records/browser.js"));
+    assert_eq!(records_browser_js.status, 200);
+    assert_eq!(
+        records_browser_js.content_type,
+        "text/javascript; charset=utf-8"
+    );
+    let records_browser_js = String::from_utf8(records_browser_js.raw_body).unwrap();
+
+    let records_editor_js = app.handle(HttpRequest::new("GET", "/_/admin/records/editor.js"));
+    assert_eq!(records_editor_js.status, 200);
+    assert_eq!(
+        records_editor_js.content_type,
+        "text/javascript; charset=utf-8"
+    );
+    let records_editor_js = String::from_utf8(records_editor_js.raw_body).unwrap();
+
+    let records_files_js = app.handle(HttpRequest::new("GET", "/_/admin/records/files.js"));
+    assert_eq!(records_files_js.status, 200);
+    assert_eq!(
+        records_files_js.content_type,
+        "text/javascript; charset=utf-8"
+    );
+    let records_files_js = String::from_utf8(records_files_js.raw_body).unwrap();
+
+    let records_relations_js = app.handle(HttpRequest::new("GET", "/_/admin/records/relations.js"));
+    assert_eq!(records_relations_js.status, 200);
+    assert_eq!(
+        records_relations_js.content_type,
+        "text/javascript; charset=utf-8"
+    );
+    let records_relations_js = String::from_utf8(records_relations_js.raw_body).unwrap();
+
+    let records_validation_js =
+        app.handle(HttpRequest::new("GET", "/_/admin/records/validation.js"));
+    assert_eq!(records_validation_js.status, 200);
+    assert_eq!(
+        records_validation_js.content_type,
+        "text/javascript; charset=utf-8"
+    );
+    let records_validation_js = String::from_utf8(records_validation_js.raw_body).unwrap();
+
     let render_helpers_js = app.handle(HttpRequest::new("GET", "/_/admin/render_helpers.js"));
     assert_eq!(render_helpers_js.status, 200);
     assert_eq!(
@@ -176,8 +217,9 @@ fn serves_embedded_admin_ui_shell() {
     );
     let data_helpers_js = String::from_utf8(data_helpers_js.raw_body).unwrap();
 
-    let js_bundle =
-        format!("{js}\n{state_js}\n{collections_ui_js}\n{records_ui_js}\n{render_helpers_js}\n{data_helpers_js}");
+    let js_bundle = format!(
+        "{js}\n{state_js}\n{collections_ui_js}\n{records_ui_js}\n{records_browser_js}\n{records_editor_js}\n{records_files_js}\n{records_relations_js}\n{records_validation_js}\n{render_helpers_js}\n{data_helpers_js}"
+    );
     assert!(js_bundle.contains("/api/health"));
     assert!(js_bundle.contains("/api/collections/_superusers/auth-with-password"));
     assert!(js_bundle.contains("/api/collections?fields="));
@@ -265,6 +307,8 @@ fn serves_embedded_admin_ui_shell() {
 
     let missing_asset = app.handle(HttpRequest::new("GET", "/_/admin/missing.js"));
     assert_eq!(missing_asset.status, 404);
+    let missing_nested_asset = app.handle(HttpRequest::new("GET", "/_/admin/records/missing.js"));
+    assert_eq!(missing_nested_asset.status, 404);
 
     let health = app.handle(HttpRequest::new("GET", "/api/health"));
     assert_eq!(health.status, 200);
