@@ -140,6 +140,11 @@ Responsibility:
 - support a first read-only `view` collection path with persisted `viewQuery`,
   list/view records from a single SELECT query, and filter/sort predicates
   compiled by the Rust filter engine against view columns;
+- keep `viewQuery` deliberately conservative: current validation accepts only a
+  single SELECT shape and denies direct references to sensitive internal tables
+  (`_rb_auth_tokens`, `_rb_settings`, `_rb_files`, `_rb_auth_action_tokens`).
+  This is not a complete SQL sandbox; a future SQLite authorizer hook should
+  enforce table-level access at execution time.
 - expand first-level and nested relation records into the PocketBase-style
   `expand` response object;
 - project record, auth, and expanded relation responses with first-pass

@@ -5289,6 +5289,45 @@ fn supports_read_only_view_collection_queries() {
     );
     assert_eq!(invalid_view.status, 400);
 
+    for (name, table, query) in [
+        (
+            "bad_auth_tokens_view",
+            "_rb_auth_tokens",
+            r#"SELECT token AS id FROM "_rb_auth_tokens""#,
+        ),
+        (
+            "bad_settings_view",
+            "_rb_settings",
+            r#"SELECT key AS id FROM _rb_settings"#,
+        ),
+        (
+            "bad_files_view",
+            "_rb_files",
+            r#"SELECT filename AS id FROM [_rb_files]"#,
+        ),
+        (
+            "bad_auth_action_tokens_view",
+            "_rb_auth_action_tokens",
+            r#"SELECT token AS id FROM `_rb_auth_action_tokens`"#,
+        ),
+    ] {
+        let denied = app.handle(
+            HttpRequest::json(
+                "POST",
+                "/api/collections",
+                json!({
+                    "name": name,
+                    "type": "view",
+                    "viewQuery": query,
+                    "fields": []
+                }),
+            )
+            .unwrap(),
+        );
+        assert_eq!(denied.status, 400, "{table} should be denied");
+        assert!(denied.body["message"].as_str().unwrap().contains(table));
+    }
+
     let delete_view = app.handle(HttpRequest::new(
         "DELETE",
         "/api/collections/published_posts",

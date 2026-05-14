@@ -358,7 +358,9 @@ The first server slice supports:
   record tables is intentionally left for a dedicated storage pass;
 - first read-only `view` collection MVP with persisted `viewQuery`, list/view
   records backed by a single SELECT query, filter/sort support through the Rust
-  filter engine, and rejected record mutations;
+  filter engine, rejected record mutations, and an internal-table denylist for
+  `_rb_auth_tokens`, `_rb_settings`, `_rb_files`, and
+  `_rb_auth_action_tokens`;
 - `GET/PATCH /api/collections/:collection`, including safe metadata updates
   and record table renames;
 - `DELETE /api/collections/:collection` and

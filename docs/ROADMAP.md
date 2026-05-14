@@ -309,6 +309,10 @@ Exit criteria:
 - Split auth internals into password, token, action-token, OAuth2, OTP,
   superuser, and impersonation modules while preserving the existing public
   `rb-server` re-export surface.
+- Hardened the first `viewQuery` validation pass with an internal-table denylist
+  for auth tokens, auth action tokens, settings, and stored files, and documented
+  that a future SQLite authorizer hook is still needed for table-level execution
+  safety.
 
 ## Next Sprint
 
@@ -316,7 +320,7 @@ Exit criteria:
    bool/number/text/email/url/editor/date/autodate/geoPoint/select/json/
    relation/file subset.
 2. Harden view collection compatibility around field inference, relation expand
-   edge cases, and safer query planning.
+   edge cases, and SQLite-authorizer-backed query execution safety.
 3. Design safe SQLite index execution for JSON-backed record tables instead of
    running raw PocketBase index SQL strings directly.
 4. Expand OAuth2 provider presets and harden callback validation around
