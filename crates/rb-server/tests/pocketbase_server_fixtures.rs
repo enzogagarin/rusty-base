@@ -112,6 +112,16 @@ fn pocketbase_realtime_fixture_matches_http_behavior() {
     assert_fixture_outcomes(&fixture, outcomes);
 }
 
+#[test]
+fn pocketbase_batch_fixture_matches_http_behavior() {
+    let fixture = load_server_fixture("batch");
+    assert_eq!(fixture.area, "batch");
+
+    let outcomes = run_batch_fixture();
+
+    assert_fixture_outcomes(&fixture, outcomes);
+}
+
 fn load_server_fixture(name: &str) -> PocketBaseServerFixture {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/pocketbase/server")
@@ -1279,6 +1289,351 @@ fn run_realtime_fixture() -> BTreeMap<String, FixtureOutcome> {
     outcomes.insert(
         "owner record delete event is delivered before removal".to_string(),
         FixtureOutcome::from_response(&owner_delete),
+    );
+
+    outcomes
+}
+
+fn run_batch_fixture() -> BTreeMap<String, FixtureOutcome> {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+    let mut outcomes = BTreeMap::new();
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "title", "type": "text", "required": true},
+                    {"name": "owner", "type": "text"},
+                    {"name": "published", "type": "bool"}
+                ],
+                "createRule": "@request.body.owner = @request.auth.id",
+                "updateRule": "owner = @request.auth.id",
+                "deleteRule": "owner = @request.auth.id"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(posts.status, 200);
+
+    let empty = app.handle(
+        HttpRequest::json("POST", "/api/batch", json!({"requests": []}))
+            .unwrap()
+            .with_header("x-rb-auth-id", "user_1"),
+    );
+    assert_eq!(empty.body.as_array().unwrap().len(), 0);
+    outcomes.insert(
+        "empty batch returns an empty response list".to_string(),
+        FixtureOutcome::from_response(&empty),
+    );
+
+    let success = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/batch",
+            json!({
+                "requests": [
+                    {
+                        "method": "POST",
+                        "url": "/api/collections/posts/records",
+                        "body": {
+                            "id": "post_1",
+                            "title": "One",
+                            "owner": "user_1",
+                            "published": true
+                        }
+                    },
+                    {
+                        "method": "POST",
+                        "url": "/api/collections/posts/records",
+                        "body": {
+                            "id": "post_2",
+                            "title": "Two",
+                            "owner": "user_1",
+                            "published": false
+                        }
+                    },
+                    {
+                        "method": "PATCH",
+                        "url": "/api/collections/posts/records/post_1",
+                        "body": {"title": "One Updated"}
+                    },
+                    {
+                        "method": "DELETE",
+                        "url": "/api/collections/posts/records/post_2"
+                    }
+                ]
+            }),
+        )
+        .unwrap()
+        .with_header("x-rb-auth-id", "user_1"),
+    );
+    assert_eq!(success.body.as_array().unwrap().len(), 4);
+    assert_eq!(success.body[0]["status"], 200);
+    assert_eq!(success.body[1]["status"], 200);
+    assert_eq!(success.body[2]["status"], 200);
+    assert_eq!(success.body[3]["status"], 204);
+    assert_eq!(success.body[2]["body"]["title"], "One Updated");
+    outcomes.insert(
+        "successful batch commits all child record mutations".to_string(),
+        FixtureOutcome::from_response(&success),
+    );
+
+    let updated = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts/records/post_1",
+    ));
+    assert_eq!(updated.status, 200);
+    assert_eq!(updated.body["title"], "One Updated");
+    let deleted = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts/records/post_2",
+    ));
+    assert_eq!(deleted.status, 404);
+
+    let forwarded_auth = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/batch",
+            json!({
+                "requests": [
+                    {
+                        "method": "POST",
+                        "url": "/api/collections/posts/records",
+                        "body": {
+                            "id": "post_auth",
+                            "title": "Auth context",
+                            "owner": "user_1",
+                            "published": true
+                        }
+                    }
+                ]
+            }),
+        )
+        .unwrap()
+        .with_header("x-rb-auth-id", "user_1"),
+    );
+    assert_eq!(forwarded_auth.body[0]["body"]["owner"], "user_1");
+    outcomes.insert(
+        "parent auth context is forwarded to child requests".to_string(),
+        FixtureOutcome::from_response(&forwarded_auth),
+    );
+
+    let upsert_create = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/batch",
+            json!({
+                "requests": [
+                    {
+                        "method": "PUT",
+                        "url": "/api/collections/posts/records",
+                        "body": {
+                            "id": "post_upsert",
+                            "title": "Upsert created",
+                            "owner": "user_1",
+                            "published": false
+                        }
+                    }
+                ]
+            }),
+        )
+        .unwrap()
+        .with_header("x-rb-auth-id", "user_1"),
+    );
+    assert_eq!(upsert_create.body[0]["status"], 200);
+    assert_eq!(upsert_create.body[0]["body"]["title"], "Upsert created");
+    outcomes.insert(
+        "upsert batch creates a missing record".to_string(),
+        FixtureOutcome::from_response(&upsert_create),
+    );
+
+    let upsert_update = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/batch",
+            json!({
+                "requests": [
+                    {
+                        "method": "PUT",
+                        "url": "/api/collections/posts/records",
+                        "body": {
+                            "id": "post_upsert",
+                            "title": "Upsert updated",
+                            "owner": "user_1",
+                            "published": true
+                        }
+                    }
+                ]
+            }),
+        )
+        .unwrap()
+        .with_header("x-rb-auth-id", "user_1"),
+    );
+    assert_eq!(upsert_update.body[0]["status"], 200);
+    assert_eq!(upsert_update.body[0]["body"]["title"], "Upsert updated");
+    outcomes.insert(
+        "upsert batch updates an existing record".to_string(),
+        FixtureOutcome::from_response(&upsert_update),
+    );
+
+    let failed = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/batch",
+            json!({
+                "requests": [
+                    {
+                        "method": "POST",
+                        "url": "/api/collections/posts/records",
+                        "body": {
+                            "id": "post_rollback",
+                            "title": "Rollback",
+                            "owner": "user_1",
+                            "published": true
+                        }
+                    },
+                    {
+                        "method": "PATCH",
+                        "url": "/api/collections/posts/records/missing",
+                        "body": {"title": "Missing"}
+                    }
+                ]
+            }),
+        )
+        .unwrap()
+        .with_header("x-rb-auth-id", "user_1"),
+    );
+    assert_eq!(failed.body["message"], "Batch transaction failed.");
+    assert_eq!(
+        failed.body["data"]["requests"]["1"]["response"]["status"],
+        404
+    );
+    let rolled_back = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts/records/post_rollback",
+    ));
+    assert_eq!(rolled_back.status, 404);
+    outcomes.insert(
+        "failed child rolls back earlier child mutations".to_string(),
+        FixtureOutcome::from_response(&failed)
+            .with_code(json_string(&failed, &["data", "requests", "1", "code"])),
+    );
+
+    let unsupported = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/batch",
+            json!({
+                "requests": [
+                    {
+                        "method": "GET",
+                        "url": "/api/collections/posts/records"
+                    }
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        unsupported.body["data"]["requests"]["0"]["response"]["status"],
+        400
+    );
+    outcomes.insert(
+        "unsupported child request fails the batch".to_string(),
+        FixtureOutcome::from_response(&unsupported).with_code(json_string(
+            &unsupported,
+            &["data", "requests", "0", "code"],
+        )),
+    );
+
+    let custom_auth = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/batch",
+            json!({
+                "requests": [
+                    {
+                        "method": "POST",
+                        "url": "/api/collections/posts/records",
+                        "headers": {"Authorization": "Bearer child_token"},
+                        "body": {
+                            "id": "post_custom_auth",
+                            "title": "Custom Auth",
+                            "owner": "user_1"
+                        }
+                    }
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        custom_auth.body["data"]["requests"]["0"]["response"]["status"],
+        400
+    );
+    outcomes.insert(
+        "custom child auth header fails the batch".to_string(),
+        FixtureOutcome::from_response(&custom_auth).with_code(json_string(
+            &custom_auth,
+            &["data", "requests", "0", "code"],
+        )),
+    );
+
+    let limited = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/settings",
+            json!({"batch": {"maxRequests": 1}}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(limited.status, 200);
+    let too_many = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/batch",
+            json!({
+                "requests": [
+                    {
+                        "method": "POST",
+                        "url": "/api/collections/posts/records",
+                        "body": {"id": "post_limit_1", "title": "One", "owner": "user_1"}
+                    },
+                    {
+                        "method": "POST",
+                        "url": "/api/collections/posts/records",
+                        "body": {"id": "post_limit_2", "title": "Two", "owner": "user_1"}
+                    }
+                ]
+            }),
+        )
+        .unwrap()
+        .with_header("x-rb-auth-id", "user_1"),
+    );
+    outcomes.insert(
+        "maxRequests setting rejects oversized batches".to_string(),
+        FixtureOutcome::from_response(&too_many)
+            .with_code(json_string(&too_many, &["data", "requests", "code"])),
+    );
+
+    let disabled = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/settings",
+            json!({"batch": {"enabled": false, "maxRequests": 50}}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(disabled.status, 200);
+    let disabled_batch =
+        app.handle(HttpRequest::json("POST", "/api/batch", json!({"requests": []})).unwrap());
+    assert_eq!(disabled_batch.body["message"], "Batch API is disabled.");
+    outcomes.insert(
+        "disabled batch setting rejects requests".to_string(),
+        FixtureOutcome::from_response(&disabled_batch),
     );
 
     outcomes

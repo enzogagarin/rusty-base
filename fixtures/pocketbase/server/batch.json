@@ -1,0 +1,71 @@
+{
+  "name": "PocketBase batch behavior",
+  "area": "batch",
+  "pocketBaseNote": "PocketBase batch requests execute supported record mutations as a single transaction, inherit the parent request auth context, and reject unsupported child requests or batch setting violations.",
+  "cases": [
+    {
+      "name": "empty batch returns an empty response list",
+      "route": "POST /api/batch",
+      "expectedStatus": 200,
+      "pocketBaseNote": "An empty batch is valid and returns an empty response array."
+    },
+    {
+      "name": "successful batch commits all child record mutations",
+      "route": "POST /api/batch",
+      "expectedStatus": 200,
+      "pocketBaseNote": "Successful child create, update, and delete record requests commit together and return one response entry per child request."
+    },
+    {
+      "name": "parent auth context is forwarded to child requests",
+      "route": "POST /api/batch",
+      "expectedStatus": 200,
+      "pocketBaseNote": "Child requests evaluate record rules with the auth context from the parent batch request."
+    },
+    {
+      "name": "upsert batch creates a missing record",
+      "route": "POST /api/batch",
+      "expectedStatus": 200,
+      "pocketBaseNote": "A PUT child request with a new id behaves like a record create."
+    },
+    {
+      "name": "upsert batch updates an existing record",
+      "route": "POST /api/batch",
+      "expectedStatus": 200,
+      "pocketBaseNote": "A PUT child request with an existing id behaves like a record update."
+    },
+    {
+      "name": "failed child rolls back earlier child mutations",
+      "route": "POST /api/batch",
+      "expectedStatus": 400,
+      "expectedCode": "batch_request_failed",
+      "pocketBaseNote": "If any child request fails, the whole batch fails and earlier successful mutations from the same batch are rolled back."
+    },
+    {
+      "name": "unsupported child request fails the batch",
+      "route": "POST /api/batch",
+      "expectedStatus": 400,
+      "expectedCode": "batch_request_failed",
+      "pocketBaseNote": "Batch children are limited to supported record mutation routes; unsupported routes fail the transaction."
+    },
+    {
+      "name": "custom child auth header fails the batch",
+      "route": "POST /api/batch",
+      "expectedStatus": 400,
+      "expectedCode": "batch_request_failed",
+      "pocketBaseNote": "Child requests cannot override auth headers because batch auth should come from the parent request."
+    },
+    {
+      "name": "maxRequests setting rejects oversized batches",
+      "route": "POST /api/batch",
+      "expectedStatus": 400,
+      "expectedCode": "validation_max_items",
+      "pocketBaseNote": "The persisted batch maxRequests setting caps the number of child requests before execution starts."
+    },
+    {
+      "name": "disabled batch setting rejects requests",
+      "route": "POST /api/batch",
+      "expectedStatus": 400,
+      "pocketBaseNote": "Disabling the batch API in settings rejects new batch requests."
+    }
+  ]
+}
