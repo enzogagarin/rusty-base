@@ -178,6 +178,7 @@ cargo fmt --all -- --check
 node scripts/check_admin_js.mjs
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+node scripts/admin_smoke.mjs
 ```
 
 Admin UI security note: the embedded admin shell is currently an MVP/self-hosted
@@ -185,6 +186,11 @@ surface. It stores the superuser token in `localStorage` and ships with a CSP
 that blocks external sources, frames, forms, objects, and inline script/style
 execution. Before a public alpha, this should still grow an optional httpOnly
 session cookie flow so an XSS bug cannot directly read the superuser token.
+
+`scripts/admin_smoke.mjs` starts a clean temporary server/database and exercises
+the embedded admin asset graph plus the HTTP flows the admin UI depends on:
+superuser bootstrap, collection metadata, relation expand, protected file
+upload/download/delete, filter/sort/pagination, and restart persistence.
 
 Run the current CLI smoke path:
 
