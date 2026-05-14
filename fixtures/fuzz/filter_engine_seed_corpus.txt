@@ -1,0 +1,55 @@
+# Rusty Base filter engine fuzz seed corpus.
+# One input per line. Blank lines and # comments are ignored by the resilience tests.
+
+name = 'Burak'
+name = "Burak"
+name = 'escaped \' quote'
+name = "escaped \" quote"
+name = ''
+name = '\'
+name = "\\"
+name = 'snowman ☃'
+name = 'line\u2028separator'
+name = 'null\u0000byte'
+name = @request.auth.id
+owner = @request.auth.id && published = true
+@request.body.title:isset = true
+@request.body.tags:each ~ 'rust'
+@request.query.search:lower ~ 'rust'
+@request.headers.x_custom = 'yes'
+created >= @todayStart && created <= @todayEnd
+updated < @now
+score = -1.25
+score = -
+score = 1.
+tags ?= 'rust'
+tags ?~ 'rust_%'
+tags:each !~ 'draft'
+profile.name = 'Ada'
+profile.items.0.name = 'rust'
+profile.tags ?= 'backend'
+author.id = 'author_1'
+geoDistance(office.lon, office.lat, 29.0, 41.0) < 10
+strftime('%Y', created) = '2026'
+(name = 'A' || name = 'B') && score >= 10
+((((((((name = 'deep'))))))))
+((((((((((((((((name = 'too deep'))))))))))))))))
+name = @request.cookies.session
+tags ?= 'rust' && && name = 'bad'
+name =
+&&
+||
+()
+(
+)
+name !~ 'draft'
+name >= 10
+score ~ '10'
+name ?= 'Burak'
+@request.body.items:each ?= 'x'
+geoDistance(office.lon, office.lat, 29.0,) < 10
+name = 'unterminated
+name = "unterminated
+profile..name = 'Ada'
+profile.items.-1.name = 'bad'
+name = @unknown
