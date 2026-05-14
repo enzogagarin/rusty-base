@@ -71,6 +71,16 @@ fn pocketbase_auth_context_fixture_matches_http_behavior() {
 }
 
 #[test]
+fn pocketbase_view_collection_fixture_matches_http_behavior() {
+    let fixture = load_server_fixture("view_collections");
+    assert_eq!(fixture.area, "view_collections");
+
+    let outcomes = run_view_collection_fixture();
+
+    assert_fixture_outcomes(&fixture, outcomes);
+}
+
+#[test]
 fn pocketbase_relation_expand_fixture_matches_http_behavior() {
     let fixture = load_server_fixture("relation_expand");
     assert_eq!(fixture.area, "relation_expand");
@@ -512,6 +522,190 @@ fn run_auth_context_fixture() -> BTreeMap<String, FixtureOutcome> {
     outcomes.insert(
         "revoked auth token cannot refresh".to_string(),
         FixtureOutcome::from_response(&revoked_refresh),
+    );
+
+    outcomes
+}
+
+fn run_view_collection_fixture() -> BTreeMap<String, FixtureOutcome> {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+    let mut outcomes = BTreeMap::new();
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "title", "type": "text"},
+                    {"name": "published", "type": "bool"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(posts.status, 200);
+
+    for record in [
+        json!({"id": "post_1", "title": "Rusty Base", "published": true}),
+        json!({"id": "post_2", "title": "Draft Note", "published": false}),
+    ] {
+        let response = app
+            .handle(HttpRequest::json("POST", "/api/collections/posts/records", record).unwrap());
+        assert_eq!(response.status, 200);
+    }
+
+    let view_query = r#"SELECT id, json_extract(data, '$.title') AS title, created, updated FROM "_rb_records_posts" WHERE json_extract(data, '$.published') = 1"#;
+    let created_view = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "published_posts",
+                "type": "view",
+                "viewQuery": view_query,
+                "fields": [{"name": "title", "type": "text"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(created_view.body["type"], "view");
+    assert_eq!(created_view.body["viewQuery"], view_query);
+    outcomes.insert(
+        "view collection stores select query metadata".to_string(),
+        FixtureOutcome::from_response(&created_view),
+    );
+
+    let list = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/published_posts/records?filter=title%20~%20%27Rusty%27",
+    ));
+    assert_eq!(list.status, 200);
+    assert_eq!(list.body["totalItems"], 1);
+    assert_eq!(list.body["items"][0]["id"], "post_1");
+    assert_eq!(list.body["items"][0]["collectionName"], "published_posts");
+    outcomes.insert(
+        "view list applies filters over projected columns".to_string(),
+        FixtureOutcome::from_response(&list),
+    );
+
+    let hidden = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/published_posts/records/post_2",
+    ));
+    outcomes.insert(
+        "view get hides rows outside the query".to_string(),
+        FixtureOutcome::from_response(&hidden),
+    );
+
+    let create_denied = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/published_posts/records",
+            json!({"id": "post_3", "title": "Nope"}),
+        )
+        .unwrap(),
+    );
+    outcomes.insert(
+        "view record create is rejected".to_string(),
+        FixtureOutcome::from_response(&create_denied),
+    );
+
+    let patch_denied = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/published_posts/records/post_1",
+            json!({"title": "Nope"}),
+        )
+        .unwrap(),
+    );
+    outcomes.insert(
+        "view record update is rejected".to_string(),
+        FixtureOutcome::from_response(&patch_denied),
+    );
+
+    let delete_denied = app.handle(HttpRequest::new(
+        "DELETE",
+        "/api/collections/published_posts/records/post_1",
+    ));
+    outcomes.insert(
+        "view record delete is rejected".to_string(),
+        FixtureOutcome::from_response(&delete_denied),
+    );
+
+    let exported = app.handle(HttpRequest::new("GET", "/api/collections/meta/export"));
+    assert_eq!(exported.status, 200);
+    let exported_view = exported.body["collections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|collection| collection["name"] == "published_posts")
+        .unwrap();
+    assert_eq!(exported_view["type"], "view");
+    assert_eq!(exported_view["viewQuery"], view_query);
+    outcomes.insert(
+        "view export includes view query".to_string(),
+        FixtureOutcome::from_response(&exported),
+    );
+
+    let invalid_view = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "bad_view",
+                "type": "view",
+                "viewQuery": "DELETE FROM _rb_records_posts",
+                "fields": []
+            }),
+        )
+        .unwrap(),
+    );
+    outcomes.insert(
+        "non-select view query is rejected".to_string(),
+        FixtureOutcome::from_response(&invalid_view),
+    );
+
+    let internal_view = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "bad_auth_tokens_view",
+                "type": "view",
+                "viewQuery": "SELECT token AS id FROM \"_rb_auth_tokens\"",
+                "fields": []
+            }),
+        )
+        .unwrap(),
+    );
+    outcomes.insert(
+        "view query cannot read internal auth tables".to_string(),
+        FixtureOutcome::from_response(&internal_view),
+    );
+
+    let unsafe_function_view = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "unsafe_function_view",
+                "type": "view",
+                "viewQuery": "SELECT load_extension('missing') AS id",
+                "fields": []
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(unsafe_function_view.status, 200);
+    let unsafe_function_list = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/unsafe_function_view/records",
+    ));
+    outcomes.insert(
+        "unsafe view function is blocked at execution".to_string(),
+        FixtureOutcome::from_response(&unsafe_function_list),
     );
 
     outcomes

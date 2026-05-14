@@ -1,0 +1,67 @@
+{
+  "name": "PocketBase view collection behavior",
+  "area": "view_collections",
+  "pocketBaseNote": "PocketBase view collections are read-only projections backed by SQL SELECT queries; Rusty Base keeps that spirit while adding an internal-table denylist and execution guard for unsafe view queries.",
+  "cases": [
+    {
+      "name": "view collection stores select query metadata",
+      "route": "POST /api/collections",
+      "expectedStatus": 200,
+      "pocketBaseNote": "A valid view collection stores its SELECT viewQuery and returns view metadata."
+    },
+    {
+      "name": "view list applies filters over projected columns",
+      "route": "GET /api/collections/published_posts/records?filter=title~Rusty",
+      "expectedStatus": 200,
+      "pocketBaseNote": "View collection list requests can filter against projected view columns."
+    },
+    {
+      "name": "view get hides rows outside the query",
+      "route": "GET /api/collections/published_posts/records/post_2",
+      "expectedStatus": 404,
+      "pocketBaseNote": "A record excluded by the view query should not be readable through the view collection."
+    },
+    {
+      "name": "view record create is rejected",
+      "route": "POST /api/collections/published_posts/records",
+      "expectedStatus": 400,
+      "pocketBaseNote": "View collections are read-only and should reject create attempts."
+    },
+    {
+      "name": "view record update is rejected",
+      "route": "PATCH /api/collections/published_posts/records/post_1",
+      "expectedStatus": 400,
+      "pocketBaseNote": "View collections are read-only and should reject update attempts."
+    },
+    {
+      "name": "view record delete is rejected",
+      "route": "DELETE /api/collections/published_posts/records/post_1",
+      "expectedStatus": 400,
+      "pocketBaseNote": "View collections are read-only and should reject delete attempts."
+    },
+    {
+      "name": "view export includes view query",
+      "route": "GET /api/collections/meta/export",
+      "expectedStatus": 200,
+      "pocketBaseNote": "Collection export preserves the view collection type and original viewQuery."
+    },
+    {
+      "name": "non-select view query is rejected",
+      "route": "POST /api/collections",
+      "expectedStatus": 400,
+      "pocketBaseNote": "Only SELECT-style view queries are accepted for view collections."
+    },
+    {
+      "name": "view query cannot read internal auth tables",
+      "route": "POST /api/collections",
+      "expectedStatus": 400,
+      "pocketBaseNote": "System tables such as auth token storage are not available to user-defined view queries."
+    },
+    {
+      "name": "unsafe view function is blocked at execution",
+      "route": "GET /api/collections/unsafe_function_view/records",
+      "expectedStatus": 400,
+      "pocketBaseNote": "View execution is guarded so unsafe SQLite functions cannot run through a view collection."
+    }
+  ]
+}
