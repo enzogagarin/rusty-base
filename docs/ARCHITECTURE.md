@@ -145,6 +145,9 @@ Responsibility:
   (`_rb_auth_tokens`, `_rb_settings`, `_rb_files`, `_rb_auth_action_tokens`).
   This is not a complete SQL sandbox; a future SQLite authorizer hook should
   enforce table-level access at execution time.
+- record PocketBase compatibility expectations in `fixtures/pocketbase/*.json`
+  as data: input filter, expected SQL, expected params, allowed/denied behavior,
+  and a short PocketBase behavior note;
 - expand first-level and nested relation records into the PocketBase-style
   `expand` response object;
 - project record, auth, and expanded relation responses with first-pass

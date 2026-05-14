@@ -26,6 +26,8 @@ This repository currently contains the first safe steps:
 - `crates/rb-server`: a minimal PocketBase-style HTTP/SQLite slice with
   collection metadata, record CRUD, and list/view filtering through
   `rb-filter-engine`.
+- `fixtures/pocketbase`: JSON compatibility fixtures that record input filters,
+  expected SQL, expected params, allowed/denied behavior, and PocketBase notes.
 
 It is intentionally small and tested. It does **not** pretend to be fully
 PocketBase-compatible yet. Compatibility will be earned with golden tests, not
@@ -152,6 +154,11 @@ Target capabilities:
 │   ├── FILTER_COMPATIBILITY.md
 │   ├── RELATION_QUERY_PLAN.md
 │   └── ROADMAP.md
+├── fixtures
+│   └── pocketbase
+│       ├── filter_denied.json
+│       ├── filter_request_context.json
+│       └── filter_safe_subset.json
 └── README.md
 ```
 

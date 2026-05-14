@@ -1,0 +1,36 @@
+{
+  "name": "PocketBase request context filters",
+  "context": "fixed_request",
+  "schema": [
+    { "name": "id", "kind": "text" },
+    { "name": "owner", "kind": "text" },
+    { "name": "title", "kind": "text" },
+    { "name": "published", "kind": "bool" }
+  ],
+  "cases": [
+    {
+      "name": "auth ownership",
+      "filter": "owner = @request.auth.id",
+      "expectedSql": "\"owner\" = ?",
+      "expectedParams": [{ "type": "string", "value": "user_123" }],
+      "expectedBehavior": "allowed",
+      "pocketBaseNote": "PocketBase commonly models per-user access rules with @request.auth.id."
+    },
+    {
+      "name": "body isset",
+      "filter": "@request.body.title:isset = true",
+      "expectedSql": "TRUE = TRUE",
+      "expectedParams": [],
+      "expectedBehavior": "allowed",
+      "pocketBaseNote": "PocketBase exposes :isset modifiers for request body fields."
+    },
+    {
+      "name": "missing auth context is denied by empty value",
+      "filter": "owner = @request.auth.missing",
+      "expectedSql": "\"owner\" = ?",
+      "expectedParams": [{ "type": "string", "value": "" }],
+      "expectedBehavior": "allowed",
+      "pocketBaseNote": "PocketBase-style missing request auth values behave like empty strings in this safe subset."
+    }
+  ]
+}

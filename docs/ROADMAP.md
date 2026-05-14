@@ -316,6 +316,9 @@ Exit criteria:
 - Added integration edge-case coverage for protected file token expiration and
   cyclic relation cascade deletes so the server keeps moving toward
   PocketBase-like safety under less friendly workflows.
+- Added JSON PocketBase compatibility fixtures for filter SQL, parameters,
+  allowed/denied behavior, and short behavior notes, with a test loader that
+  compiles the fixture set against the Rust filter engine.
 
 ## Next Sprint
 
@@ -328,7 +331,8 @@ Exit criteria:
    running raw PocketBase index SQL strings directly.
 4. Expand OAuth2 provider presets and harden callback validation around
    redirect URLs and provider-specific response edge cases.
-5. Expand compatibility fixtures around placeholder-like wildcard cases.
+5. Expand compatibility fixtures around placeholder-like wildcard cases and
+   relation/file/auth API behavior.
 6. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 7. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.

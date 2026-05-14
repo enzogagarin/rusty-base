@@ -1,0 +1,36 @@
+{
+  "name": "PocketBase denied filter subset",
+  "context": "fixed_request",
+  "schema": [
+    { "name": "id", "kind": "text" },
+    { "name": "name", "kind": "text" },
+    { "name": "score", "kind": "number" },
+    { "name": "tags", "kind": "array" }
+  ],
+  "cases": [
+    {
+      "name": "unknown schema field",
+      "filter": "missing = 'value'",
+      "expectedBehavior": "denied",
+      "pocketBaseNote": "PocketBase rejects filters that reference fields outside the collection schema."
+    },
+    {
+      "name": "like against number field",
+      "filter": "score ~ '10'",
+      "expectedBehavior": "denied",
+      "pocketBaseNote": "PocketBase-compatible typed filters should reject text-only operators on number fields."
+    },
+    {
+      "name": "any-match against scalar field",
+      "filter": "name ?= 'Burak'",
+      "expectedBehavior": "denied",
+      "pocketBaseNote": "PocketBase any-match operators are intended for multi-value fields, not scalar text fields."
+    },
+    {
+      "name": "unknown request scope",
+      "filter": "name = @request.cookies.session",
+      "expectedBehavior": "denied",
+      "pocketBaseNote": "Only the implemented PocketBase request scopes are accepted by this compatibility subset."
+    }
+  ]
+}

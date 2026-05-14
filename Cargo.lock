@@ -882,6 +882,10 @@ dependencies = [
 [[package]]
 name = "rb-filter-engine"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "rb-server"
