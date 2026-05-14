@@ -1,4 +1,6 @@
-use rb_server::{HttpRequest, HttpResponse, RustyBaseApp, Store};
+use rb_server::{
+    HttpRequest, HttpResponse, RealtimeConnection, RealtimeEvent, RustyBaseApp, Store,
+};
 use rusqlite::{params, Connection};
 use serde::Deserialize;
 use serde_json::json;
@@ -7,7 +9,7 @@ use std::{
     env, fs,
     path::PathBuf,
     process,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Debug, Deserialize)]
@@ -96,6 +98,16 @@ fn pocketbase_protected_file_fixture_matches_http_behavior() {
     assert_eq!(fixture.area, "protected_files");
 
     let outcomes = run_protected_file_fixture();
+
+    assert_fixture_outcomes(&fixture, outcomes);
+}
+
+#[test]
+fn pocketbase_realtime_fixture_matches_http_behavior() {
+    let fixture = load_server_fixture("realtime");
+    assert_eq!(fixture.area, "realtime");
+
+    let outcomes = run_realtime_fixture();
 
     assert_fixture_outcomes(&fixture, outcomes);
 }
@@ -1064,6 +1076,251 @@ fn run_protected_file_fixture() -> BTreeMap<String, FixtureOutcome> {
     fs::remove_file(path).ok();
 
     outcomes
+}
+
+fn run_realtime_fixture() -> BTreeMap<String, FixtureOutcome> {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+    let mut outcomes = BTreeMap::new();
+
+    let connect_response = app.handle(HttpRequest::new("GET", "/api/realtime"));
+    assert_eq!(connect_response.content_type, "text/event-stream");
+    assert!(String::from_utf8(connect_response.raw_body.clone())
+        .unwrap()
+        .contains("event: PB_CONNECT"));
+    outcomes.insert(
+        "realtime connect returns PB_CONNECT".to_string(),
+        FixtureOutcome::from_response(&connect_response),
+    );
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [{"name": "email", "type": "email"}]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(users.status, 200);
+
+    for (id, email) in [
+        ("user_1", "owner@example.com"),
+        ("user_2", "other@example.com"),
+    ] {
+        let created = app.handle(
+            HttpRequest::json(
+                "POST",
+                "/api/collections/users/records",
+                json!({
+                    "id": id,
+                    "email": email,
+                    "password": "correct horse",
+                    "passwordConfirm": "correct horse"
+                }),
+            )
+            .unwrap(),
+        );
+        assert_eq!(created.status, 200);
+    }
+
+    let owner_token = login_token(&app, "owner@example.com");
+    let other_token = login_token(&app, "other@example.com");
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "title", "type": "text"},
+                    {"name": "owner", "type": "text"}
+                ],
+                "listRule": "owner = @request.auth.id",
+                "viewRule": "owner = @request.auth.id"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(posts.status, 200);
+
+    let invalid_client = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/realtime",
+            json!({"clientId": "missing", "subscriptions": ["posts/*"]}),
+        )
+        .unwrap(),
+    );
+    outcomes.insert(
+        "invalid realtime client is rejected".to_string(),
+        FixtureOutcome::from_response(&invalid_client),
+    );
+
+    let owner_list = app.realtime_connect().unwrap();
+    assert_connect_event(&owner_list);
+    let owner_record = app.realtime_connect().unwrap();
+    assert_connect_event(&owner_record);
+    let anonymous_list = app.realtime_connect().unwrap();
+    assert_connect_event(&anonymous_list);
+    let other_list = app.realtime_connect().unwrap();
+    assert_connect_event(&other_list);
+
+    let owner_subscribe = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/realtime",
+            json!({"clientId": owner_list.client_id, "subscriptions": ["posts/*"]}),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {owner_token}")),
+    );
+    outcomes.insert(
+        "owner realtime subscription is accepted".to_string(),
+        FixtureOutcome::from_response(&owner_subscribe),
+    );
+
+    let record_subscribe = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/realtime",
+            json!({"clientId": owner_record.client_id, "subscriptions": ["posts/post_owner"]}),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {owner_token}")),
+    );
+    outcomes.insert(
+        "record-specific realtime subscription is accepted".to_string(),
+        FixtureOutcome::from_response(&record_subscribe),
+    );
+
+    let anonymous_subscribe = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/realtime",
+            json!({"clientId": anonymous_list.client_id, "subscriptions": ["posts/*"]}),
+        )
+        .unwrap(),
+    );
+    outcomes.insert(
+        "anonymous realtime subscription is accepted with empty auth context".to_string(),
+        FixtureOutcome::from_response(&anonymous_subscribe),
+    );
+
+    let other_subscribe = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/realtime",
+            json!({"clientId": other_list.client_id, "subscriptions": ["posts/*"]}),
+        )
+        .unwrap()
+        .with_header("Authorization", format!("Bearer {other_token}")),
+    );
+    assert_eq!(other_subscribe.status, 204);
+
+    let owner_create = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"id": "post_owner", "title": "Owner post", "owner": "user_1"}),
+        )
+        .unwrap(),
+    );
+    assert_realtime_record_event(&owner_list, "posts/*", "create", "post_owner");
+    assert_realtime_record_event(&owner_record, "posts/post_owner", "create", "post_owner");
+    assert_no_realtime_event(&anonymous_list);
+    assert_no_realtime_event(&other_list);
+    outcomes.insert(
+        "owner record create event is delivered to matching subscribers".to_string(),
+        FixtureOutcome::from_response(&owner_create),
+    );
+
+    let other_create = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records",
+            json!({"id": "post_other", "title": "Other post", "owner": "user_2"}),
+        )
+        .unwrap(),
+    );
+    assert_realtime_record_event(&other_list, "posts/*", "create", "post_other");
+    assert_no_realtime_event(&owner_list);
+    assert_no_realtime_event(&owner_record);
+    assert_no_realtime_event(&anonymous_list);
+    outcomes.insert(
+        "non-matching auth context does not receive realtime event".to_string(),
+        FixtureOutcome::from_response(&other_create),
+    );
+
+    let owner_update = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/posts/records/post_owner",
+            json!({"title": "Owner post updated"}),
+        )
+        .unwrap(),
+    );
+    assert_realtime_record_event(&owner_list, "posts/*", "update", "post_owner");
+    assert_realtime_record_event(&owner_record, "posts/post_owner", "update", "post_owner");
+    outcomes.insert(
+        "owner record update event is delivered".to_string(),
+        FixtureOutcome::from_response(&owner_update),
+    );
+
+    let owner_delete = app.handle(HttpRequest::new(
+        "DELETE",
+        "/api/collections/posts/records/post_owner",
+    ));
+    assert_realtime_record_event(&owner_list, "posts/*", "delete", "post_owner");
+    assert_realtime_record_event(&owner_record, "posts/post_owner", "delete", "post_owner");
+    outcomes.insert(
+        "owner record delete event is delivered before removal".to_string(),
+        FixtureOutcome::from_response(&owner_delete),
+    );
+
+    outcomes
+}
+
+fn login_token(app: &RustyBaseApp, identity: &str) -> String {
+    let login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": identity, "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(login.status, 200);
+    login.body["token"].as_str().unwrap().to_string()
+}
+
+fn assert_connect_event(connection: &RealtimeConnection) {
+    let event = expect_realtime_event(connection);
+    assert_eq!(event.event, "PB_CONNECT");
+    assert_eq!(event.data["clientId"], connection.client_id);
+}
+
+fn assert_realtime_record_event(
+    connection: &RealtimeConnection,
+    topic: &str,
+    action: &str,
+    id: &str,
+) {
+    let event = expect_realtime_event(connection);
+    assert_eq!(event.event, topic);
+    assert_eq!(event.data["action"], action);
+    assert_eq!(event.data["record"]["id"], id);
+}
+
+fn assert_no_realtime_event(connection: &RealtimeConnection) {
+    assert!(connection.recv_timeout(Duration::from_millis(50)).is_err());
+}
+
+fn expect_realtime_event(connection: &RealtimeConnection) -> RealtimeEvent {
+    connection.recv_timeout(Duration::from_millis(200)).unwrap()
 }
 
 fn json_string(response: &HttpResponse, path: &[&str]) -> String {

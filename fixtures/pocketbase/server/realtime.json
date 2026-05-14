@@ -1,0 +1,61 @@
+{
+  "name": "PocketBase realtime behavior",
+  "area": "realtime",
+  "pocketBaseNote": "PocketBase realtime subscriptions are scoped by collection topics and must respect the request auth context captured when the client subscribes.",
+  "cases": [
+    {
+      "name": "realtime connect returns PB_CONNECT",
+      "route": "GET /api/realtime",
+      "expectedStatus": 200,
+      "pocketBaseNote": "A realtime connection starts with a PB_CONNECT event containing the client id used for subscription requests."
+    },
+    {
+      "name": "invalid realtime client is rejected",
+      "route": "POST /api/realtime",
+      "expectedStatus": 404,
+      "pocketBaseNote": "Realtime subscription requests with an unknown client id should be rejected."
+    },
+    {
+      "name": "owner realtime subscription is accepted",
+      "route": "POST /api/realtime",
+      "expectedStatus": 204,
+      "pocketBaseNote": "A valid auth token can subscribe to collection-level record events."
+    },
+    {
+      "name": "record-specific realtime subscription is accepted",
+      "route": "POST /api/realtime",
+      "expectedStatus": 204,
+      "pocketBaseNote": "Record-specific realtime topics should be accepted for a concrete record id."
+    },
+    {
+      "name": "anonymous realtime subscription is accepted with empty auth context",
+      "route": "POST /api/realtime",
+      "expectedStatus": 204,
+      "pocketBaseNote": "Anonymous realtime clients can subscribe, but protected record rules evaluate with an empty @request.auth context."
+    },
+    {
+      "name": "owner record create event is delivered to matching subscribers",
+      "route": "POST /api/collections/posts/records",
+      "expectedStatus": 200,
+      "pocketBaseNote": "A created record that matches the subscriber auth context is delivered to collection and record-specific topics."
+    },
+    {
+      "name": "non-matching auth context does not receive realtime event",
+      "route": "POST /api/collections/posts/records",
+      "expectedStatus": 200,
+      "pocketBaseNote": "Records hidden by list/view rules should not be delivered to subscribers with a different auth context."
+    },
+    {
+      "name": "owner record update event is delivered",
+      "route": "PATCH /api/collections/posts/records/post_owner",
+      "expectedStatus": 200,
+      "pocketBaseNote": "Updates to visible records are delivered to matching realtime subscriptions."
+    },
+    {
+      "name": "owner record delete event is delivered before removal",
+      "route": "DELETE /api/collections/posts/records/post_owner",
+      "expectedStatus": 204,
+      "pocketBaseNote": "Delete events include the deleted record payload and are evaluated before the record is removed."
+    }
+  ]
+}
