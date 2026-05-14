@@ -357,6 +357,27 @@ tr:last-child td {
   gap: 8px;
 }
 
+.record-head-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.record-head-controls select {
+  width: min(240px, 100%);
+}
+
+.record-collection-picker {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) auto;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
 .record-toolbar {
   display: grid;
   gap: 10px;
@@ -587,8 +608,18 @@ tr:last-child td {
     flex-direction: column;
   }
 
+  .record-head-controls {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .record-head-controls select {
+    width: 100%;
+  }
+
   .auth-actions,
   .field-tools-form,
+  .record-collection-picker,
   .record-toolbar-grid,
   .record-form-grid,
   .kv {

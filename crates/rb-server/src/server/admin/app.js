@@ -75,7 +75,7 @@ function render() {
   if (state.view === "collections") {
     renderCollections({ render, refresh, loadRecords, resetRecordBrowser });
   } else if (state.view === "records") {
-    renderRecords({ currentCollection, render, loadRecords, setView });
+    renderRecords({ currentCollection, render, loadRecords, resetRecordBrowser, setView });
   } else if (state.view === "settings") {
     renderSettings();
   } else {

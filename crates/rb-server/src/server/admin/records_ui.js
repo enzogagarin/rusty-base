@@ -18,6 +18,7 @@ let actions = {
   currentCollection: () => null,
   render() {},
   loadRecords: async () => {},
+  resetRecordBrowser() {},
   setView: async () => {}
 };
 const relationOptionLoads = new Map();
@@ -75,15 +76,38 @@ export function renderRecords(nextActions) {
   }
 
   if (!collection) {
-    $("content").innerHTML = `
-      <div class="empty">
-        <strong>No collection selected</strong>
-        <span>Create or select a collection before browsing records.</span>
-        <div class="empty-actions">
-          <button type="button" id="go-collections" class="primary">Go to Collections</button>
+    const hasCollections = state.collections.length > 0;
+    $("content").innerHTML = hasCollections
+      ? `
+        <div class="empty">
+          <strong>Select a collection</strong>
+          <span>Choose a collection to browse and edit its records.</span>
+          <div class="record-collection-picker">
+            ${recordCollectionPickerHtml("record-empty-collection", "", true)}
+            <button type="button" id="open-selected-collection" class="primary">Open</button>
+          </div>
+          <div class="empty-actions">
+            <button type="button" id="go-collections">Manage Collections</button>
+          </div>
         </div>
-      </div>
-    `;
+      `
+      : `
+        <div class="empty">
+          <strong>No collection selected</strong>
+          <span>Create or select a collection before browsing records.</span>
+          <div class="empty-actions">
+            <button type="button" id="go-collections" class="primary">Go to Collections</button>
+          </div>
+        </div>
+      `;
+    bindRecordCollectionPicker("record-empty-collection");
+    const openSelected = $("open-selected-collection");
+    if (openSelected) {
+      openSelected.addEventListener("click", async () => {
+        const picker = $("record-empty-collection");
+        await selectRecordCollection(picker ? picker.value : "");
+      });
+    }
     $("go-collections").addEventListener("click", async () => {
       await actions.setView("collections");
     });
@@ -113,7 +137,8 @@ export function renderRecords(nextActions) {
   $("content").innerHTML = `
     <div class="panel-head">
       <h2>${escapeHtml(collection.name)} records</h2>
-      <div class="record-actions">
+      <div class="record-head-controls">
+        ${recordCollectionPickerHtml("record-collection-select", collection.name, false)}
         <button type="button" id="new-record" class="primary">New</button>
         <button type="button" id="refresh-records">Refresh</button>
       </div>
@@ -134,6 +159,7 @@ export function renderRecords(nextActions) {
     `}
     ${recordEditorHtml()}
   `;
+  bindRecordCollectionPicker("record-collection-select");
   bindRecordBrowserControls();
   $("new-record").addEventListener("click", () => {
     openCreateEditor();
@@ -188,6 +214,47 @@ export function renderRecords(nextActions) {
       clearRecordFieldValidationFeedback(input);
     });
   });
+}
+
+function recordCollectionPickerHtml(id, selectedName, includeEmptyOption) {
+  const options = state.collections.map((collection) => {
+    const name = collection.name || "";
+    return `<option value="${escapeAttribute(name)}" ${name === selectedName ? "selected" : ""}>${escapeHtml(name)}</option>`;
+  }).join("");
+  return `
+    <select id="${escapeAttribute(id)}" aria-label="Collection">
+      ${includeEmptyOption ? `<option value="">Choose collection</option>` : ""}
+      ${options}
+    </select>
+  `;
+}
+
+function bindRecordCollectionPicker(id) {
+  const picker = $(id);
+  if (!picker) {
+    return;
+  }
+
+  picker.addEventListener("change", async () => {
+    await selectRecordCollection(picker.value);
+  });
+}
+
+async function selectRecordCollection(name) {
+  const collectionName = String(name || "").trim();
+  if (!collectionName) {
+    status("Choose a collection", true);
+    return;
+  }
+  if (collectionName === state.selectedCollection) {
+    return;
+  }
+
+  state.selectedCollection = collectionName;
+  localStorage.setItem("rusty-base.admin.collection", state.selectedCollection);
+  actions.resetRecordBrowser();
+  await actions.loadRecords(true);
+  actions.render();
 }
 
 function recordBrowserControlsHtml() {
