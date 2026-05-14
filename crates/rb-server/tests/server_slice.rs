@@ -5306,6 +5306,7 @@ fn returns_collection_scaffolds_and_import_ready_export_payload() {
         imported_posts.body["indexes"],
         json!(["CREATE INDEX idx_posts_title ON posts (title)"])
     );
+    assert!(imported_posts.body.get("indexWarnings").is_none());
     assert_eq!(imported_posts.body["listRule"], "published = true");
 
     let invalid_index = app.handle(
@@ -5357,6 +5358,20 @@ fn collection_indexes_execute_only_safe_scalar_plans() {
             "CREATE INDEX idx_posts_title_meta ON posts (title, meta)",
             "CREATE INDEX idx_posts_meta ON posts (meta)"
         ])
+    );
+    let index_warnings = created.body["indexWarnings"].as_array().unwrap();
+    assert_eq!(index_warnings.len(), 3);
+    assert_eq!(index_warnings[0]["code"], "metadata_only_index");
+    assert_eq!(
+        index_warnings
+            .iter()
+            .map(|warning| warning["index"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            "CREATE UNIQUE INDEX idx_posts_unique_title ON posts (title)",
+            "CREATE INDEX idx_posts_title_meta ON posts (title, meta)",
+            "CREATE INDEX idx_posts_meta ON posts (meta)"
+        ]
     );
 
     {
@@ -5417,6 +5432,7 @@ fn collection_indexes_execute_only_safe_scalar_plans() {
         HttpRequest::json("PATCH", "/api/collections/posts", json!({"indexes": []})).unwrap(),
     );
     assert_eq!(patched.status, 200);
+    assert!(patched.body.get("indexWarnings").is_none());
 
     let conn = Connection::open(&path).unwrap();
     let remaining_safe_indexes: i64 = conn

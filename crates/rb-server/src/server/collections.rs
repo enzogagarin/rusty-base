@@ -488,6 +488,13 @@ pub(crate) fn collection_row_to_value(
     let object = value.as_object_mut().ok_or_else(|| {
         ServerError::BadRequest("collection response must be a JSON object".to_string())
     })?;
+    let index_warnings = collection_index_warnings(&collection)?;
+    if !index_warnings.is_empty() {
+        object.insert(
+            "indexWarnings".to_string(),
+            JsonValue::Array(index_warnings),
+        );
+    }
     object.insert("id".to_string(), JsonValue::String(id));
     object.insert("name".to_string(), JsonValue::String(name.clone()));
     object.insert("created".to_string(), JsonValue::String(created));
@@ -920,6 +927,26 @@ pub(crate) fn safe_collection_index_plans(
         .iter()
         .filter_map(|index| safe_collection_index_plan(collection, index).transpose())
         .collect()
+}
+
+pub(crate) fn collection_index_warnings(
+    collection: &CollectionConfig,
+) -> Result<Vec<JsonValue>, ServerError> {
+    let mut warnings = Vec::new();
+
+    for index in &collection.indexes {
+        let supported = collection_owns_record_table(collection)
+            && safe_collection_index_plan(collection, index)?.is_some();
+        if !supported {
+            warnings.push(json!({
+                "index": index,
+                "code": "metadata_only_index",
+                "message": "Index metadata was saved but not executed; Rusty Base currently executes only non-unique single-field scalar indexes."
+            }));
+        }
+    }
+
+    Ok(warnings)
 }
 
 pub(crate) fn apply_safe_collection_indexes(

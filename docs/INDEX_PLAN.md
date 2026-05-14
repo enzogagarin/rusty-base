@@ -18,6 +18,8 @@ compatibility with storage execution and make future migrations brittle.
   compiled into Rust-owned SQLite expression indexes on `_rb_records_posts`.
 - Generated SQLite indexes use internal names like `_rb_idx_posts_*` instead of
   the imported raw index name.
+- Unsupported indexes remain metadata-only but are visible in collection
+  responses through `indexWarnings`.
 - A server integration test asserts that the raw index name is not created and
   that the safe internal index is removed when metadata is patched away.
 

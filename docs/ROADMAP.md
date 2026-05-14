@@ -326,6 +326,8 @@ Exit criteria:
 - Added the first Rust-owned SQLite index planner for simple non-unique scalar
   field indexes, while keeping raw PocketBase index SQL metadata-only and
   testing stale index cleanup.
+- Surfaced unsupported metadata-only collection indexes as `indexWarnings` in
+  collection responses so skipped execution is visible.
 - Added server-level PocketBase compatibility fixtures for auth action token
   flows, relation expand/projection/view-rule behavior, and protected file
   access.

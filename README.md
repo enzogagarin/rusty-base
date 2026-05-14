@@ -369,7 +369,8 @@ The first server slice supports:
   both `fields`/`kind` and PocketBase-style `schema`/`type` field input;
 - collection `indexes` metadata is persisted, patched, imported, exported, and
   planned into safe SQLite expression indexes for simple scalar fields without
-  executing raw PocketBase index SQL;
+  executing raw PocketBase index SQL; unsupported metadata-only indexes are
+  surfaced through collection `indexWarnings`;
 - first read-only `view` collection MVP with persisted `viewQuery`, list/view
   records backed by a single SELECT query, filter/sort support through the Rust
   filter engine, rejected record mutations, an internal-table denylist, and a
