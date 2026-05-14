@@ -326,6 +326,9 @@ Exit criteria:
 - Added the first Rust-owned SQLite index planner for simple non-unique scalar
   field indexes, while keeping raw PocketBase index SQL metadata-only and
   testing stale index cleanup.
+- Added server-level PocketBase compatibility fixtures for auth action token
+  flows, relation expand/projection/view-rule behavior, and protected file
+  access.
 
 ## Next Sprint
 
@@ -339,11 +342,12 @@ Exit criteria:
 4. Expand OAuth2 provider presets and harden callback validation around
    redirect URLs and provider-specific response edge cases.
 5. Expand compatibility fixtures around placeholder-like wildcard cases and
-   relation/file/auth API behavior.
+   broader auth/relation/file edge cases.
 6. Add a Go/PocketBase comparison harness for the filter compatibility fixtures.
 7. Add relation compatibility fixtures copied from PocketBase-style access-rule
    examples.
-8. Add file option parity and uploaded/protected-file compatibility fixtures
+8. Add file option parity and uploaded-file compatibility fixtures beyond the
+   current protected-file fixture.
    around edge cases.
 9. Upgrade fuzz/benchmark infrastructure to `cargo-fuzz` and Criterion once the
    lightweight smoke harness has stabilized.

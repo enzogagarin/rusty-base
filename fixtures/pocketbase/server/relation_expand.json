@@ -1,0 +1,37 @@
+{
+  "name": "PocketBase relation expand behavior",
+  "area": "relation_expand",
+  "pocketBaseNote": "PocketBase expands relation fields on list, view, create, update, and auth responses while respecting target collection view rules.",
+  "cases": [
+    {
+      "name": "list expands single nested relation",
+      "route": "GET /api/collections/posts/records?expand=author.profile,tags",
+      "expectedStatus": 200,
+      "pocketBaseNote": "A single relation can be expanded and then expanded again through a nested relation path."
+    },
+    {
+      "name": "list expands multi relation in stored order",
+      "route": "GET /api/collections/posts/records?expand=author.profile,tags",
+      "expectedStatus": 200,
+      "pocketBaseNote": "Multi relation expand results should follow the stored relation id order."
+    },
+    {
+      "name": "record expand includes collection metadata",
+      "route": "GET /api/collections/posts/records/post_1?expand=author,tags",
+      "expectedStatus": 200,
+      "pocketBaseNote": "Expanded records include PocketBase-style collectionName metadata unless response fields projection removes it."
+    },
+    {
+      "name": "projected expand keeps only requested fields",
+      "route": "GET /api/collections/posts/records?expand=author.profile,tags&fields=*,expand.author.name,expand.tags.label",
+      "expectedStatus": 200,
+      "pocketBaseNote": "PocketBase response fields can project nested expand payloads without returning the full related record."
+    },
+    {
+      "name": "blocked relation expand is omitted",
+      "route": "GET /api/collections/posts/records/post_1?expand=primaryTag,tags",
+      "expectedStatus": 200,
+      "pocketBaseNote": "A related record blocked by the target collection view rule is omitted from the expand payload."
+    }
+  ]
+}

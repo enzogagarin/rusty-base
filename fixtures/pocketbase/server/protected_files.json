@@ -1,0 +1,37 @@
+{
+  "name": "PocketBase protected file access",
+  "area": "protected_files",
+  "pocketBaseNote": "PocketBase protected files require an auth-derived file token and still apply record visibility checks for the requesting auth context.",
+  "cases": [
+    {
+      "name": "protected file without token is hidden",
+      "route": "GET /api/files/docs/doc_1/{filename}",
+      "expectedStatus": 404,
+      "pocketBaseNote": "Protected files should not reveal their existence to unauthenticated requests."
+    },
+    {
+      "name": "file token request requires auth",
+      "route": "POST /api/files/token",
+      "expectedStatus": 403,
+      "pocketBaseNote": "A file token must be minted from a valid auth token."
+    },
+    {
+      "name": "owner file token allows download",
+      "route": "GET /api/files/docs/doc_1/{filename}?token={token}",
+      "expectedStatus": 200,
+      "pocketBaseNote": "A valid file token for the owning auth context can download the protected file."
+    },
+    {
+      "name": "expired file token is rejected",
+      "route": "GET /api/files/docs/doc_1/{filename}?token={token}",
+      "expectedStatus": 403,
+      "pocketBaseNote": "Expired file tokens are rejected even if they were originally minted from a valid auth token."
+    },
+    {
+      "name": "other user file token is hidden by record rule",
+      "route": "GET /api/files/docs/doc_1/{filename}?token={token}",
+      "expectedStatus": 404,
+      "pocketBaseNote": "A valid file token from another user still cannot bypass the protected record's view rule."
+    }
+  ]
+}

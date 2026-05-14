@@ -1,0 +1,63 @@
+{
+  "name": "PocketBase auth action lifecycle",
+  "area": "auth_actions",
+  "pocketBaseNote": "PocketBase auth action endpoints are intentionally quiet for unknown identities and use single-use tokens for verification, password reset, and email change flows.",
+  "cases": [
+    {
+      "name": "missing verification email requires validation data",
+      "route": "POST /api/collections/users/request-verification",
+      "expectedStatus": 400,
+      "expectedCode": "validation_required",
+      "pocketBaseNote": "PocketBase returns field-level validation data when a required auth action form field is missing."
+    },
+    {
+      "name": "unknown verification email remains silent",
+      "route": "POST /api/collections/users/request-verification",
+      "expectedStatus": 204,
+      "pocketBaseNote": "PocketBase-style auth action requests do not reveal whether an email address exists."
+    },
+    {
+      "name": "verification token marks record verified",
+      "route": "POST /api/collections/users/confirm-verification",
+      "expectedStatus": 204,
+      "pocketBaseNote": "A valid verification token is single-purpose and marks the auth record as verified."
+    },
+    {
+      "name": "reused verification token is rejected",
+      "route": "POST /api/collections/users/confirm-verification",
+      "expectedStatus": 400,
+      "pocketBaseNote": "Auth action tokens are single-use and cannot be replayed after successful confirmation."
+    },
+    {
+      "name": "password reset mismatch returns field validation",
+      "route": "POST /api/collections/users/confirm-password-reset",
+      "expectedStatus": 400,
+      "expectedCode": "validation_values_mismatch",
+      "pocketBaseNote": "Password reset confirmation validates password and passwordConfirm before consuming the token."
+    },
+    {
+      "name": "password reset token updates password",
+      "route": "POST /api/collections/users/confirm-password-reset",
+      "expectedStatus": 204,
+      "pocketBaseNote": "A valid password reset token updates the stored password and consumes the token."
+    },
+    {
+      "name": "password reset invalidates previous auth token",
+      "route": "POST /api/collections/users/auth-refresh",
+      "expectedStatus": 403,
+      "pocketBaseNote": "After a password reset, existing auth tokens for that record should no longer refresh."
+    },
+    {
+      "name": "old password is denied after reset",
+      "route": "POST /api/collections/users/auth-with-password",
+      "expectedStatus": 400,
+      "pocketBaseNote": "The previous password stops authenticating after a successful reset."
+    },
+    {
+      "name": "new password authenticates after reset",
+      "route": "POST /api/collections/users/auth-with-password",
+      "expectedStatus": 200,
+      "pocketBaseNote": "The replacement password authenticates through the normal password auth route."
+    }
+  ]
+}

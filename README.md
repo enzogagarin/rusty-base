@@ -27,7 +27,7 @@ This repository currently contains the first safe steps:
   collection metadata, record CRUD, and list/view filtering through
   `rb-filter-engine`.
 - `fixtures/pocketbase`: JSON compatibility fixtures that record input filters,
-  expected SQL, expected params, allowed/denied behavior, and PocketBase notes.
+  expected SQL, expected params, server API behavior, and PocketBase notes.
 
 It is intentionally small and tested. It does **not** pretend to be fully
 PocketBase-compatible yet. Compatibility will be earned with golden tests, not
@@ -414,6 +414,8 @@ The first server slice supports:
   responses;
 - first `?fields=...` response projection support for records and expanded
   relations, including `*` and nested paths such as `expand.author.name`;
+- server compatibility fixtures for auth action tokens, relation expand, and
+  protected file access under `fixtures/pocketbase/server`;
 - `GET /api/collections/:collection/auth-methods` with password, OTP, MFA,
   OAuth2 provider auth URLs, PKCE verifier/challenge data, and legacy SDK
   compatibility fields plus response `fields` projection;
