@@ -366,6 +366,32 @@
       padding: 14px;
     }
 
+    .record-form {
+      display: grid;
+      gap: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcf8;
+      padding: 12px;
+    }
+
+    .record-form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .record-form .field label {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .record-form textarea {
+      min-height: 74px;
+    }
+
     .editor-actions {
       display: flex;
       flex-wrap: wrap;
@@ -475,6 +501,7 @@
 
       .auth-actions,
       .field-tools-form,
+      .record-form-grid,
       .kv {
         grid-template-columns: 1fr;
       }
@@ -537,6 +564,7 @@
       view: "overview",
       health: "unknown",
       collections: [],
+      collectionDetails: {},
       selectedCollection: localStorage.getItem("rusty-base.admin.collection") || "",
       records: [],
       recordCount: 0,
@@ -608,6 +636,7 @@
           ensureSelectedCollection();
         } catch (error) {
           state.collections = [];
+          state.collectionDetails = {};
           state.selectedCollection = "";
           state.records = [];
           state.recordCount = 0;
@@ -626,6 +655,7 @@
         }
       } else {
         state.collections = [];
+        state.collectionDetails = {};
         state.selectedCollection = "";
         state.records = [];
         state.recordCount = 0;
@@ -1047,6 +1077,7 @@
 
       try {
         const editing = state.collectionEditorMode === "edit";
+        const previousName = state.collectionEditorName;
         const saved = state.collectionEditorMode === "edit"
           ? await jsonApi(collectionPath(state.collectionEditorName), payload, "PATCH")
           : await jsonApi("/api/collections", payload, "POST");
@@ -1054,6 +1085,10 @@
         state.selectedCollection = saved && saved.name ? saved.name : payload.name || "";
         if (state.selectedCollection) {
           localStorage.setItem("rusty-base.admin.collection", state.selectedCollection);
+          if (previousName && previousName !== state.selectedCollection) {
+            delete state.collectionDetails[previousName];
+          }
+          state.collectionDetails[state.selectedCollection] = saved;
         }
         state.view = "records";
         status(editing ? "Collection saved" : "Collection created");
@@ -1089,6 +1124,7 @@
 
       try {
         await api(collectionPath(name), { method: "DELETE" });
+        delete state.collectionDetails[name];
         if (state.selectedCollection === name) {
           state.selectedCollection = "";
           localStorage.removeItem("rusty-base.admin.collection");
@@ -1129,12 +1165,17 @@
         return;
       }
 
+      const recordFields = userCollectionFields(collection);
+      const visibleFields = recordFields.slice(0, 6);
+      const fieldHeaders = visibleFields.map((field) => `<th>${escapeHtml(field.name || "")}</th>`).join("");
       const rows = state.records.map((record) => `
         <tr>
           <td>${escapeHtml(record.id || "")}</td>
+          ${visibleFields.length
+            ? visibleFields.map((field) => `<td>${recordFieldValuePreview(record, field)}</td>`).join("")
+            : `<td><code class="record-json">${escapeHtml(recordPreview(record))}</code></td>`}
           <td>${escapeHtml(record.created || "-")}</td>
           <td>${escapeHtml(record.updated || "-")}</td>
-          <td><code class="record-json">${escapeHtml(recordPreview(record))}</code></td>
           <td>
             <div class="record-actions">
               <button type="button" data-edit-record="${escapeAttribute(record.id || "")}">Edit</button>
@@ -1155,7 +1196,7 @@
         ${state.records.length ? `
           <div class="table-wrap">
             <table>
-              <thead><tr><th>ID</th><th>Created</th><th>Updated</th><th>Data</th><th>Actions</th></tr></thead>
+              <thead><tr><th>ID</th>${visibleFields.length ? fieldHeaders : "<th>Data</th>"}<th>Created</th><th>Updated</th><th>Actions</th></tr></thead>
               <tbody>${rows}</tbody>
             </table>
           </div>
@@ -1197,6 +1238,18 @@
           render();
         });
       }
+      const jsonInput = $("record-json-input");
+      if (jsonInput) {
+        jsonInput.addEventListener("input", () => {
+          state.editorText = jsonInput.value;
+        });
+      }
+      document.querySelectorAll("[data-record-field]").forEach((input) => {
+        const eventName = input.type === "checkbox" || input.tagName === "SELECT" ? "change" : "input";
+        input.addEventListener(eventName, () => {
+          syncRecordFieldFromInput(input);
+        });
+      });
     }
 
     function recordEditorHtml() {
@@ -1205,10 +1258,13 @@
       }
 
       const title = state.editorMode === "edit" ? `Edit ${state.editorRecordId}` : "Create record";
+      const collection = currentCollection();
+      const draft = recordEditorDraft();
       return `
         <div class="record-editor">
           <h2>${escapeHtml(title)}</h2>
           ${state.editorError ? `<div class="error">${escapeHtml(state.editorError)}</div>` : ""}
+          ${recordFieldFormHtml(collection, draft)}
           <textarea id="record-json-input" spellcheck="false">${escapeHtml(state.editorText)}</textarea>
           <div class="editor-actions">
             <button type="button" id="cancel-record">Cancel</button>
@@ -1216,6 +1272,109 @@
           </div>
         </div>
       `;
+    }
+
+    function recordFieldFormHtml(collection, draft) {
+      const fields = userCollectionFields(collection);
+      if (!fields.length) {
+        return "";
+      }
+      if (!draft.ok) {
+        return `
+          <div class="record-form">
+            <div class="field-tools-head">
+              <h2>Fields</h2>
+              <span class="muted">Fix the record JSON to use field inputs.</span>
+            </div>
+          </div>
+        `;
+      }
+
+      return `
+        <div class="record-form">
+          <div class="field-tools-head">
+            <h2>Fields</h2>
+            <span class="muted">${fields.length} field${fields.length === 1 ? "" : "s"}</span>
+          </div>
+          <div class="record-form-grid">
+            ${fields.map((field, index) => recordFieldInputHtml(field, draft.value[field.name], index)).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    function recordFieldInputHtml(field, value, index) {
+      const name = field.name || "";
+      const type = field.type || field.kind || "text";
+      const inputId = `record-field-${index}`;
+      const common = `id="${inputId}" data-record-field="${escapeAttribute(name)}" data-record-type="${escapeAttribute(type)}" data-record-multi="${recordFieldIsMulti(field) ? "true" : "false"}"`;
+      const label = `
+        <label for="${inputId}">
+          <span>${escapeHtml(name)}</span>
+          <span class="pill">${escapeHtml(type)}</span>
+          ${field.required ? `<span class="pill">required</span>` : ""}
+        </label>
+      `;
+
+      if (type === "bool") {
+        return `
+          <div class="field">
+            ${label}
+            <label class="check-field"><input ${common} type="checkbox" ${value === true ? "checked" : ""}>true</label>
+          </div>
+        `;
+      }
+
+      if (type === "editor" || type === "json") {
+        return `
+          <div class="field">
+            ${label}
+            <textarea ${common} spellcheck="false">${escapeHtml(recordFieldInputDisplayValue(value))}</textarea>
+          </div>
+        `;
+      }
+
+      if (type === "select" && Array.isArray(field.values) && field.values.length && !recordFieldIsMulti(field)) {
+        const options = [`<option value=""></option>`].concat(field.values.map((option) => `
+          <option value="${escapeAttribute(option)}" ${String(value ?? "") === String(option) ? "selected" : ""}>${escapeHtml(option)}</option>
+        `)).join("");
+        return `
+          <div class="field">
+            ${label}
+            <select ${common}>${options}</select>
+          </div>
+        `;
+      }
+
+      if (type === "file") {
+        return `
+          <div class="field">
+            ${label}
+            <input disabled value="Use multipart upload API">
+          </div>
+        `;
+      }
+
+      const inputType = type === "number" ? "number" : "text";
+      const placeholder = type === "relation" && recordFieldIsMulti(field)
+        ? "record ids, comma separated"
+        : type === "relation"
+          ? "record id"
+          : "";
+      return `
+        <div class="field">
+          ${label}
+          <input ${common} type="${inputType}" value="${escapeAttribute(recordFieldInputDisplayValue(value))}" placeholder="${escapeAttribute(placeholder)}">
+        </div>
+      `;
+    }
+
+    function recordEditorDraft() {
+      try {
+        return { ok: true, value: JSON.parse(state.editorText || "{}") };
+      } catch (error) {
+        return { ok: false, error };
+      }
     }
 
     function openCreateEditor() {
@@ -1242,6 +1401,68 @@
       state.editorRecordId = "";
       state.editorText = "";
       state.editorError = "";
+    }
+
+    function readRecordEditorPayload() {
+      const input = $("record-json-input");
+      const text = input ? input.value : state.editorText;
+      return JSON.parse(text || "{}");
+    }
+
+    function syncRecordFieldFromInput(input) {
+      let payload = null;
+      try {
+        payload = readRecordEditorPayload();
+      } catch (_) {
+        status("Fix record JSON before using field inputs", true);
+        return;
+      }
+
+      try {
+        const value = recordFieldInputValue(input);
+        if (value === undefined) {
+          delete payload[input.dataset.recordField];
+        } else {
+          payload[input.dataset.recordField] = value;
+        }
+      } catch (error) {
+        status(error.message, true);
+        return;
+      }
+
+      state.editorText = JSON.stringify(payload, null, 2);
+      const jsonInput = $("record-json-input");
+      if (jsonInput) {
+        jsonInput.value = state.editorText;
+      }
+      state.editorError = "";
+    }
+
+    function recordFieldInputValue(input) {
+      const type = input.dataset.recordType || "text";
+      const multi = input.dataset.recordMulti === "true";
+      if (type === "bool") {
+        return input.checked;
+      }
+
+      const raw = (input.value || "").trim();
+      if (!raw) {
+        return undefined;
+      }
+      if (type === "number") {
+        const number = Number(raw);
+        if (!Number.isFinite(number)) {
+          throw new Error("Number field must be numeric");
+        }
+        return number;
+      }
+      if (type === "json") {
+        return JSON.parse(raw);
+      }
+      if (multi) {
+        return raw.split(",").map((value) => value.trim()).filter(Boolean);
+      }
+      return raw;
     }
 
     async function saveRecord() {
@@ -1342,11 +1563,13 @@
     }
 
     function currentCollection() {
-      return state.collections.find((collection) => collection.name === state.selectedCollection) || null;
+      return state.collectionDetails[state.selectedCollection]
+        || state.collections.find((collection) => collection.name === state.selectedCollection)
+        || null;
     }
 
     async function loadRecords(showErrors = true) {
-      const collection = currentCollection();
+      let collection = currentCollection();
       if (!state.token || !collection) {
         state.records = [];
         state.recordCount = 0;
@@ -1354,6 +1577,7 @@
       }
 
       try {
+        collection = await ensureCollectionDetails(collection.name);
         const page = await api(`${collectionRecordsPath(collection.name)}?perPage=20&sort=-created`);
         state.records = page.items || [];
         state.recordCount = page.totalItems == null ? state.records.length : page.totalItems;
@@ -1366,6 +1590,17 @@
       }
     }
 
+    async function ensureCollectionDetails(collectionName) {
+      const cached = state.collectionDetails[collectionName];
+      if (cached && Array.isArray(cached.fields)) {
+        return cached;
+      }
+
+      const collection = await api(collectionPath(collectionName));
+      state.collectionDetails[collection.name || collectionName] = collection;
+      return collection;
+    }
+
     function collectionRecordsPath(collectionName) {
       return `/api/collections/${encodeURIComponent(collectionName)}/records`;
     }
@@ -1376,6 +1611,43 @@
 
     function recordPath(collectionName, id) {
       return `${collectionRecordsPath(collectionName)}/${encodeURIComponent(id)}`;
+    }
+
+    function userCollectionFields(collection) {
+      if (!collection || !Array.isArray(collection.fields)) {
+        return [];
+      }
+      return collection.fields.filter((field) => field && field.name && !isResponseOnlyCollectionField(field));
+    }
+
+    function recordFieldIsMulti(field) {
+      return Number(field.maxSelect || 1) > 1;
+    }
+
+    function recordFieldInputDisplayValue(value) {
+      if (value == null) {
+        return "";
+      }
+      if (Array.isArray(value)) {
+        return value.join(", ");
+      }
+      if (typeof value === "object") {
+        return JSON.stringify(value, null, 2);
+      }
+      return String(value);
+    }
+
+    function recordFieldValuePreview(record, field) {
+      const value = record[field.name];
+      if (value == null || value === "") {
+        return `<span class="muted">-</span>`;
+      }
+      const text = recordFieldInputDisplayValue(value);
+      const preview = text.length > 120 ? `${text.slice(0, 117)}...` : text;
+      if (Array.isArray(value) || typeof value === "object") {
+        return `<code class="record-json">${escapeHtml(preview)}</code>`;
+      }
+      return escapeHtml(preview);
     }
 
     function editableCollectionPayload(collection) {
@@ -1485,6 +1757,7 @@
       state.token = "";
       localStorage.removeItem(tokenKey);
       state.collections = [];
+      state.collectionDetails = {};
       state.records = [];
       state.recordCount = 0;
       state.settings = null;

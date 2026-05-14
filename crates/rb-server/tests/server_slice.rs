@@ -126,6 +126,12 @@ fn serves_embedded_admin_ui_shell() {
         assert!(html.contains("Go to Collections"));
         assert!(html.contains("record-json-input"));
         assert!(html.contains("Create record"));
+        assert!(html.contains("ensureCollectionDetails"));
+        assert!(html.contains("recordFieldFormHtml"));
+        assert!(html.contains("data-record-field"));
+        assert!(html.contains("syncRecordFieldFromInput"));
+        assert!(html.contains("recordFieldValuePreview"));
+        assert!(html.contains("Fix record JSON before using field inputs"));
         assert!(html.contains("Initialized and logged in"));
         assert!(html.contains(r#""PATCH""#));
         assert!(html.contains(r#"method: "DELETE""#));
