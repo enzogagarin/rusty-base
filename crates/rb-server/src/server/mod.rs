@@ -9,7 +9,12 @@ use rb_filter_engine::{
     ResolvedField, Value as FilterValue,
 };
 use ring::digest;
-use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension};
+use rusqlite::{
+    hooks::{AuthAction, AuthContext, Authorization},
+    params, params_from_iter,
+    types::Value as SqlValue,
+    Connection, ErrorCode, OptionalExtension,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value as JsonValue};
 use std::{

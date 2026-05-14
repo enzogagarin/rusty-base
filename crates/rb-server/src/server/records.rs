@@ -859,6 +859,111 @@ pub(crate) fn view_record_id(value: &JsonValue) -> Option<String> {
     }
 }
 
+fn with_view_query_authorizer<T>(
+    conn: &Connection,
+    work: impl FnOnce() -> Result<T, ServerError>,
+) -> Result<T, ServerError> {
+    conn.authorizer(Some(view_query_authorizer));
+    let result = work().map_err(map_view_query_authorizer_error);
+    conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+    result
+}
+
+fn view_query_authorizer(context: AuthContext<'_>) -> Authorization {
+    match context.action {
+        AuthAction::Select | AuthAction::Recursive => Authorization::Allow,
+        AuthAction::Read { table_name, .. } => {
+            if is_denied_view_query_table(table_name) {
+                Authorization::Deny
+            } else {
+                Authorization::Allow
+            }
+        }
+        AuthAction::Function { function_name } => {
+            if is_denied_view_query_function(function_name) {
+                Authorization::Deny
+            } else {
+                Authorization::Allow
+            }
+        }
+        _ => Authorization::Deny,
+    }
+}
+
+fn is_denied_view_query_function(function_name: &str) -> bool {
+    matches!(
+        function_name.to_ascii_lowercase().as_str(),
+        "load_extension" | "readfile" | "writefile" | "fts3_tokenizer"
+    )
+}
+
+fn map_view_query_authorizer_error(err: ServerError) -> ServerError {
+    match err {
+        ServerError::Storage(err)
+            if err.sqlite_error_code() == Some(ErrorCode::AuthorizationForStatementDenied)
+                || err
+                    .to_string()
+                    .to_ascii_lowercase()
+                    .contains("not authorized") =>
+        {
+            ServerError::BadRequest("viewQuery attempted a denied SQLite operation".to_string())
+        }
+        ServerError::Storage(err) => {
+            ServerError::BadRequest(format!("viewQuery execution failed: {err}"))
+        }
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn view_query_authorizer_allows_record_table_reads() {
+        let context = AuthContext {
+            action: AuthAction::Read {
+                table_name: "_rb_records_posts",
+                column_name: "data",
+            },
+            database_name: Some("main"),
+            accessor: None,
+        };
+
+        assert_eq!(view_query_authorizer(context), Authorization::Allow);
+    }
+
+    #[test]
+    fn view_query_authorizer_denies_internal_reads_and_writes() {
+        let internal_read = AuthContext {
+            action: AuthAction::Read {
+                table_name: "_rb_auth_tokens",
+                column_name: "token",
+            },
+            database_name: Some("main"),
+            accessor: None,
+        };
+        let write = AuthContext {
+            action: AuthAction::Insert {
+                table_name: "_rb_records_posts",
+            },
+            database_name: Some("main"),
+            accessor: None,
+        };
+        let unsafe_function = AuthContext {
+            action: AuthAction::Function {
+                function_name: "load_extension",
+            },
+            database_name: Some("main"),
+            accessor: None,
+        };
+
+        assert_eq!(view_query_authorizer(internal_read), Authorization::Deny);
+        assert_eq!(view_query_authorizer(write), Authorization::Deny);
+        assert_eq!(view_query_authorizer(unsafe_function), Authorization::Deny);
+    }
+}
+
 pub(crate) fn sql_value_to_json(value: SqlValue) -> JsonValue {
     match value {
         SqlValue::Null => JsonValue::Null,
@@ -1393,14 +1498,16 @@ impl Store {
             where_parts.join(" AND ")
         );
         let conn = self.connection()?;
-        let mut stmt = conn.prepare(&sql)?;
-        let column_names = statement_column_names(&stmt);
-        let mut rows = stmt.query(params_from_iter(params.iter()))?;
-        if let Some(row) = rows.next()? {
-            view_row_to_record(collection_name, &collection_id, &column_names, row)
-        } else {
-            Err(ServerError::NotFound(format!("record '{id}' not found")))
-        }
+        with_view_query_authorizer(&conn, || {
+            let mut stmt = conn.prepare(&sql)?;
+            let column_names = statement_column_names(&stmt);
+            let mut rows = stmt.query(params_from_iter(params.iter()))?;
+            if let Some(row) = rows.next()? {
+                view_row_to_record(collection_name, &collection_id, &column_names, row)
+            } else {
+                Err(ServerError::NotFound(format!("record '{id}' not found")))
+            }
+        })
     }
 
     pub(crate) fn list_view_records(
@@ -1424,37 +1531,39 @@ impl Store {
 
         let (total_items, mut items) = {
             let conn = self.connection()?;
-            let total_items = if options.skip_total {
-                -1
-            } else {
-                let count_sql = format!("SELECT COUNT(*) FROM {view_table_sql}{where_sql}");
-                conn.query_row(
-                    &count_sql,
-                    params_from_iter(predicate.params.iter()),
-                    |row| row.get::<_, i64>(0),
-                )?
-            };
+            with_view_query_authorizer(&conn, || {
+                let total_items = if options.skip_total {
+                    -1
+                } else {
+                    let count_sql = format!("SELECT COUNT(*) FROM {view_table_sql}{where_sql}");
+                    conn.query_row(
+                        &count_sql,
+                        params_from_iter(predicate.params.iter()),
+                        |row| row.get::<_, i64>(0),
+                    )?
+                };
 
-            let list_sql = format!(
+                let list_sql = format!(
                 "SELECT * FROM {view_table_sql}{where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?"
             );
-            let mut list_params = predicate.params;
-            list_params.push(SqlValue::Integer(options.per_page as i64));
-            list_params.push(SqlValue::Integer(offset as i64));
+                let mut list_params = predicate.params;
+                list_params.push(SqlValue::Integer(options.per_page as i64));
+                list_params.push(SqlValue::Integer(offset as i64));
 
-            let mut stmt = conn.prepare(&list_sql)?;
-            let column_names = statement_column_names(&stmt);
-            let mut rows = stmt.query(params_from_iter(list_params.iter()))?;
-            let mut items = Vec::new();
-            while let Some(row) = rows.next()? {
-                items.push(view_row_to_record(
-                    collection_name,
-                    &collection_id,
-                    &column_names,
-                    row,
-                )?);
-            }
-            (total_items, items)
+                let mut stmt = conn.prepare(&list_sql)?;
+                let column_names = statement_column_names(&stmt);
+                let mut rows = stmt.query(params_from_iter(list_params.iter()))?;
+                let mut items = Vec::new();
+                while let Some(row) = rows.next()? {
+                    items.push(view_row_to_record(
+                        collection_name,
+                        &collection_id,
+                        &column_names,
+                        row,
+                    )?);
+                }
+                Ok((total_items, items))
+            })?
         };
 
         if !options.expand.is_empty() {

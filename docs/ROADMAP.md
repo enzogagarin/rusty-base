@@ -310,9 +310,8 @@ Exit criteria:
   superuser, and impersonation modules while preserving the existing public
   `rb-server` re-export surface.
 - Hardened the first `viewQuery` validation pass with an internal-table denylist
-  for auth tokens, auth action tokens, settings, and stored files, and documented
-  that a future SQLite authorizer hook is still needed for table-level execution
-  safety.
+  for auth tokens, auth action tokens, settings, stored files, other non-record
+  Rusty Base internals, SQLite catalog tables, and pragma table sources.
 - Added integration edge-case coverage for protected file token expiration and
   cyclic relation cascade deletes so the server keeps moving toward
   PocketBase-like safety under less friendly workflows.
@@ -329,14 +328,17 @@ Exit criteria:
 - Added server-level PocketBase compatibility fixtures for auth action token
   flows, relation expand/projection/view-rule behavior, and protected file
   access.
+- Added a SQLite authorizer guard around view collection execution so view
+  queries can perform normal SELECT reads but cannot perform writes, DDL, unsafe
+  functions, or non-record internal table reads.
 
 ## Next Sprint
 
 1. Expand remaining field-type parity beyond the currently supported
    bool/number/text/email/url/editor/date/autodate/geoPoint/select/json/
    relation/file subset.
-2. Harden view collection compatibility around field inference, relation expand
-   edge cases, and SQLite-authorizer-backed query execution safety.
+2. Harden view collection compatibility around field inference and relation
+   expand edge cases.
 3. Expand safe SQLite index planning to compound/unique cases only after record
    validation and conflict response behavior are defined.
 4. Expand OAuth2 provider presets and harden callback validation around

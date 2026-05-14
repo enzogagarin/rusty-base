@@ -5518,6 +5518,31 @@ fn supports_read_only_view_collection_queries() {
             "_rb_auth_action_tokens",
             r#"SELECT token AS id FROM `_rb_auth_action_tokens`"#,
         ),
+        (
+            "bad_external_accounts_view",
+            "_rb_auth_external_accounts",
+            r#"SELECT provider_id AS id FROM "_rb_auth_external_accounts""#,
+        ),
+        (
+            "bad_file_tokens_view",
+            "_rb_file_tokens",
+            r#"SELECT token AS id FROM "_rb_file_tokens""#,
+        ),
+        (
+            "bad_collections_view",
+            "_rb_collections",
+            r#"SELECT name AS id FROM "_rb_collections""#,
+        ),
+        (
+            "bad_sqlite_schema_view",
+            "sqlite_master",
+            r#"SELECT name AS id FROM sqlite_master"#,
+        ),
+        (
+            "bad_pragma_table_info_view",
+            "pragma_table_info",
+            r#"SELECT name AS id FROM pragma_table_info('_rb_auth_tokens')"#,
+        ),
     ] {
         let denied = app.handle(
             HttpRequest::json(
@@ -5535,6 +5560,30 @@ fn supports_read_only_view_collection_queries() {
         assert_eq!(denied.status, 400, "{table} should be denied");
         assert!(denied.body["message"].as_str().unwrap().contains(table));
     }
+
+    let unsafe_function_view = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "unsafe_function_view",
+                "type": "view",
+                "viewQuery": "SELECT load_extension('missing') AS id",
+                "fields": []
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(unsafe_function_view.status, 200);
+    let unsafe_function_list = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/unsafe_function_view/records",
+    ));
+    assert_eq!(unsafe_function_list.status, 400);
+    assert!(unsafe_function_list.body["message"]
+        .as_str()
+        .unwrap()
+        .contains("viewQuery"));
 
     let delete_view = app.handle(HttpRequest::new(
         "DELETE",

@@ -372,9 +372,8 @@ The first server slice supports:
   executing raw PocketBase index SQL;
 - first read-only `view` collection MVP with persisted `viewQuery`, list/view
   records backed by a single SELECT query, filter/sort support through the Rust
-  filter engine, rejected record mutations, and an internal-table denylist for
-  `_rb_auth_tokens`, `_rb_settings`, `_rb_files`, and
-  `_rb_auth_action_tokens`;
+  filter engine, rejected record mutations, an internal-table denylist, and a
+  SQLite authorizer guard for view query execution;
 - `GET/PATCH /api/collections/:collection`, including safe metadata updates
   and record table renames;
 - `DELETE /api/collections/:collection` and

@@ -402,9 +402,13 @@ pub(crate) fn validate_collection_index(index: &str) -> Result<(), ServerError> 
 
 const DENIED_VIEW_QUERY_TABLES: &[&str] = &[
     "_rb_auth_tokens",
-    "_rb_settings",
-    "_rb_files",
     "_rb_auth_action_tokens",
+    "_rb_auth_external_accounts",
+    "_rb_file_tokens",
+    "_rb_files",
+    "_rb_settings",
+    "_rb_collections",
+    "_rb_realtime_subscriptions",
 ];
 
 pub(crate) fn validate_view_query(query: &str) -> Result<(), ServerError> {
@@ -432,13 +436,24 @@ pub(crate) fn validate_view_query(query: &str) -> Result<(), ServerError> {
     Ok(())
 }
 
-pub(crate) fn denied_view_query_table(query: &str) -> Option<&'static str> {
+pub(crate) fn denied_view_query_table(query: &str) -> Option<String> {
     view_query_identifiers(query).find_map(|identifier| {
-        DENIED_VIEW_QUERY_TABLES
-            .iter()
-            .copied()
-            .find(|table| identifier.eq_ignore_ascii_case(table))
+        if is_denied_view_query_table(&identifier) {
+            Some(identifier)
+        } else {
+            None
+        }
     })
+}
+
+pub(crate) fn is_denied_view_query_table(identifier: &str) -> bool {
+    let normalized = identifier.to_ascii_lowercase();
+    normalized.starts_with("sqlite_")
+        || normalized.starts_with("pragma_")
+        || (normalized.starts_with("_rb_") && !normalized.starts_with("_rb_records_"))
+        || DENIED_VIEW_QUERY_TABLES
+            .iter()
+            .any(|table| normalized == *table)
 }
 
 fn view_query_identifiers(query: &str) -> impl Iterator<Item = String> + '_ {
