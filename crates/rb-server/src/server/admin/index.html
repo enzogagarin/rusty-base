@@ -78,6 +78,11 @@
       background: #fff6f1;
     }
 
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
     input,
     select,
     textarea {
@@ -359,6 +364,40 @@
       gap: 8px;
     }
 
+    .record-toolbar {
+      display: grid;
+      gap: 10px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcf8;
+      padding: 12px 14px;
+    }
+
+    .record-toolbar-grid {
+      display: grid;
+      grid-template-columns: minmax(180px, 2fr) minmax(140px, 1fr) 120px auto;
+      gap: 10px;
+      align-items: end;
+    }
+
+    .record-query-actions,
+    .record-pager {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .record-pager {
+      justify-content: space-between;
+    }
+
+    .record-page-summary {
+      color: var(--muted);
+      font-weight: 700;
+      min-width: 92px;
+      text-align: center;
+    }
+
     .record-editor {
       display: grid;
       gap: 10px;
@@ -501,6 +540,7 @@
 
       .auth-actions,
       .field-tools-form,
+      .record-toolbar-grid,
       .record-form-grid,
       .kv {
         grid-template-columns: 1fr;
@@ -568,6 +608,11 @@
       selectedCollection: localStorage.getItem("rusty-base.admin.collection") || "",
       records: [],
       recordCount: 0,
+      recordPage: 1,
+      recordPerPage: Number(localStorage.getItem("rusty-base.admin.recordPerPage") || 20) || 20,
+      recordTotalPages: 1,
+      recordFilter: "",
+      recordSort: "-created",
       editorMode: "",
       editorRecordId: "",
       editorText: "",
@@ -640,6 +685,7 @@
           state.selectedCollection = "";
           state.records = [];
           state.recordCount = 0;
+          state.recordTotalPages = 1;
           state.error = error.message;
         }
 
@@ -659,6 +705,7 @@
         state.selectedCollection = "";
         state.records = [];
         state.recordCount = 0;
+        state.recordTotalPages = 1;
         state.settings = null;
       }
 
@@ -780,6 +827,7 @@
         button.addEventListener("click", async () => {
           state.selectedCollection = button.dataset.collectionName || "";
           localStorage.setItem("rusty-base.admin.collection", state.selectedCollection);
+          resetRecordBrowser();
           state.view = "records";
           await loadRecords(true);
           render();
@@ -789,6 +837,7 @@
         button.addEventListener("click", async () => {
           state.selectedCollection = button.dataset.collectionSelect || "";
           localStorage.setItem("rusty-base.admin.collection", state.selectedCollection);
+          resetRecordBrowser();
           state.view = "records";
           await loadRecords(true);
           render();
@@ -1090,6 +1139,7 @@
           }
           state.collectionDetails[state.selectedCollection] = saved;
         }
+        resetRecordBrowser();
         state.view = "records";
         status(editing ? "Collection saved" : "Collection created");
         await refresh();
@@ -1128,7 +1178,7 @@
         if (state.selectedCollection === name) {
           state.selectedCollection = "";
           localStorage.removeItem("rusty-base.admin.collection");
-          closeRecordEditor();
+          resetRecordBrowser();
         }
         status("Collection deleted");
         await refresh();
@@ -1193,6 +1243,7 @@
             <button type="button" id="refresh-records">Refresh</button>
           </div>
         </div>
+        ${recordBrowserControlsHtml()}
         ${state.records.length ? `
           <div class="table-wrap">
             <table>
@@ -1202,12 +1253,13 @@
           </div>
         ` : `
           <div class="empty">
-            <strong>No records yet</strong>
-            <span>Create the first record in this collection.</span>
+            <strong>${state.recordFilter ? "No matching records" : "No records yet"}</strong>
+            <span>${state.recordFilter ? "Adjust the filter or clear it to browse this collection." : "Create the first record in this collection."}</span>
           </div>
         `}
         ${recordEditorHtml()}
       `;
+      bindRecordBrowserControls();
       $("new-record").addEventListener("click", () => {
         openCreateEditor();
         render();
@@ -1249,6 +1301,102 @@
         input.addEventListener(eventName, () => {
           syncRecordFieldFromInput(input);
         });
+      });
+    }
+
+    function recordBrowserControlsHtml() {
+      const perPage = normalizedRecordPerPage();
+      const totalItems = Number(state.recordCount) || 0;
+      const totalPages = Math.max(1, Number(state.recordTotalPages) || Math.ceil(totalItems / perPage) || 1);
+      const page = Math.min(Math.max(1, Number(state.recordPage) || 1), totalPages);
+      const start = totalItems ? ((page - 1) * perPage) + 1 : 0;
+      const end = totalItems ? Math.min(page * perPage, totalItems) : 0;
+      const perPageOptions = [10, 20, 50, 100].map((value) => `
+        <option value="${value}" ${perPage === value ? "selected" : ""}>${value}</option>
+      `).join("");
+
+      return `
+        <div class="record-toolbar">
+          <div class="record-toolbar-grid">
+            <div class="field">
+              <label for="record-filter">Filter</label>
+              <input id="record-filter" value="${escapeAttribute(state.recordFilter)}" placeholder="published = true">
+            </div>
+            <div class="field">
+              <label for="record-sort">Sort</label>
+              <input id="record-sort" value="${escapeAttribute(state.recordSort)}" placeholder="-created">
+            </div>
+            <div class="field">
+              <label for="record-per-page">Per page</label>
+              <select id="record-per-page">${perPageOptions}</select>
+            </div>
+            <div class="record-query-actions">
+              <button type="button" id="apply-record-query" class="primary">Apply</button>
+              <button type="button" id="clear-record-query">Clear</button>
+            </div>
+          </div>
+          <div class="record-pager">
+            <span class="muted">${start}-${end} of ${totalItems}</span>
+            <div class="record-query-actions">
+              <button type="button" id="record-prev-page" ${page <= 1 ? "disabled" : ""}>Prev</button>
+              <span class="record-page-summary">Page ${page} / ${totalPages}</span>
+              <button type="button" id="record-next-page" ${page >= totalPages ? "disabled" : ""}>Next</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function bindRecordBrowserControls() {
+      const apply = $("apply-record-query");
+      if (!apply) {
+        return;
+      }
+
+      const applyQuery = async () => {
+        state.recordFilter = ($("record-filter").value || "").trim();
+        state.recordSort = ($("record-sort").value || "").trim();
+        state.recordPerPage = normalizedRecordPerPage(Number($("record-per-page").value) || 20);
+        localStorage.setItem("rusty-base.admin.recordPerPage", String(state.recordPerPage));
+        state.recordPage = 1;
+        await loadRecords(true);
+        render();
+      };
+
+      apply.addEventListener("click", applyQuery);
+      ["record-filter", "record-sort"].forEach((id) => {
+        const input = $(id);
+        input.addEventListener("keydown", async (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            await applyQuery();
+          }
+        });
+      });
+      $("record-per-page").addEventListener("change", applyQuery);
+      $("clear-record-query").addEventListener("click", async () => {
+        state.recordFilter = "";
+        state.recordSort = "-created";
+        state.recordPage = 1;
+        await loadRecords(true);
+        render();
+      });
+      $("record-prev-page").addEventListener("click", async () => {
+        if (state.recordPage <= 1) {
+          return;
+        }
+        state.recordPage -= 1;
+        await loadRecords(true);
+        render();
+      });
+      $("record-next-page").addEventListener("click", async () => {
+        const totalPages = Math.max(1, Number(state.recordTotalPages) || 1);
+        if (state.recordPage >= totalPages) {
+          return;
+        }
+        state.recordPage += 1;
+        await loadRecords(true);
+        render();
       });
     }
 
@@ -1556,9 +1704,13 @@
       if (state.collections.some((collection) => collection.name === state.selectedCollection)) {
         return;
       }
+      const previousCollection = state.selectedCollection;
       state.selectedCollection = state.collections[0] ? state.collections[0].name : "";
       if (state.selectedCollection) {
         localStorage.setItem("rusty-base.admin.collection", state.selectedCollection);
+      }
+      if (previousCollection !== state.selectedCollection) {
+        resetRecordBrowser();
       }
     }
 
@@ -1573,21 +1725,62 @@
       if (!state.token || !collection) {
         state.records = [];
         state.recordCount = 0;
+        state.recordTotalPages = 1;
         return;
       }
 
       try {
         collection = await ensureCollectionDetails(collection.name);
-        const page = await api(`${collectionRecordsPath(collection.name)}?perPage=20&sort=-created`);
+        const page = await api(recordListPath(collection.name));
         state.records = page.items || [];
         state.recordCount = page.totalItems == null ? state.records.length : page.totalItems;
+        state.recordPage = Number(page.page) || state.recordPage || 1;
+        state.recordPerPage = normalizedRecordPerPage(Number(page.perPage) || state.recordPerPage);
+        state.recordTotalPages = Number(page.totalPages) || Math.max(1, Math.ceil(state.recordCount / state.recordPerPage));
+        if (showErrors) {
+          state.error = "";
+        }
       } catch (error) {
         state.records = [];
         state.recordCount = 0;
+        state.recordTotalPages = 1;
         if (showErrors) {
           state.error = error.message;
         }
       }
+    }
+
+    function recordListPath(collectionName) {
+      state.recordPage = Math.max(1, Number(state.recordPage) || 1);
+      state.recordPerPage = normalizedRecordPerPage();
+
+      const params = new URLSearchParams();
+      params.set("page", String(state.recordPage));
+      params.set("perPage", String(state.recordPerPage));
+      const sort = String(state.recordSort || "").trim();
+      const filter = String(state.recordFilter || "").trim();
+      if (sort) {
+        params.set("sort", sort);
+      }
+      if (filter) {
+        params.set("filter", filter);
+      }
+      return `${collectionRecordsPath(collectionName)}?${params.toString()}`;
+    }
+
+    function normalizedRecordPerPage(value = state.recordPerPage) {
+      const perPage = Number(value) || 20;
+      return [10, 20, 50, 100].includes(perPage) ? perPage : 20;
+    }
+
+    function resetRecordBrowser() {
+      state.records = [];
+      state.recordCount = 0;
+      state.recordPage = 1;
+      state.recordTotalPages = 1;
+      state.recordFilter = "";
+      state.recordSort = "-created";
+      closeRecordEditor();
     }
 
     async function ensureCollectionDetails(collectionName) {
@@ -1758,10 +1951,8 @@
       localStorage.removeItem(tokenKey);
       state.collections = [];
       state.collectionDetails = {};
-      state.records = [];
-      state.recordCount = 0;
+      resetRecordBrowser();
       state.settings = null;
-      closeRecordEditor();
       closeCollectionEditor();
       await refresh();
     });

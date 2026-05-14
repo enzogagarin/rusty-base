@@ -108,7 +108,12 @@ fn serves_embedded_admin_ui_shell() {
         assert!(html.contains("/api/settings?fields="));
         assert!(html.contains(r#"data-view="records""#));
         assert!(html.contains("collectionRecordsPath"));
-        assert!(html.contains("perPage=20&sort=-created"));
+        assert!(html.contains("recordListPath"));
+        assert!(html.contains("URLSearchParams"));
+        assert!(html.contains("record-filter"));
+        assert!(html.contains("record-sort"));
+        assert!(html.contains("record-per-page"));
+        assert!(html.contains("record-next-page"));
         assert!(html.contains("Login or initialize first"));
         assert!(html.contains("collection-json-input"));
         assert!(html.contains("Create collection"));
