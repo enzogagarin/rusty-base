@@ -229,41 +229,41 @@ async function exerciseAdminUi(page) {
     "superuser session"
   );
 
-  console.log("admin browser smoke: creating a collection through the UI");
-  await page.click("[data-view='collections']");
-  await page.waitFor("document.querySelector('#view-title')?.textContent === 'Collections'", "collections view");
-  await page.click("#new-collection");
-  await page.waitFor("document.querySelector('#collection-json-input')", "collection editor");
-  await page.setValue("#collection-json-input", JSON.stringify({
+  console.log("admin browser smoke: creating related collections through the UI");
+  await createCollection(page, {
+    name: "ui_authors",
+    fields: [
+      { name: "name", type: "text", required: true }
+    ]
+  });
+  await createJsonRecord(page, {
+    id: "ui_author_1",
+    name: "Ada Lovelace"
+  });
+
+  await createCollection(page, {
     name: "ui_posts",
     fields: [
       { name: "title", type: "text", required: true },
-      { name: "published", type: "bool" }
+      { name: "published", type: "bool" },
+      { name: "author", type: "relation", collection: "ui_authors", maxSelect: 1 },
+      { name: "asset", type: "file", maxSelect: 1, protected: true, mimeTypes: ["text/plain"] }
     ]
-  }, null, 2));
-  await page.click("#save-collection");
-  await page.waitFor(
-    "document.querySelector('#view-title')?.textContent === 'Records' && document.body.textContent.includes('ui_posts records')",
-    "created collection records view"
-  );
-
-  console.log("admin browser smoke: creating records through the UI");
-  await createRecord(page, {
-    id: "ui_post_1",
-    title: "Hello UI",
-    published: true
   });
-  await createRecord(page, {
+
+  console.log("admin browser smoke: creating relation and file records through the UI");
+  await createPostWithFieldEditor(page);
+  await createJsonRecord(page, {
     id: "ui_post_2",
     title: "Hidden UI",
     published: false
   });
   await page.waitFor(
-    "document.body.textContent.includes('Hello UI') && document.body.textContent.includes('Hidden UI')",
-    "record rows"
+    "document.body.textContent.includes('Hello UI') && document.body.textContent.includes('Ada Lovelace') && document.body.textContent.includes('Hidden UI')",
+    "relation and record rows"
   );
 
-  console.log("admin browser smoke: filtering and editing records through the UI");
+  console.log("admin browser smoke: filtering, editing, and downloading files through the UI");
   await page.setValue("#record-filter", "published = true");
   await page.setValue("#record-sort", "title");
   await page.click("#apply-record-query");
@@ -272,17 +272,7 @@ async function exerciseAdminUi(page) {
     "filtered record table"
   );
 
-  await page.click("[data-edit-record='ui_post_1']");
-  await page.waitFor("document.querySelector('#record-json-input')", "edit record editor");
-  await page.setValue("#record-json-input", JSON.stringify({
-    title: "Hello UI Edited",
-    published: true
-  }, null, 2));
-  await page.click("#save-record");
-  await page.waitFor(
-    "document.body.textContent.includes('Hello UI Edited') && !document.querySelector('#record-json-input')",
-    "edited record row"
-  );
+  await exercisePostEditAndFileControls(page);
 
   await page.click("#logout");
   await page.waitFor(
@@ -293,14 +283,81 @@ async function exerciseAdminUi(page) {
   page.assertNoErrors();
 }
 
-async function createRecord(page, payload) {
+async function createCollection(page, payload) {
+  await page.click("[data-view='collections']");
+  await page.waitFor("document.querySelector('#view-title')?.textContent === 'Collections'", "collections view");
+  await page.click("#new-collection");
+  await page.waitFor("document.querySelector('#collection-json-input')", `collection editor ${payload.name}`);
+  await page.setValue("#collection-json-input", JSON.stringify(payload, null, 2));
+  await page.click("#save-collection");
+  await page.waitFor(
+    `document.querySelector('#view-title')?.textContent === 'Records' && document.body.textContent.includes(${JSON.stringify(`${payload.name} records`)})`,
+    `created collection ${payload.name}`
+  );
+}
+
+async function createJsonRecord(page, payload) {
   await page.click("#new-record");
   await page.waitFor("document.querySelector('#record-json-input')", `record editor ${payload.id}`);
   await page.setValue("#record-json-input", JSON.stringify(payload, null, 2));
   await page.click("#save-record");
+  const label = payload.title || payload.name || payload.id;
   await page.waitFor(
-    `document.body.textContent.includes(${JSON.stringify(payload.title)}) && !document.querySelector('#record-json-input')`,
+    `document.body.textContent.includes(${JSON.stringify(label)}) && !document.querySelector('#record-json-input')`,
     `created record ${payload.id}`
+  );
+}
+
+async function createPostWithFieldEditor(page) {
+  await page.click("#new-record");
+  await page.waitFor("document.querySelector('#record-json-input')", "post record editor");
+  await page.setValue("#record-json-input", JSON.stringify({ id: "ui_post_1" }, null, 2));
+  await page.setValue("[data-record-field='title']", "Hello UI");
+  await page.setChecked("[data-record-field='published']", true);
+  await page.waitFor(
+    "Array.from(document.querySelector(\"[data-record-field='author']\")?.options || []).some((option) => option.value === 'ui_author_1')",
+    "relation picker options"
+  );
+  await page.setSelectValue("[data-record-field='author']", "ui_author_1");
+  await page.setFile("[data-record-file='asset']", {
+    name: "admin-ui-smoke.txt",
+    type: "text/plain",
+    bytes: "admin browser smoke file"
+  });
+  await page.click("#save-record");
+  await page.waitFor(
+    "document.body.textContent.includes('Hello UI') && document.body.textContent.includes('Ada Lovelace') && !document.querySelector('#record-json-input')",
+    "created relation and file record"
+  );
+}
+
+async function exercisePostEditAndFileControls(page) {
+  await page.click("[data-edit-record='ui_post_1']");
+  await page.waitFor("document.querySelector('#record-json-input')", "edit record editor");
+  await page.waitFor("document.querySelector('[data-record-file-download]')", "file download control");
+  const uploadedFileName = await page.eval("document.querySelector('[data-record-file-download]')?.dataset.recordFileDownload || ''");
+  if (!uploadedFileName) {
+    throw new Error("Uploaded file name was not rendered in the record editor");
+  }
+
+  await page.click("[data-record-file-download]");
+  await page.waitFor("document.querySelector('#status')?.textContent === 'File downloaded'", "file download status");
+
+  await page.eval(`
+    (() => {
+      const input = document.querySelector("#record-json-input");
+      const payload = JSON.parse(input.value || "{}");
+      payload.title = "Hello UI Edited";
+      input.value = JSON.stringify(payload, null, 2);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    })();
+  `);
+  await page.setChecked("[data-record-file-delete='asset']", true);
+  await page.click("#save-record");
+  await page.waitFor(
+    `document.body.textContent.includes('Hello UI Edited') && !document.body.textContent.includes(${JSON.stringify(uploadedFileName)}) && !document.querySelector('#record-json-input')`,
+    "edited record row with removed file"
   );
 }
 
@@ -366,7 +423,7 @@ class CdpPage {
       (() => {
         const node = document.querySelector(${JSON.stringify(selector)});
         if (!node) {
-          throw new Error("Missing selector: ${selector}");
+          throw new Error("Missing selector: " + ${JSON.stringify(selector)});
         }
         node.click();
         return true;
@@ -379,9 +436,60 @@ class CdpPage {
       (() => {
         const node = document.querySelector(${JSON.stringify(selector)});
         if (!node) {
-          throw new Error("Missing selector: ${selector}");
+          throw new Error("Missing selector: " + ${JSON.stringify(selector)});
         }
         node.value = ${JSON.stringify(value)};
+        node.dispatchEvent(new Event("input", { bubbles: true }));
+        node.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      })();
+    `);
+  }
+
+  async setChecked(selector, checked) {
+    await this.eval(`
+      (() => {
+        const node = document.querySelector(${JSON.stringify(selector)});
+        if (!node) {
+          throw new Error("Missing selector: " + ${JSON.stringify(selector)});
+        }
+        node.checked = ${checked ? "true" : "false"};
+        node.dispatchEvent(new Event("input", { bubbles: true }));
+        node.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      })();
+    `);
+  }
+
+  async setSelectValue(selector, value) {
+    await this.eval(`
+      (() => {
+        const node = document.querySelector(${JSON.stringify(selector)});
+        if (!node) {
+          throw new Error("Missing selector: " + ${JSON.stringify(selector)});
+        }
+        node.value = ${JSON.stringify(value)};
+        node.dispatchEvent(new Event("input", { bubbles: true }));
+        node.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      })();
+    `);
+  }
+
+  async setFile(selector, file) {
+    await this.eval(`
+      (() => {
+        const node = document.querySelector(${JSON.stringify(selector)});
+        if (!node) {
+          throw new Error("Missing selector: " + ${JSON.stringify(selector)});
+        }
+        const transfer = new DataTransfer();
+        transfer.items.add(new File(
+          [${JSON.stringify(file.bytes)}],
+          ${JSON.stringify(file.name)},
+          { type: ${JSON.stringify(file.type)} }
+        ));
+        node.files = transfer.files;
         node.dispatchEvent(new Event("input", { bubbles: true }));
         node.dispatchEvent(new Event("change", { bubbles: true }));
         return true;
