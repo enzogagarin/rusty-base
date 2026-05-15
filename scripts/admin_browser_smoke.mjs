@@ -278,6 +278,7 @@ async function exerciseAdminUi(page) {
 
   await exercisePostEditAndFileControls(page);
   await exerciseDestructiveActionGuards(page);
+  await exerciseAuthRecordEditor(page);
 
   await page.click("#logout");
   await page.waitFor(
@@ -482,6 +483,42 @@ async function exerciseDestructiveActionGuards(page) {
     "!document.body.textContent.includes('ui_posts') && document.querySelector('#view-title')?.textContent === 'Collections'",
     "collection delete confirmation"
   );
+}
+
+async function exerciseAuthRecordEditor(page) {
+  console.log("admin browser smoke: creating an auth record through the UI");
+  await createCollection(page, {
+    name: "ui_members",
+    type: "auth",
+    fields: [
+      { name: "email", type: "email", required: true }
+    ]
+  });
+
+  await page.click("#new-record");
+  await page.waitFor("document.querySelector('#record-json-input')", "auth record editor");
+  await page.setValue("[data-record-field='email']", "member@example.com");
+  await page.setValue("[data-record-field='password']", "correct horse");
+  await page.setValue("[data-record-field='passwordConfirm']", "correct horse");
+  await page.click("#save-record");
+  await page.waitFor(
+    "document.body.textContent.includes('member@example.com') && !document.querySelector('#record-json-input')",
+    "created auth record"
+  );
+
+  const loginOk = await page.eval(`
+    fetch("/api/collections/ui_members/auth-with-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identity: "member@example.com",
+        password: "correct horse"
+      })
+    }).then((response) => response.ok)
+  `);
+  if (!loginOk) {
+    throw new Error("Created auth record could not authenticate");
+  }
 }
 
 class CdpPage {

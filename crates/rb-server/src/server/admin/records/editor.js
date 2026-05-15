@@ -1,5 +1,6 @@
 import { $, api, jsonApi, state, status } from "../state.js";
 import {
+  collectionIsAuth,
   collectionRecordsPath,
   editableRecordPayload,
   recordFieldInputDisplayValue,
@@ -80,7 +81,7 @@ export function bindRecordEditorControls(actions) {
 }
 
 function recordFieldFormHtml(collection, draft) {
-  const fields = userCollectionFields(collection);
+  const fields = recordEditorFields(collection);
   if (!fields.length) {
     return "";
   }
@@ -129,6 +130,16 @@ function recordFieldInputHtml(field, value, index) {
       <div class="${fieldClass}">
         ${label}
         <label class="check-field"><input ${common} type="checkbox" ${value === true ? "checked" : ""}>true</label>
+        ${fieldError}
+      </div>
+    `;
+  }
+
+  if (type === "password") {
+    return `
+      <div class="${fieldClass}">
+        ${label}
+        <input ${common} type="password" value="${escapeAttribute(recordFieldInputDisplayValue(value))}" autocomplete="new-password">
         ${fieldError}
       </div>
     `;
@@ -196,6 +207,26 @@ function recordEditorDraft() {
   } catch (error) {
     return { ok: false, error };
   }
+}
+
+function recordEditorFields(collection) {
+  const fields = userCollectionFields(collection);
+  if (!collectionIsAuth(collection)) {
+    return fields;
+  }
+
+  return fields.concat([
+    {
+      name: "password",
+      type: "password",
+      required: state.editorMode === "create"
+    },
+    {
+      name: "passwordConfirm",
+      type: "password",
+      required: state.editorMode === "create"
+    }
+  ]);
 }
 
 export function openCreateEditor() {

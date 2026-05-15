@@ -268,6 +268,10 @@ fn serves_embedded_admin_ui_shell() {
     assert!(js_bundle.contains("selectRecordCollection"));
     assert!(js_bundle.contains("recordFieldFormHtml"));
     assert!(js_bundle.contains("data-record-field"));
+    assert!(js_bundle.contains("collectionIsAuth"));
+    assert!(js_bundle.contains("recordEditorFields"));
+    assert!(js_bundle.contains("passwordConfirm"));
+    assert!(js_bundle.contains("new-password"));
     assert!(js_bundle.contains("syncRecordFieldFromInput"));
     assert!(js_bundle.contains("recordFieldValuePreview"));
     assert!(js_bundle.contains("ensureRelationOptionsForCollection"));

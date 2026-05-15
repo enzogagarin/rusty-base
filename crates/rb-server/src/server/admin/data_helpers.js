@@ -32,6 +32,10 @@ export function userCollectionFields(collection) {
   return collection.fields.filter((field) => field && field.name && !isResponseOnlyCollectionField(field));
 }
 
+export function collectionIsAuth(collection) {
+  return collection && (collection.type || collection.kind) === "auth";
+}
+
 export function relationFieldNames(collection) {
   return userCollectionFields(collection)
     .filter((field) => (field.type || field.kind) === "relation" && relationTargetCollectionName(field))

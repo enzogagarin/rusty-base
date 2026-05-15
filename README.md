@@ -197,10 +197,11 @@ upload/download/delete, filter/sort/pagination, and restart persistence.
 Chrome/Chromium through the DevTools protocol and clicks through the core admin
 flow: initialize/login, create collections, create records, use a relation
 picker, upload/download/delete a protected file, filter, edit, verify
-destructive confirmation guards, and logout. The posts collection is built
-through the admin field tools instead of raw JSON, including editing an existing
-select field before save, so relation/select/file field creation and update stay
-covered. Set `RB_ADMIN_BROWSER_CHROME` if Chrome is not on a standard path.
+destructive confirmation guards, create an auth record with password fields,
+and logout. The posts collection is built through the admin field tools instead
+of raw JSON, including editing an existing select field before save, so
+relation/select/file field creation and update stay covered. Set
+`RB_ADMIN_BROWSER_CHROME` if Chrome is not on a standard path.
 
 Run the current CLI smoke path:
 
