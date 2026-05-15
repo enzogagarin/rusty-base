@@ -1,5 +1,5 @@
 import { $, api, jsonApi, state, status, tokenKey } from "./state.js";
-import { closeCollectionEditor, renderCollections } from "./collections_ui.js";
+import { closeCollectionEditor, closeCollectionTransfer, renderCollections } from "./collections_ui.js";
 import { closeRecordEditor, ensureRelationOptionsForCollection, renderRecords } from "./records_ui.js";
 import { collectionPath, collectionRecordsPath, normalizedRecordPerPage, relationFieldNames } from "./data_helpers.js";
 import { metric, row, title } from "./render_helpers.js";
@@ -260,6 +260,7 @@ $("logout").addEventListener("click", async () => {
   resetRecordBrowser();
   state.settings = null;
   closeCollectionEditor();
+  closeCollectionTransfer();
   await refresh();
 });
 

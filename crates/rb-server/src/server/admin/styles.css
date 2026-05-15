@@ -517,6 +517,11 @@ tr:last-child td {
   min-height: 96px;
 }
 
+.collection-transfer-input,
+#collection-transfer-input {
+  min-height: 260px;
+}
+
 .field-tools-form .field {
   min-width: 0;
 }

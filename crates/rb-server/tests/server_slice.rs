@@ -164,6 +164,18 @@ fn serves_embedded_admin_ui_shell() {
     );
     let collections_fields_js = String::from_utf8(collections_fields_js.raw_body).unwrap();
 
+    let collections_import_export_js = app.handle(HttpRequest::new(
+        "GET",
+        "/_/admin/collections/import_export.js",
+    ));
+    assert_eq!(collections_import_export_js.status, 200);
+    assert_eq!(
+        collections_import_export_js.content_type,
+        "text/javascript; charset=utf-8"
+    );
+    let collections_import_export_js =
+        String::from_utf8(collections_import_export_js.raw_body).unwrap();
+
     let collections_meta_js = app.handle(HttpRequest::new("GET", "/_/admin/collections/meta.js"));
     assert_eq!(collections_meta_js.status, 200);
     assert_eq!(
@@ -243,7 +255,7 @@ fn serves_embedded_admin_ui_shell() {
     let data_helpers_js = String::from_utf8(data_helpers_js.raw_body).unwrap();
 
     let js_bundle = format!(
-        "{js}\n{state_js}\n{collections_ui_js}\n{collections_fields_js}\n{collections_meta_js}\n{records_ui_js}\n{records_browser_js}\n{records_editor_js}\n{records_files_js}\n{records_relations_js}\n{records_validation_js}\n{render_helpers_js}\n{settings_ui_js}\n{data_helpers_js}"
+        "{js}\n{state_js}\n{collections_ui_js}\n{collections_fields_js}\n{collections_import_export_js}\n{collections_meta_js}\n{records_ui_js}\n{records_browser_js}\n{records_editor_js}\n{records_files_js}\n{records_relations_js}\n{records_validation_js}\n{render_helpers_js}\n{settings_ui_js}\n{data_helpers_js}"
     );
     assert!(js_bundle.contains("/api/health"));
     assert!(js_bundle.contains("/api/collections/_superusers/auth-with-password"));
@@ -251,6 +263,9 @@ fn serves_embedded_admin_ui_shell() {
     assert!(js_bundle.contains("/api/settings?fields="));
     assert!(js_bundle.contains("settings-app-name"));
     assert!(js_bundle.contains("Settings saved"));
+    assert!(js_bundle.contains("/api/collections/meta/export"));
+    assert!(js_bundle.contains("/api/collections/import"));
+    assert!(js_bundle.contains("collection-transfer-input"));
     assert!(js_bundle.contains("collectionRecordsPath"));
     assert!(js_bundle.contains("recordListPath"));
     assert!(js_bundle.contains("relationFieldNames"));

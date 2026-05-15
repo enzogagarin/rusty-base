@@ -2,6 +2,13 @@ import { $, api, confirmDangerousAction, jsonApi, state, status } from "./state.
 import { collectionPath, editableCollectionPayload } from "./data_helpers.js";
 import { escapeAttribute, escapeHtml } from "./render_helpers.js";
 import { bindCollectionFieldTools, closeCollectionFieldEditor, collectionFieldToolsHtml } from "./collections/fields.js";
+import {
+  bindCollectionTransferControls,
+  closeCollectionTransfer,
+  collectionTransferHtml,
+  openCollectionExport,
+  openCollectionImport
+} from "./collections/import_export.js";
 import { bindCollectionMetaTools, collectionMetaToolsHtml } from "./collections/meta.js";
 
 let actions = {
@@ -62,15 +69,27 @@ export function renderCollections(nextActions) {
       <h2>Collections</h2>
       <div class="record-actions">
         <button type="button" id="new-collection" class="primary">New</button>
+        <button type="button" id="export-collections">Export</button>
+        <button type="button" id="import-collections">Import</button>
         <button type="button" id="refresh">Refresh</button>
       </div>
     </div>
     ${body}
     ${collectionEditorHtml()}
+    ${collectionTransferHtml()}
   `;
   $("new-collection").addEventListener("click", () => {
+    closeCollectionTransfer();
     openCollectionEditor();
     actions.render();
+  });
+  $("export-collections").addEventListener("click", async () => {
+    closeCollectionEditor();
+    await openCollectionExport(actions.render);
+  });
+  $("import-collections").addEventListener("click", () => {
+    closeCollectionEditor();
+    openCollectionImport(actions.render);
   });
   $("refresh").addEventListener("click", actions.refresh);
   document.querySelectorAll("[data-collection-name]").forEach((button) => {
@@ -129,6 +148,10 @@ export function renderCollections(nextActions) {
     render: actions.render,
     showError: showCollectionToolError,
     writePayload: writeCollectionEditorPayload
+  });
+  bindCollectionTransferControls({
+    refresh: actions.refresh,
+    render: actions.render
   });
 }
 
@@ -198,6 +221,8 @@ export function closeCollectionEditor() {
   state.collectionEditorError = "";
   state.collectionFieldEditIndex = -1;
 }
+
+export { closeCollectionTransfer };
 
 function collectionEditorDraft() {
   try {

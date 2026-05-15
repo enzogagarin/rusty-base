@@ -27,6 +27,11 @@ export const state = {
   collectionEditorText: "",
   collectionEditorError: "",
   collectionFieldEditIndex: -1,
+  collectionTransferOpen: false,
+  collectionTransferMode: "",
+  collectionTransferText: "",
+  collectionTransferError: "",
+  collectionTransferDeleteMissing: false,
   settings: null,
   settingsError: "",
   error: ""

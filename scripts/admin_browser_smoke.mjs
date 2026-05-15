@@ -243,6 +243,7 @@ async function exerciseAdminUi(page) {
     id: "ui_author_1",
     name: "Ada Lovelace"
   });
+  await exerciseCollectionImportExport(page);
 
   await createCollectionWithFieldTools(page, "ui_posts", [
     { name: "title", type: "text", required: true },
@@ -301,6 +302,36 @@ async function createCollection(page, payload) {
   await page.waitFor(
     `document.querySelector('#view-title')?.textContent === 'Records' && document.body.textContent.includes(${JSON.stringify(`${payload.name} records`)})`,
     `created collection ${payload.name}`
+  );
+}
+
+async function exerciseCollectionImportExport(page) {
+  console.log("admin browser smoke: exporting and importing collections through the UI");
+  await page.click("[data-view='collections']");
+  await page.waitFor("document.querySelector('#view-title')?.textContent === 'Collections'", "collections view");
+  await page.click("#export-collections");
+  await page.waitFor(
+    "document.querySelector('#collection-transfer-input')?.value.includes('ui_authors')",
+    "collection export payload"
+  );
+  await page.click("#cancel-collection-transfer");
+  await page.click("#import-collections");
+  await page.waitFor("document.querySelector('#collection-transfer-input')", "collection import editor");
+  await page.setValue("#collection-transfer-input", JSON.stringify({
+    collections: [
+      {
+        name: "ui_imported",
+        type: "base",
+        schema: [
+          { name: "title", type: "text", required: true }
+        ]
+      }
+    ]
+  }, null, 2));
+  await page.click("#run-collection-import");
+  await page.waitFor(
+    "document.querySelector('#view-title')?.textContent === 'Collections' && document.body.textContent.includes('ui_imported')",
+    "collection import result"
   );
 }
 
