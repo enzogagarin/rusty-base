@@ -351,6 +351,10 @@ tr:last-child td {
   font-weight: 700;
 }
 
+.pill.warning {
+  color: var(--warn);
+}
+
 .link-button {
   min-height: 30px;
   border: 0;
@@ -522,6 +526,23 @@ tr:last-child td {
   grid-template-columns: minmax(240px, 1fr) auto;
   gap: 8px;
   align-items: end;
+}
+
+.collection-index-warnings {
+  display: grid;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 8%, var(--panel));
+  color: var(--text);
+  padding: 12px;
+}
+
+.collection-index-warnings ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
 }
 
 .collection-transfer-input,

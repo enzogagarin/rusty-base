@@ -1,7 +1,7 @@
 import { $, state } from "../state.js";
 import { escapeHtml } from "../render_helpers.js";
 
-export function collectionIndexToolsHtml(draft) {
+export function collectionIndexToolsHtml(draft, warnings = []) {
   if (!draft.ok) {
     return `
       <div class="field-tools">
@@ -14,6 +14,7 @@ export function collectionIndexToolsHtml(draft) {
   }
 
   const indexes = Array.isArray(draft.value.indexes) ? draft.value.indexes : [];
+  const indexWarnings = Array.isArray(warnings) ? warnings : [];
   const rows = indexes.map((index, itemIndex) => `
     <tr>
       <td><code class="record-json">${escapeHtml(index)}</code></td>
@@ -31,6 +32,7 @@ export function collectionIndexToolsHtml(draft) {
         <h2>Indexes</h2>
         <span class="muted">${indexes.length} index${indexes.length === 1 ? "" : "es"}</span>
       </div>
+      ${collectionIndexWarningsHtml(indexWarnings)}
       ${indexes.length ? `
         <div class="table-wrap">
           <table>
@@ -46,6 +48,27 @@ export function collectionIndexToolsHtml(draft) {
         </div>
         <button type="button" id="add-collection-index" class="primary">Add</button>
       </div>
+    </div>
+  `;
+}
+
+function collectionIndexWarningsHtml(warnings) {
+  if (!warnings.length) {
+    return "";
+  }
+
+  const items = warnings.map((warning) => {
+    const index = warning && warning.index ? `<code class="record-json">${escapeHtml(warning.index)}</code>` : "";
+    const message = warning && (warning.message || warning.code)
+      ? warning.message || warning.code
+      : "Index metadata was saved but not executed.";
+    return `<li><strong>${escapeHtml(message)}</strong>${index}</li>`;
+  }).join("");
+
+  return `
+    <div class="collection-index-warnings">
+      <strong>Index warnings</strong>
+      <ul>${items}</ul>
     </div>
   `;
 }

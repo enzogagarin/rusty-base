@@ -17,7 +17,7 @@ async function refresh() {
 
   if (state.token) {
     try {
-      const collections = await api("/api/collections?fields=items.id,items.name,items.type,items.system,totalItems");
+      const collections = await api("/api/collections?fields=items.id,items.name,items.type,items.system,items.indexes,items.indexWarnings,totalItems");
       state.collections = collections.items || [];
       ensureSelectedCollection();
     } catch (error) {

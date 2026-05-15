@@ -277,6 +277,8 @@ fn serves_embedded_admin_ui_shell() {
     assert!(js_bundle.contains("collection-transfer-input"));
     assert!(js_bundle.contains("new-index-sql"));
     assert!(js_bundle.contains("data-index-remove"));
+    assert!(js_bundle.contains("items.indexWarnings"));
+    assert!(js_bundle.contains("collection-index-warnings"));
     assert!(js_bundle.contains("collectionRecordsPath"));
     assert!(js_bundle.contains("recordListPath"));
     assert!(js_bundle.contains("relationFieldNames"));

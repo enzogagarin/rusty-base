@@ -40,6 +40,7 @@ export function renderCollections(nextActions) {
       </td>
       <td><span class="pill">${escapeHtml(collection.type || "")}</span></td>
       <td>${collection.system ? "system" : "base"}</td>
+      <td>${collectionIndexStatusHtml(collection)}</td>
       <td>
         <div class="record-actions">
           <button type="button" data-collection-select="${escapeAttribute(collection.name || "")}">Select</button>
@@ -54,7 +55,7 @@ export function renderCollections(nextActions) {
   const body = state.collections.length ? `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Name</th><th>Type</th><th>Scope</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Name</th><th>Type</th><th>Scope</th><th>Indexes</th><th>Actions</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -177,7 +178,7 @@ function collectionEditorHtml() {
       ${state.collectionEditorError ? `<div class="error">${escapeHtml(state.collectionEditorError)}</div>` : ""}
       ${collectionMetaToolsHtml(draft)}
       ${collectionFieldToolsHtml(draft)}
-      ${collectionIndexToolsHtml(draft)}
+      ${collectionIndexToolsHtml(draft, state.collectionIndexWarnings)}
       <textarea id="collection-json-input" spellcheck="false">${escapeHtml(state.collectionEditorText)}</textarea>
       <div class="editor-actions">
         <button type="button" id="cancel-collection">Cancel</button>
@@ -199,6 +200,7 @@ function openCollectionEditor() {
     ]
   }, null, 2);
   state.collectionEditorError = "";
+  state.collectionIndexWarnings = [];
   state.collectionFieldEditIndex = -1;
 }
 
@@ -214,6 +216,7 @@ async function openEditCollectionEditor(name) {
     state.collectionEditorName = collection.name || name;
     state.collectionEditorText = JSON.stringify(editableCollectionPayload(collection), null, 2);
     state.collectionEditorError = "";
+    state.collectionIndexWarnings = Array.isArray(collection.indexWarnings) ? collection.indexWarnings : [];
     state.collectionFieldEditIndex = -1;
     actions.render();
   } catch (error) {
@@ -227,6 +230,7 @@ export function closeCollectionEditor() {
   state.collectionEditorName = "";
   state.collectionEditorText = "";
   state.collectionEditorError = "";
+  state.collectionIndexWarnings = [];
   state.collectionFieldEditIndex = -1;
 }
 
@@ -258,6 +262,24 @@ function showCollectionToolError(message, jsonInput) {
   actions.render();
 }
 
+function collectionIndexStatusHtml(collection) {
+  const warnings = Array.isArray(collection.indexWarnings) ? collection.indexWarnings.length : 0;
+  if (warnings) {
+    const title = collection.indexWarnings
+      .map((warning) => warning && (warning.message || warning.code || warning.index))
+      .filter(Boolean)
+      .join("\n");
+    return `<span class="pill warning" title="${escapeAttribute(title)}">${warnings} warning${warnings === 1 ? "" : "s"}</span>`;
+  }
+
+  const indexes = Array.isArray(collection.indexes) ? collection.indexes.length : 0;
+  if (indexes) {
+    return `<span class="pill">${indexes} index${indexes === 1 ? "" : "es"}</span>`;
+  }
+
+  return `<span class="muted">-</span>`;
+}
+
 async function saveCollection() {
   const input = $("collection-json-input");
   if (!input) {
@@ -280,6 +302,7 @@ async function saveCollection() {
     const saved = state.collectionEditorMode === "edit"
       ? await jsonApi(collectionPath(state.collectionEditorName), payload, "PATCH")
       : await jsonApi("/api/collections", payload, "POST");
+    const warnings = saved && Array.isArray(saved.indexWarnings) ? saved.indexWarnings : [];
     closeCollectionEditor();
     state.selectedCollection = saved && saved.name ? saved.name : payload.name || "";
     if (state.selectedCollection) {
@@ -291,7 +314,9 @@ async function saveCollection() {
     }
     actions.resetRecordBrowser();
     state.view = "records";
-    status(editing ? "Collection saved" : "Collection created");
+    status(warnings.length
+      ? `${editing ? "Collection saved" : "Collection created"} with ${warnings.length} index warning${warnings.length === 1 ? "" : "s"}`
+      : editing ? "Collection saved" : "Collection created");
     await actions.refresh();
   } catch (error) {
     state.collectionEditorText = input.value;

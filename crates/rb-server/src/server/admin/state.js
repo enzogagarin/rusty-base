@@ -26,6 +26,7 @@ export const state = {
   collectionEditorName: "",
   collectionEditorText: "",
   collectionEditorError: "",
+  collectionIndexWarnings: [],
   collectionFieldEditIndex: -1,
   collectionTransferOpen: false,
   collectionTransferMode: "",

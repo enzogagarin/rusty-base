@@ -258,9 +258,11 @@ async function exerciseAdminUi(page) {
       { name: "status", option: "draft, published" }
     ],
     indexes: [
-      "CREATE INDEX idx_ui_posts_title ON ui_posts (title)"
+      "CREATE INDEX idx_ui_posts_title ON ui_posts (title)",
+      "CREATE UNIQUE INDEX idx_ui_posts_unique_title ON ui_posts (title)"
     ]
   });
+  await assertCollectionIndexWarnings(page, "ui_posts");
 
   console.log("admin browser smoke: creating relation and file records through the UI");
   await createPostWithFieldEditor(page);
@@ -394,6 +396,25 @@ async function addCollectionIndex(page, sql) {
   await page.waitFor(
     `JSON.parse(document.querySelector('#collection-json-input')?.value || '{}').indexes?.includes(${JSON.stringify(sql)})`,
     "collection index added"
+  );
+}
+
+async function assertCollectionIndexWarnings(page, name) {
+  await page.click("[data-view='collections']");
+  await page.waitFor(
+    `document.querySelector('#view-title')?.textContent === 'Collections' && document.body.textContent.includes(${JSON.stringify(name)}) && document.body.textContent.includes('1 warning')`,
+    `collection ${name} index warning badge`
+  );
+  await page.click(`[data-collection-edit='${name}']`);
+  await page.waitFor(
+    "document.body.textContent.includes('Index warnings') && document.body.textContent.includes('Index metadata was saved but not executed')",
+    `collection ${name} index warning details`
+  );
+  await page.click("#cancel-collection");
+  await page.click(`[data-collection-select='${name}']`);
+  await page.waitFor(
+    `document.querySelector('#view-title')?.textContent === 'Records' && document.body.textContent.includes(${JSON.stringify(`${name} records`)})`,
+    `returned to ${name} records after index warning check`
   );
 }
 
