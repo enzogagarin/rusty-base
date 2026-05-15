@@ -247,9 +247,11 @@ async function exerciseAdminUi(page) {
   await createCollectionWithFieldTools(page, "ui_posts", [
     { name: "title", type: "text", required: true },
     { name: "published", type: "bool" },
-    { name: "status", type: "select", option: "draft, published" },
+    { name: "status", type: "select", option: "draft" },
     { name: "author", type: "relation", option: "ui_authors", max: 1 },
     { name: "asset", type: "file", option: "text/plain", max: 1, protected: true }
+  ], [
+    { name: "status", option: "draft, published" }
   ]);
 
   console.log("admin browser smoke: creating relation and file records through the UI");
@@ -299,7 +301,7 @@ async function createCollection(page, payload) {
   );
 }
 
-async function createCollectionWithFieldTools(page, name, fields) {
+async function createCollectionWithFieldTools(page, name, fields, edits = []) {
   await page.click("[data-view='collections']");
   await page.waitFor("document.querySelector('#view-title')?.textContent === 'Collections'", "collections view");
   await page.click("#new-collection");
@@ -307,6 +309,9 @@ async function createCollectionWithFieldTools(page, name, fields) {
   await page.setValue("#collection-json-input", JSON.stringify({ name, fields: [] }, null, 2));
   for (const field of fields) {
     await addCollectionField(page, field);
+  }
+  for (const edit of edits) {
+    await editCollectionField(page, edit);
   }
   await page.click("#save-collection");
   await page.waitFor(
@@ -337,6 +342,47 @@ async function addCollectionField(page, field) {
   await page.waitFor(
     `JSON.parse(document.querySelector('#collection-json-input')?.value || '{}').fields?.some((item) => item.name === ${JSON.stringify(field.name)})`,
     `field ${field.name} added`
+  );
+}
+
+async function editCollectionField(page, edit) {
+  const index = await page.eval(`
+    (() => {
+      const payload = JSON.parse(document.querySelector("#collection-json-input")?.value || "{}");
+      return (payload.fields || []).findIndex((field) => field && field.name === ${JSON.stringify(edit.name)});
+    })();
+  `);
+  if (!Number.isInteger(index) || index < 0) {
+    throw new Error(`Field ${edit.name} was not found for editing`);
+  }
+
+  await page.click(`[data-field-edit='${index}']`);
+  await page.waitFor("document.querySelector('#add-collection-field')?.textContent === 'Update'", `field ${edit.name} edit mode`);
+  if (edit.newName) {
+    await page.setValue("#new-field-name", edit.newName);
+  }
+  if (edit.type) {
+    await page.setSelectValue("#new-field-type", edit.type);
+  }
+  if (edit.option != null) {
+    await page.setValue("#new-field-option", edit.option);
+  }
+  if (edit.min != null) {
+    await page.setValue("#new-field-min-select", String(edit.min));
+  }
+  if (edit.max != null) {
+    await page.setValue("#new-field-max-select", String(edit.max));
+  }
+  if (edit.required != null) {
+    await page.setChecked("#new-field-required", Boolean(edit.required));
+  }
+  if (edit.protected != null) {
+    await page.setChecked("#new-field-protected", Boolean(edit.protected));
+  }
+  await page.click("#add-collection-field");
+  await page.waitFor(
+    `document.querySelector('#add-collection-field')?.textContent === 'Add' && JSON.parse(document.querySelector('#collection-json-input')?.value || '{}').fields?.some((field) => field.name === ${JSON.stringify(edit.newName || edit.name)} && (!field.values || field.values.includes('published')))`,
+    `field ${edit.name} updated`
   );
 }
 

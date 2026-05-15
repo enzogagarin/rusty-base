@@ -249,6 +249,9 @@ fn serves_embedded_admin_ui_shell() {
     assert!(js_bundle.contains("new-field-min-select"));
     assert!(js_bundle.contains("new-field-max-select"));
     assert!(js_bundle.contains("new-field-protected"));
+    assert!(js_bundle.contains("collectionFieldEditIndex"));
+    assert!(js_bundle.contains("data-field-edit"));
+    assert!(js_bundle.contains("cancel-field-edit"));
     assert!(js_bundle.contains("syncCollectionFieldToolControls"));
     assert!(js_bundle.contains("addCollectionField"));
     assert!(js_bundle.contains("removeCollectionField"));

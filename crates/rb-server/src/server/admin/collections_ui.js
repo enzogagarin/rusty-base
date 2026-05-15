@@ -121,11 +121,23 @@ export function renderCollections(nextActions) {
   if (addField) {
     addField.addEventListener("click", addCollectionField);
   }
+  const cancelFieldEdit = $("cancel-field-edit");
+  if (cancelFieldEdit) {
+    cancelFieldEdit.addEventListener("click", () => {
+      closeCollectionFieldEditor();
+      actions.render();
+    });
+  }
   const fieldType = $("new-field-type");
   if (fieldType) {
     fieldType.addEventListener("change", syncCollectionFieldToolControls);
     syncCollectionFieldToolControls();
   }
+  document.querySelectorAll("[data-field-edit]").forEach((button) => {
+    button.addEventListener("click", () => {
+      openCollectionFieldEditor(Number(button.dataset.fieldEdit));
+    });
+  });
   document.querySelectorAll("[data-field-remove]").forEach((button) => {
     button.addEventListener("click", () => {
       removeCollectionField(Number(button.dataset.fieldRemove));
@@ -169,21 +181,34 @@ function collectionFieldToolsHtml(draft) {
   }
 
   const fields = Array.isArray(draft.value.fields) ? draft.value.fields : [];
+  const editIndex = activeCollectionFieldEditIndex(fields);
+  const editingField = editIndex >= 0 ? fields[editIndex] : null;
   const rows = fields.map((field, index) => `
     <tr>
       <td>${escapeHtml(field.name || "")}</td>
       <td><span class="pill">${escapeHtml(field.type || field.kind || "")}</span></td>
       <td>${field.required ? "required" : "-"}</td>
       <td>${escapeHtml(collectionFieldExtra(field))}</td>
-      <td><button type="button" class="danger" data-field-remove="${index}">Remove</button></td>
+      <td>
+        <div class="record-actions">
+          <button type="button" data-field-edit="${index}">${index === editIndex ? "Editing" : "Edit"}</button>
+          <button type="button" class="danger" data-field-remove="${index}">Remove</button>
+        </div>
+      </td>
     </tr>
   `).join("");
+  const editing = Boolean(editingField);
+  const fieldName = editingField ? editingField.name || "" : "";
+  const fieldType = editingField ? editingField.type || editingField.kind || "text" : "text";
+  const fieldOption = editingField ? collectionFieldToolOption(editingField) : "";
+  const fieldMin = editingField && editingField.minSelect != null ? String(editingField.minSelect) : "";
+  const fieldMax = editingField && editingField.maxSelect != null ? String(editingField.maxSelect) : "";
 
   return `
     <div class="field-tools">
       <div class="field-tools-head">
         <h2>Fields</h2>
-        <span class="muted">${fields.length} user field${fields.length === 1 ? "" : "s"}</span>
+        <span class="muted">${editing ? `Editing ${escapeHtml(fieldName)}` : `${fields.length} user field${fields.length === 1 ? "" : "s"}`}</span>
       </div>
       ${fields.length ? `
         <div class="table-wrap">
@@ -196,39 +221,30 @@ function collectionFieldToolsHtml(draft) {
       <div class="field-tools-form">
         <div class="field">
           <label for="new-field-name">Name</label>
-          <input id="new-field-name" placeholder="title">
+          <input id="new-field-name" placeholder="title" value="${escapeAttribute(fieldName)}">
         </div>
         <div class="field">
           <label for="new-field-type">Type</label>
           <select id="new-field-type">
-            <option value="text">text</option>
-            <option value="email">email</option>
-            <option value="number">number</option>
-            <option value="bool">bool</option>
-            <option value="date">date</option>
-            <option value="select">select</option>
-            <option value="relation">relation</option>
-            <option value="file">file</option>
-            <option value="json">json</option>
-            <option value="url">url</option>
-            <option value="editor">editor</option>
+            ${collectionFieldTypeOptions(fieldType)}
           </select>
         </div>
         <div class="field">
           <label for="new-field-option">Options</label>
-          <input id="new-field-option" placeholder="draft, published / posts / text/plain">
+          <input id="new-field-option" placeholder="draft, published / posts / text/plain" value="${escapeAttribute(fieldOption)}">
         </div>
         <div class="field">
           <label for="new-field-min-select">Min</label>
-          <input id="new-field-min-select" type="number" min="0" step="1" placeholder="0">
+          <input id="new-field-min-select" type="number" min="0" step="1" placeholder="0" value="${escapeAttribute(fieldMin)}">
         </div>
         <div class="field">
           <label for="new-field-max-select">Max</label>
-          <input id="new-field-max-select" type="number" min="1" step="1" placeholder="1">
+          <input id="new-field-max-select" type="number" min="1" step="1" placeholder="1" value="${escapeAttribute(fieldMax)}">
         </div>
-        <label class="check-field"><input id="new-field-required" type="checkbox">Required</label>
-        <label class="check-field"><input id="new-field-protected" type="checkbox">Protected</label>
-        <button type="button" id="add-collection-field" class="primary">Add</button>
+        <label class="check-field"><input id="new-field-required" type="checkbox" ${editingField && editingField.required ? "checked" : ""}>Required</label>
+        <label class="check-field"><input id="new-field-protected" type="checkbox" ${editingField && editingField.protected ? "checked" : ""}>Protected</label>
+        ${editing ? `<button type="button" id="cancel-field-edit">Cancel</button>` : ""}
+        <button type="button" id="add-collection-field" class="primary">${editing ? "Update" : "Add"}</button>
       </div>
     </div>
   `;
@@ -245,6 +261,7 @@ function openCollectionEditor() {
     ]
   }, null, 2);
   state.collectionEditorError = "";
+  state.collectionFieldEditIndex = -1;
 }
 
 async function openEditCollectionEditor(name) {
@@ -259,6 +276,7 @@ async function openEditCollectionEditor(name) {
     state.collectionEditorName = collection.name || name;
     state.collectionEditorText = JSON.stringify(editableCollectionPayload(collection), null, 2);
     state.collectionEditorError = "";
+    state.collectionFieldEditIndex = -1;
     actions.render();
   } catch (error) {
     status(error.message, true);
@@ -271,6 +289,7 @@ export function closeCollectionEditor() {
   state.collectionEditorName = "";
   state.collectionEditorText = "";
   state.collectionEditorError = "";
+  state.collectionFieldEditIndex = -1;
 }
 
 function collectionEditorDraft() {
@@ -291,6 +310,47 @@ function writeCollectionEditorPayload(payload) {
   state.collectionEditorText = JSON.stringify(payload, null, 2);
   state.collectionEditorError = "";
   actions.render();
+}
+
+function activeCollectionFieldEditIndex(fields) {
+  const index = Number(state.collectionFieldEditIndex);
+  if (!Number.isInteger(index) || index < 0 || index >= fields.length) {
+    state.collectionFieldEditIndex = -1;
+    return -1;
+  }
+  return index;
+}
+
+function collectionFieldTypeOptions(selectedType) {
+  return [
+    "text",
+    "email",
+    "number",
+    "bool",
+    "date",
+    "select",
+    "relation",
+    "file",
+    "json",
+    "url",
+    "editor"
+  ].map((type) => `
+    <option value="${type}" ${type === selectedType ? "selected" : ""}>${type}</option>
+  `).join("");
+}
+
+function collectionFieldToolOption(field) {
+  const fieldType = field.type || field.kind || "text";
+  if (fieldType === "select" && Array.isArray(field.values)) {
+    return field.values.join(", ");
+  }
+  if (fieldType === "relation") {
+    return field.collection || "";
+  }
+  if (fieldType === "file" && Array.isArray(field.mimeTypes)) {
+    return field.mimeTypes.join(", ");
+  }
+  return "";
 }
 
 function syncCollectionFieldToolControls() {
@@ -361,7 +421,9 @@ function addCollectionField() {
   }
 
   const fields = Array.isArray(payload.fields) ? payload.fields : [];
-  if (fields.some((field) => field && field.name === name)) {
+  const editIndex = activeCollectionFieldEditIndex(fields);
+  const existingField = editIndex >= 0 ? fields[editIndex] : null;
+  if (fields.some((field, index) => index !== editIndex && field && field.name === name)) {
     showCollectionFieldToolError(`Field '${name}' already exists`, jsonInput);
     return;
   }
@@ -387,6 +449,9 @@ function addCollectionField() {
   }
 
   const field = { name, type: fieldType };
+  if (existingField && existingField.id) {
+    field.id = existingField.id;
+  }
   if (required) {
     field.required = true;
   }
@@ -417,8 +482,35 @@ function addCollectionField() {
     }
   }
 
-  payload.fields = fields.concat(field);
+  payload.fields = editIndex >= 0
+    ? fields.map((item, index) => index === editIndex ? field : item)
+    : fields.concat(field);
+  state.collectionFieldEditIndex = -1;
   writeCollectionEditorPayload(payload);
+}
+
+function openCollectionFieldEditor(index) {
+  const jsonInput = $("collection-json-input");
+  let payload = null;
+  try {
+    payload = readCollectionEditorPayload();
+  } catch (error) {
+    showCollectionFieldToolError(error.message, jsonInput);
+    return;
+  }
+  const fields = Array.isArray(payload.fields) ? payload.fields : [];
+  if (!Number.isInteger(index) || index < 0 || index >= fields.length) {
+    return;
+  }
+  state.collectionEditorText = jsonInput ? jsonInput.value : state.collectionEditorText;
+  state.collectionEditorError = "";
+  state.collectionFieldEditIndex = index;
+  actions.render();
+}
+
+function closeCollectionFieldEditor() {
+  state.collectionFieldEditIndex = -1;
+  state.collectionEditorError = "";
 }
 
 function optionalIntegerFieldValue(id, label, min) {
@@ -453,6 +545,11 @@ function removeCollectionField(index) {
 
   if (!Array.isArray(payload.fields) || !Number.isInteger(index) || index < 0 || index >= payload.fields.length) {
     return;
+  }
+  if (state.collectionFieldEditIndex === index) {
+    state.collectionFieldEditIndex = -1;
+  } else if (state.collectionFieldEditIndex > index) {
+    state.collectionFieldEditIndex -= 1;
   }
   payload.fields = payload.fields.filter((_, fieldIndex) => fieldIndex !== index);
   writeCollectionEditorPayload(payload);

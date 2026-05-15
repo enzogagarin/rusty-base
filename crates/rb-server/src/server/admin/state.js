@@ -26,6 +26,7 @@ export const state = {
   collectionEditorName: "",
   collectionEditorText: "",
   collectionEditorError: "",
+  collectionFieldEditIndex: -1,
   settings: null,
   error: ""
 };
