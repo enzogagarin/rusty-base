@@ -3,6 +3,7 @@ use super::http::*;
 const ADMIN_APP_JS: &str = include_str!("admin/app.js");
 const ADMIN_COLLECTIONS_FIELDS_JS: &str = include_str!("admin/collections/fields.js");
 const ADMIN_COLLECTIONS_IMPORT_EXPORT_JS: &str = include_str!("admin/collections/import_export.js");
+const ADMIN_COLLECTIONS_INDEXES_JS: &str = include_str!("admin/collections/indexes.js");
 const ADMIN_COLLECTIONS_META_JS: &str = include_str!("admin/collections/meta.js");
 const ADMIN_COLLECTIONS_UI_JS: &str = include_str!("admin/collections_ui.js");
 const ADMIN_DATA_HELPERS_JS: &str = include_str!("admin/data_helpers.js");
@@ -50,6 +51,11 @@ pub(crate) fn admin_asset_response(asset: &str) -> Option<HttpResponse> {
             200,
             "text/javascript; charset=utf-8",
             ADMIN_COLLECTIONS_IMPORT_EXPORT_JS.as_bytes().to_vec(),
+        )),
+        "collections/indexes.js" => Some(admin_response(
+            200,
+            "text/javascript; charset=utf-8",
+            ADMIN_COLLECTIONS_INDEXES_JS.as_bytes().to_vec(),
         )),
         "collections/meta.js" => Some(admin_response(
             200,

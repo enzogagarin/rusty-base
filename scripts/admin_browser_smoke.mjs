@@ -245,15 +245,22 @@ async function exerciseAdminUi(page) {
   });
   await exerciseCollectionImportExport(page);
 
-  await createCollectionWithFieldTools(page, "ui_posts", [
-    { name: "title", type: "text", required: true },
-    { name: "published", type: "bool" },
-    { name: "status", type: "select", option: "draft" },
-    { name: "author", type: "relation", option: "ui_authors", max: 1 },
-    { name: "asset", type: "file", option: "text/plain", max: 1, protected: true }
-  ], [
-    { name: "status", option: "draft, published" }
-  ]);
+  await createCollectionWithFieldTools(page, {
+    name: "ui_posts",
+    fields: [
+      { name: "title", type: "text", required: true },
+      { name: "published", type: "bool" },
+      { name: "status", type: "select", option: "draft" },
+      { name: "author", type: "relation", option: "ui_authors", max: 1 },
+      { name: "asset", type: "file", option: "text/plain", max: 1, protected: true }
+    ],
+    edits: [
+      { name: "status", option: "draft, published" }
+    ],
+    indexes: [
+      "CREATE INDEX idx_ui_posts_title ON ui_posts (title)"
+    ]
+  });
 
   console.log("admin browser smoke: creating relation and file records through the UI");
   await createPostWithFieldEditor(page);
@@ -359,7 +366,7 @@ async function exerciseSettingsEditor(page) {
   );
 }
 
-async function createCollectionWithFieldTools(page, name, fields, edits = []) {
+async function createCollectionWithFieldTools(page, { name, fields, edits = [], indexes = [] }) {
   await page.click("[data-view='collections']");
   await page.waitFor("document.querySelector('#view-title')?.textContent === 'Collections'", "collections view");
   await page.click("#new-collection");
@@ -371,10 +378,22 @@ async function createCollectionWithFieldTools(page, name, fields, edits = []) {
   for (const edit of edits) {
     await editCollectionField(page, edit);
   }
+  for (const index of indexes) {
+    await addCollectionIndex(page, index);
+  }
   await page.click("#save-collection");
   await page.waitFor(
     `document.querySelector('#view-title')?.textContent === 'Records' && document.body.textContent.includes(${JSON.stringify(`${name} records`)})`,
     `created collection ${name}`
+  );
+}
+
+async function addCollectionIndex(page, sql) {
+  await page.setValue("#new-index-sql", sql);
+  await page.click("#add-collection-index");
+  await page.waitFor(
+    `JSON.parse(document.querySelector('#collection-json-input')?.value || '{}').indexes?.includes(${JSON.stringify(sql)})`,
+    "collection index added"
   );
 }
 

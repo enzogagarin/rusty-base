@@ -2,6 +2,7 @@ import { $, api, confirmDangerousAction, jsonApi, state, status } from "./state.
 import { collectionPath, editableCollectionPayload } from "./data_helpers.js";
 import { escapeAttribute, escapeHtml } from "./render_helpers.js";
 import { bindCollectionFieldTools, closeCollectionFieldEditor, collectionFieldToolsHtml } from "./collections/fields.js";
+import { bindCollectionIndexTools, collectionIndexToolsHtml } from "./collections/indexes.js";
 import {
   bindCollectionTransferControls,
   closeCollectionTransfer,
@@ -149,6 +150,12 @@ export function renderCollections(nextActions) {
     showError: showCollectionToolError,
     writePayload: writeCollectionEditorPayload
   });
+  bindCollectionIndexTools({
+    readPayload: readCollectionEditorPayload,
+    render: actions.render,
+    showError: showCollectionToolError,
+    writePayload: writeCollectionEditorPayload
+  });
   bindCollectionTransferControls({
     refresh: actions.refresh,
     render: actions.render
@@ -170,6 +177,7 @@ function collectionEditorHtml() {
       ${state.collectionEditorError ? `<div class="error">${escapeHtml(state.collectionEditorError)}</div>` : ""}
       ${collectionMetaToolsHtml(draft)}
       ${collectionFieldToolsHtml(draft)}
+      ${collectionIndexToolsHtml(draft)}
       <textarea id="collection-json-input" spellcheck="false">${escapeHtml(state.collectionEditorText)}</textarea>
       <div class="editor-actions">
         <button type="button" id="cancel-collection">Cancel</button>

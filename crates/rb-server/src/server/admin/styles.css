@@ -517,6 +517,13 @@ tr:last-child td {
   min-height: 96px;
 }
 
+.collection-index-form {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
 .collection-transfer-input,
 #collection-transfer-input {
   min-height: 260px;
@@ -682,6 +689,7 @@ tr:last-child td {
   }
 
   .auth-actions,
+  .collection-index-form,
   .collection-tools-form,
   .field-tools-form,
   .record-collection-picker,
