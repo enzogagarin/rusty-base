@@ -1,6 +1,8 @@
 use super::http::*;
 
 const ADMIN_APP_JS: &str = include_str!("admin/app.js");
+const ADMIN_COLLECTIONS_FIELDS_JS: &str = include_str!("admin/collections/fields.js");
+const ADMIN_COLLECTIONS_META_JS: &str = include_str!("admin/collections/meta.js");
 const ADMIN_COLLECTIONS_UI_JS: &str = include_str!("admin/collections_ui.js");
 const ADMIN_DATA_HELPERS_JS: &str = include_str!("admin/data_helpers.js");
 const ADMIN_INDEX_HTML: &str = include_str!("admin/index.html");
@@ -36,6 +38,16 @@ pub(crate) fn admin_asset_response(asset: &str) -> Option<HttpResponse> {
             200,
             "text/javascript; charset=utf-8",
             ADMIN_COLLECTIONS_UI_JS.as_bytes().to_vec(),
+        )),
+        "collections/fields.js" => Some(admin_response(
+            200,
+            "text/javascript; charset=utf-8",
+            ADMIN_COLLECTIONS_FIELDS_JS.as_bytes().to_vec(),
+        )),
+        "collections/meta.js" => Some(admin_response(
+            200,
+            "text/javascript; charset=utf-8",
+            ADMIN_COLLECTIONS_META_JS.as_bytes().to_vec(),
         )),
         "data_helpers.js" => Some(admin_response(
             200,
