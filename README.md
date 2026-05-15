@@ -196,8 +196,9 @@ upload/download/delete, filter/sort/pagination, and restart persistence.
 `scripts/admin_browser_smoke.mjs` runs the embedded admin UI in headless
 Chrome/Chromium through the DevTools protocol and clicks through the core admin
 flow: initialize/login, create collections, create records, use a relation
-picker, upload/download/delete a protected file, filter, edit, and logout. Set
-`RB_ADMIN_BROWSER_CHROME` if Chrome is not on a standard path.
+picker, upload/download/delete a protected file, filter, edit, verify
+destructive confirmation guards, and logout. Set `RB_ADMIN_BROWSER_CHROME` if
+Chrome is not on a standard path.
 
 Run the current CLI smoke path:
 

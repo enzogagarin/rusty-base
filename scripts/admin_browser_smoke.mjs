@@ -192,6 +192,9 @@ async function openAdminPage() {
   page.on("Runtime.exceptionThrown", ({ exceptionDetails }) => {
     page.pageErrors.push(exceptionDetails.exception?.description || exceptionDetails.text || "runtime exception");
   });
+  page.on("Page.javascriptDialogOpening", (dialog) => {
+    page.dialogs.push(dialog);
+  });
 
   await page.send("Page.navigate", { url: `${baseUrl}/_/` });
   await page.waitFor(
@@ -273,6 +276,7 @@ async function exerciseAdminUi(page) {
   );
 
   await exercisePostEditAndFileControls(page);
+  await exerciseDestructiveActionGuards(page);
 
   await page.click("#logout");
   await page.waitFor(
@@ -361,6 +365,38 @@ async function exercisePostEditAndFileControls(page) {
   );
 }
 
+async function exerciseDestructiveActionGuards(page) {
+  console.log("admin browser smoke: checking destructive action guards");
+  await page.clickAndPrompt("[data-delete-record='ui_post_1']", "wrong-confirmation");
+  await page.waitFor(
+    "document.body.textContent.includes('Hello UI Edited')",
+    "record survives rejected delete confirmation"
+  );
+
+  await page.clickAndPrompt("[data-delete-record='ui_post_1']", "ui_post_1");
+  await page.waitFor(
+    "!document.body.textContent.includes('Hello UI Edited') && document.body.textContent.includes('No matching records')",
+    "record delete confirmation"
+  );
+
+  await page.click("[data-view='collections']");
+  await page.waitFor(
+    "document.querySelector('#view-title')?.textContent === 'Collections' && document.body.textContent.includes('ui_posts')",
+    "collections view before delete guard"
+  );
+  await page.clickAndPrompt("[data-collection-delete='ui_posts']", "wrong-confirmation");
+  await page.waitFor(
+    "document.body.textContent.includes('ui_posts')",
+    "collection survives rejected delete confirmation"
+  );
+
+  await page.clickAndPrompt("[data-collection-delete='ui_posts']", "ui_posts");
+  await page.waitFor(
+    "!document.body.textContent.includes('ui_posts') && document.querySelector('#view-title')?.textContent === 'Collections'",
+    "collection delete confirmation"
+  );
+}
+
 class CdpPage {
   constructor(socket) {
     this.socket = socket;
@@ -368,6 +404,7 @@ class CdpPage {
     this.pending = new Map();
     this.handlers = new Map();
     this.pageErrors = [];
+    this.dialogs = [];
     this.socket.addEventListener("message", (event) => {
       this.handleMessage(event.data);
     });
@@ -429,6 +466,19 @@ class CdpPage {
         return true;
       })();
     `);
+  }
+
+  async clickAndPrompt(selector, promptText) {
+    const clickPromise = this.click(selector);
+    const dialog = await this.waitForDialog(selector);
+    if (dialog.type !== "prompt") {
+      throw new Error(`Expected prompt dialog for ${selector}, got ${dialog.type || "unknown"}`);
+    }
+    await this.send("Page.handleJavaScriptDialog", {
+      accept: true,
+      promptText
+    });
+    await clickPromise;
   }
 
   async setValue(selector, value) {
@@ -513,6 +563,19 @@ class CdpPage {
     }
     const body = await this.eval("document.body ? document.body.innerText.slice(0, 1000) : ''").catch(() => "");
     throw new Error(`Timed out waiting for ${label}${lastError ? `: ${lastError}` : ""}\n${body}`);
+  }
+
+  async waitForDialog(label, timeoutMs = 5000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      this.assertNoErrors();
+      const dialog = this.dialogs.shift();
+      if (dialog) {
+        return dialog;
+      }
+      await sleep(50);
+    }
+    throw new Error(`Timed out waiting for prompt dialog from ${label}`);
   }
 
   assertNoErrors() {
