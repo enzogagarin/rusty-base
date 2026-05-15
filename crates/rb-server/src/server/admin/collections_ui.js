@@ -1,6 +1,7 @@
 import { $, api, confirmDangerousAction, jsonApi, state, status } from "./state.js";
 import { collectionPath, editableCollectionPayload } from "./data_helpers.js";
 import { escapeAttribute, escapeHtml } from "./render_helpers.js";
+import { bindCollectionAuthTools, collectionAuthToolsHtml } from "./collections/auth.js";
 import { bindCollectionFieldTools, closeCollectionFieldEditor, collectionFieldToolsHtml } from "./collections/fields.js";
 import { bindCollectionIndexTools, collectionIndexToolsHtml } from "./collections/indexes.js";
 import {
@@ -145,6 +146,10 @@ export function renderCollections(nextActions) {
     render: actions.render,
     showError: showCollectionToolError
   });
+  bindCollectionAuthTools({
+    readPayload: readCollectionEditorPayload,
+    showError: showCollectionToolError
+  });
   bindCollectionFieldTools({
     readPayload: readCollectionEditorPayload,
     render: actions.render,
@@ -177,6 +182,7 @@ function collectionEditorHtml() {
       <h2>${escapeHtml(title)}</h2>
       ${state.collectionEditorError ? `<div class="error">${escapeHtml(state.collectionEditorError)}</div>` : ""}
       ${collectionMetaToolsHtml(draft)}
+      ${collectionAuthToolsHtml(draft)}
       ${collectionFieldToolsHtml(draft)}
       ${collectionIndexToolsHtml(draft, state.collectionIndexWarnings)}
       <textarea id="collection-json-input" spellcheck="false">${escapeHtml(state.collectionEditorText)}</textarea>

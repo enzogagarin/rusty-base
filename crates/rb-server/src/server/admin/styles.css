@@ -517,6 +517,21 @@ tr:last-child td {
   grid-column: 1 / -1;
 }
 
+.auth-tools-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+
+.auth-tools-grid .field-wide {
+  grid-column: 1 / -1;
+}
+
+.auth-tools-grid textarea {
+  min-height: 72px;
+}
+
 .collection-tools-form textarea {
   min-height: 96px;
 }
@@ -710,6 +725,7 @@ tr:last-child td {
   }
 
   .auth-actions,
+  .auth-tools-grid,
   .collection-index-form,
   .collection-tools-form,
   .field-tools-form,

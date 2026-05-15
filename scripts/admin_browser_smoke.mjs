@@ -435,6 +435,9 @@ async function createCollectionWithTypeControl(page, payload) {
     await page.waitFor("document.querySelector('#collection-view-query-input')", `view query input ${payload.name}`);
     await page.setValue("#collection-view-query-input", payload.viewQuery || "");
   }
+  if ((payload.type || "base") === "auth" && payload.authSettings) {
+    await configureCollectionAuthSettings(page, payload.authSettings);
+  }
   await page.waitFor(
     `(() => {
       const payload = JSON.parse(document.querySelector('#collection-json-input')?.value || '{}');
@@ -448,6 +451,34 @@ async function createCollectionWithTypeControl(page, payload) {
   await page.waitFor(
     `document.querySelector('#view-title')?.textContent === 'Records' && document.body.textContent.includes(${JSON.stringify(`${payload.name} records`)})`,
     `created collection ${payload.name}`
+  );
+}
+
+async function configureCollectionAuthSettings(page, settings) {
+  await page.waitFor("document.querySelector('#collection-auth-identity-fields')", "auth collection settings controls");
+  await page.setChecked("#collection-auth-password-enabled", settings.passwordEnabled !== false);
+  await page.setValue("#collection-auth-identity-fields", settings.identityFields || "email");
+  await page.setValue("#auth-token-duration", settings.authTokenDuration || "604800");
+  await page.setValue("#password-reset-token-duration", settings.passwordResetTokenDuration || "1800");
+  await page.setValue("#verification-token-duration", settings.verificationTokenDuration || "259200");
+  await page.setChecked("#collection-otp-enabled", Boolean(settings.otpEnabled));
+  await page.setValue("#collection-otp-duration", settings.otpDuration || "180");
+  await page.setValue("#collection-otp-length", settings.otpLength || "8");
+  await page.setChecked("#collection-mfa-enabled", Boolean(settings.mfaEnabled));
+  await page.setValue("#collection-mfa-duration", settings.mfaDuration || "1800");
+  await page.setValue("#collection-mfa-rule", settings.mfaRule || "");
+  await page.waitFor(
+    `(() => {
+      const payload = JSON.parse(document.querySelector('#collection-json-input')?.value || '{}');
+      return payload.passwordAuth?.identityFields?.includes('email')
+        && payload.authToken?.duration === ${Number(settings.authTokenDuration || 604800)}
+        && payload.passwordResetToken?.duration === ${Number(settings.passwordResetTokenDuration || 1800)}
+        && payload.verificationToken?.duration === ${Number(settings.verificationTokenDuration || 259200)}
+        && payload.otp?.enabled === ${settings.otpEnabled ? "true" : "false"}
+        && payload.otp?.length === ${Number(settings.otpLength || 8)}
+        && payload.mfa?.enabled === ${settings.mfaEnabled ? "true" : "false"};
+    })()`,
+    "auth collection settings synced"
   );
 }
 
@@ -661,7 +692,19 @@ async function exerciseAuthRecordEditor(page) {
     type: "auth",
     fields: [
       { name: "email", type: "email", required: true }
-    ]
+    ],
+    authSettings: {
+      identityFields: "email",
+      authTokenDuration: "86400",
+      passwordResetTokenDuration: "900",
+      verificationTokenDuration: "172800",
+      otpEnabled: true,
+      otpDuration: "120",
+      otpLength: "6",
+      mfaEnabled: true,
+      mfaDuration: "900",
+      mfaRule: "@request.auth.id = id"
+    }
   });
 
   await page.click("#new-record");
