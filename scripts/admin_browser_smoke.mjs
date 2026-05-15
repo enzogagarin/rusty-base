@@ -370,6 +370,10 @@ async function exerciseViewCollectionEditor(page) {
     "document.querySelector('#view-title')?.textContent === 'Records' && document.body.textContent.includes('ui_published_posts records') && document.body.textContent.includes('Hello UI Edited') && !document.body.textContent.includes('Hidden UI')",
     "view collection records"
   );
+  await page.waitFor(
+    "!document.querySelector('#new-record') && !document.querySelector('[data-edit-record]') && !document.querySelector('[data-delete-record]') && document.body.textContent.includes('Read-only')",
+    "view collection read-only controls"
+  );
   await page.setValue("#record-filter", "title ~ 'Edited'");
   await page.click("#apply-record-query");
   await page.waitFor(

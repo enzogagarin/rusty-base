@@ -1,5 +1,6 @@
 import { $, api, confirmDangerousAction, state, status } from "../state.js";
 import {
+  collectionIsView,
   normalizedRecordPerPage,
   recordFieldValuePreview,
   recordPath,
@@ -52,6 +53,7 @@ export function bindRecordNoCollectionControls(actions) {
 }
 
 export function recordsBrowserHtml(collection) {
+  const readOnly = collectionIsView(collection);
   const recordFields = userCollectionFields(collection);
   const visibleFields = recordFields.slice(0, 6);
   const fieldHeaders = visibleFields.map((field) => `<th>${escapeHtml(field.name || "")}</th>`).join("");
@@ -63,12 +65,12 @@ export function recordsBrowserHtml(collection) {
         : `<td><code class="record-json">${escapeHtml(recordPreview(record))}</code></td>`}
       <td>${escapeHtml(record.created || "-")}</td>
       <td>${escapeHtml(record.updated || "-")}</td>
-      <td>
+      ${readOnly ? "" : `<td>
         <div class="record-actions">
           <button type="button" data-edit-record="${escapeAttribute(record.id || "")}">Edit</button>
           <button type="button" class="danger" data-delete-record="${escapeAttribute(record.id || "")}">Delete</button>
         </div>
-      </td>
+      </td>`}
     </tr>
   `).join("");
 
@@ -77,7 +79,7 @@ export function recordsBrowserHtml(collection) {
       <h2>${escapeHtml(collection.name)} records</h2>
       <div class="record-head-controls">
         ${recordCollectionPickerHtml("record-collection-select", collection.name, false)}
-        <button type="button" id="new-record" class="primary">New</button>
+        ${readOnly ? `<span class="pill">Read-only</span>` : `<button type="button" id="new-record" class="primary">New</button>`}
         <button type="button" id="refresh-records">Refresh</button>
       </div>
     </div>
@@ -85,14 +87,14 @@ export function recordsBrowserHtml(collection) {
     ${state.records.length ? `
       <div class="table-wrap">
         <table>
-          <thead><tr><th>ID</th>${visibleFields.length ? fieldHeaders : "<th>Data</th>"}<th>Created</th><th>Updated</th><th>Actions</th></tr></thead>
+          <thead><tr><th>ID</th>${visibleFields.length ? fieldHeaders : "<th>Data</th>"}<th>Created</th><th>Updated</th>${readOnly ? "" : "<th>Actions</th>"}</tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
     ` : `
       <div class="empty">
         <strong>${state.recordFilter ? "No matching records" : "No records yet"}</strong>
-        <span>${state.recordFilter ? "Adjust the filter or clear it to browse this collection." : "Create the first record in this collection."}</span>
+        <span>${state.recordFilter ? "Adjust the filter or clear it to browse this collection." : readOnly ? "This view has no matching rows." : "Create the first record in this collection."}</span>
       </div>
     `}
   `;

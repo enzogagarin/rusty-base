@@ -36,6 +36,10 @@ export function collectionIsAuth(collection) {
   return collection && (collection.type || collection.kind) === "auth";
 }
 
+export function collectionIsView(collection) {
+  return collection && (collection.type || collection.kind) === "view";
+}
+
 export function relationFieldNames(collection) {
   return userCollectionFields(collection)
     .filter((field) => (field.type || field.kind) === "relation" && relationTargetCollectionName(field))
