@@ -110,6 +110,14 @@ export function renderCollections(nextActions) {
   if (save) {
     save.addEventListener("click", saveCollection);
   }
+  const collectionName = $("collection-name-input");
+  if (collectionName) {
+    collectionName.addEventListener("input", syncCollectionMetaFromControls);
+  }
+  const collectionType = $("collection-type-select");
+  if (collectionType) {
+    collectionType.addEventListener("change", syncCollectionMetaFromControls);
+  }
   const cancel = $("cancel-collection");
   if (cancel) {
     cancel.addEventListener("click", () => {
@@ -158,11 +166,43 @@ function collectionEditorHtml() {
     <div class="record-editor">
       <h2>${escapeHtml(title)}</h2>
       ${state.collectionEditorError ? `<div class="error">${escapeHtml(state.collectionEditorError)}</div>` : ""}
+      ${collectionMetaToolsHtml(draft)}
       ${collectionFieldToolsHtml(draft)}
       <textarea id="collection-json-input" spellcheck="false">${escapeHtml(state.collectionEditorText)}</textarea>
       <div class="editor-actions">
         <button type="button" id="cancel-collection">Cancel</button>
         <button type="button" id="save-collection" class="primary">Save</button>
+      </div>
+    </div>
+  `;
+}
+
+function collectionMetaToolsHtml(draft) {
+  if (!draft.ok) {
+    return "";
+  }
+
+  const payload = draft.value && typeof draft.value === "object" && !Array.isArray(draft.value)
+    ? draft.value
+    : {};
+  const selectedType = ["base", "auth", "view"].includes(payload.type) ? payload.type : "base";
+  return `
+    <div class="field-tools">
+      <div class="field-tools-head">
+        <h2>Collection</h2>
+        <span class="muted">${escapeHtml(selectedType)}</span>
+      </div>
+      <div class="collection-tools-form">
+        <div class="field">
+          <label for="collection-name-input">Name</label>
+          <input id="collection-name-input" placeholder="posts" value="${escapeAttribute(payload.name || "")}">
+        </div>
+        <div class="field">
+          <label for="collection-type-select">Type</label>
+          <select id="collection-type-select">
+            ${collectionTypeOptions(selectedType)}
+          </select>
+        </div>
       </div>
     </div>
   `;
@@ -256,6 +296,7 @@ function openCollectionEditor() {
   state.collectionEditorName = "";
   state.collectionEditorText = JSON.stringify({
     name: "posts",
+    type: "base",
     fields: [
       { name: "title", type: "text" }
     ]
@@ -312,6 +353,30 @@ function writeCollectionEditorPayload(payload) {
   actions.render();
 }
 
+function syncCollectionMetaFromControls() {
+  const jsonInput = $("collection-json-input");
+  let payload = null;
+  try {
+    payload = readCollectionEditorPayload();
+  } catch (error) {
+    showCollectionFieldToolError(error.message, jsonInput);
+    return;
+  }
+
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    showCollectionFieldToolError("Collection JSON must be an object", jsonInput);
+    return;
+  }
+
+  payload.name = $("collection-name-input") ? $("collection-name-input").value.trim() : "";
+  payload.type = $("collection-type-select") ? $("collection-type-select").value : "base";
+  state.collectionEditorText = JSON.stringify(payload, null, 2);
+  state.collectionEditorError = "";
+  if (jsonInput) {
+    jsonInput.value = state.collectionEditorText;
+  }
+}
+
 function activeCollectionFieldEditIndex(fields) {
   const index = Number(state.collectionFieldEditIndex);
   if (!Number.isInteger(index) || index < 0 || index >= fields.length) {
@@ -319,6 +384,12 @@ function activeCollectionFieldEditIndex(fields) {
     return -1;
   }
   return index;
+}
+
+function collectionTypeOptions(selectedType) {
+  return ["base", "auth", "view"].map((type) => `
+    <option value="${type}" ${type === selectedType ? "selected" : ""}>${type}</option>
+  `).join("");
 }
 
 function collectionFieldTypeOptions(selectedType) {

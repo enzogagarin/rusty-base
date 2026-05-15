@@ -321,6 +321,33 @@ async function createCollectionWithFieldTools(page, name, fields, edits = []) {
   );
 }
 
+async function createCollectionWithTypeControl(page, payload) {
+  await page.click("[data-view='collections']");
+  await page.waitFor("document.querySelector('#view-title')?.textContent === 'Collections'", "collections view");
+  await page.click("#new-collection");
+  await page.waitFor("document.querySelector('#collection-json-input')", `collection editor ${payload.name}`);
+  await page.setValue("#collection-json-input", JSON.stringify({
+    name: "",
+    type: "base",
+    fields: payload.fields || []
+  }, null, 2));
+  await page.setValue("#collection-name-input", payload.name);
+  await page.setSelectValue("#collection-type-select", payload.type || "base");
+  await page.waitFor(
+    `(() => {
+      const payload = JSON.parse(document.querySelector('#collection-json-input')?.value || '{}');
+      return payload.name === ${JSON.stringify(payload.name)}
+        && payload.type === ${JSON.stringify(payload.type || "base")};
+    })()`,
+    `collection type controls ${payload.name}`
+  );
+  await page.click("#save-collection");
+  await page.waitFor(
+    `document.querySelector('#view-title')?.textContent === 'Records' && document.body.textContent.includes(${JSON.stringify(`${payload.name} records`)})`,
+    `created collection ${payload.name}`
+  );
+}
+
 async function addCollectionField(page, field) {
   await page.setValue("#new-field-name", field.name);
   await page.setSelectValue("#new-field-type", field.type);
@@ -487,7 +514,7 @@ async function exerciseDestructiveActionGuards(page) {
 
 async function exerciseAuthRecordEditor(page) {
   console.log("admin browser smoke: creating an auth record through the UI");
-  await createCollection(page, {
+  await createCollectionWithTypeControl(page, {
     name: "ui_members",
     type: "auth",
     fields: [

@@ -476,6 +476,13 @@ tr:last-child td {
   align-items: end;
 }
 
+.collection-tools-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 160px;
+  gap: 8px;
+  align-items: end;
+}
+
 .field-tools-form .field {
   min-width: 0;
 }
@@ -636,6 +643,7 @@ tr:last-child td {
   }
 
   .auth-actions,
+  .collection-tools-form,
   .field-tools-form,
   .record-collection-picker,
   .record-toolbar-grid,

@@ -199,8 +199,9 @@ flow: initialize/login, create collections, create records, use a relation
 picker, upload/download/delete a protected file, filter, edit, verify
 destructive confirmation guards, create an auth record with password fields,
 and logout. The posts collection is built through the admin field tools instead
-of raw JSON, including editing an existing select field before save, so
-relation/select/file field creation and update stay covered. Set
+of raw JSON, including editing an existing select field before save, and the
+auth collection type is selected through the collection controls, so
+relation/select/file field creation and collection type updates stay covered. Set
 `RB_ADMIN_BROWSER_CHROME` if Chrome is not on a standard path.
 
 Run the current CLI smoke path:

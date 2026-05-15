@@ -235,6 +235,9 @@ fn serves_embedded_admin_ui_shell() {
     assert!(js_bundle.contains("record-next-page"));
     assert!(js_bundle.contains("Login or initialize first"));
     assert!(js_bundle.contains("collection-json-input"));
+    assert!(js_bundle.contains("collection-name-input"));
+    assert!(js_bundle.contains("collection-type-select"));
+    assert!(js_bundle.contains("syncCollectionMetaFromControls"));
     assert!(js_bundle.contains("Create collection"));
     assert!(js_bundle.contains("Edit ${state.collectionEditorName}"));
     assert!(js_bundle.contains("data-collection-edit"));
