@@ -280,6 +280,7 @@ async function exerciseAdminUi(page) {
   await exerciseViewCollectionEditor(page);
   await exerciseDestructiveActionGuards(page);
   await exerciseAuthRecordEditor(page);
+  await exerciseSettingsEditor(page);
 
   await page.click("#logout");
   await page.waitFor(
@@ -300,6 +301,30 @@ async function createCollection(page, payload) {
   await page.waitFor(
     `document.querySelector('#view-title')?.textContent === 'Records' && document.body.textContent.includes(${JSON.stringify(`${payload.name} records`)})`,
     `created collection ${payload.name}`
+  );
+}
+
+async function exerciseSettingsEditor(page) {
+  console.log("admin browser smoke: updating settings through the UI");
+  await page.click("[data-view='settings']");
+  await page.waitFor("document.querySelector('#view-title')?.textContent === 'Settings' && document.querySelector('#settings-form')", "settings form");
+  await page.setValue("#settings-app-name", "Rusty Base Smoke");
+  await page.setValue("#settings-app-url", "https://example.test");
+  await page.setValue("#settings-sender-name", "Smoke Admin");
+  await page.setValue("#settings-sender-address", "smoke@example.test");
+  await page.setValue("#settings-batch-max-requests", "3");
+  await page.setValue("#settings-batch-timeout", "12");
+  await page.setValue("#settings-batch-max-body-size", "1024");
+  await page.setChecked("#settings-rate-limits-enabled", true);
+  await page.click("#settings-form button[type='submit']");
+  await page.waitFor(
+    "document.querySelector('#settings-app-name')?.value === 'Rusty Base Smoke' && document.body.textContent.includes('Rusty Base Smoke')",
+    "settings save"
+  );
+  await page.click("#refresh-settings");
+  await page.waitFor(
+    "document.querySelector('#settings-app-name')?.value === 'Rusty Base Smoke' && document.querySelector('#settings-batch-max-requests')?.value === '3' && document.querySelector('#settings-rate-limits-enabled')?.checked",
+    "settings persisted"
   );
 }
 

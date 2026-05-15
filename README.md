@@ -203,7 +203,8 @@ of raw JSON, including editing an existing select field before save. The smoke
 also creates an auth collection via the type selector and a read-only view
 collection via the view SQL control, so relation/select/file field creation,
 collection type updates, view query editing, and read-only view record controls
-stay covered. Set
+stay covered. It also updates app and batch settings through the Settings view.
+Set
 `RB_ADMIN_BROWSER_CHROME` if Chrome is not on a standard path.
 
 Run the current CLI smoke path:

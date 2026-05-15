@@ -285,6 +285,32 @@ h2 {
   padding: 14px;
 }
 
+.settings-form {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.settings-section {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcf8;
+  padding: 12px;
+}
+
+.settings-section h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -656,6 +682,7 @@ tr:last-child td {
   .record-collection-picker,
   .record-toolbar-grid,
   .record-form-grid,
+  .settings-grid,
   .kv {
     grid-template-columns: 1fr;
   }

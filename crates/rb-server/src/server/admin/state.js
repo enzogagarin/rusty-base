@@ -28,6 +28,7 @@ export const state = {
   collectionEditorError: "",
   collectionFieldEditIndex: -1,
   settings: null,
+  settingsError: "",
   error: ""
 };
 

@@ -3,6 +3,7 @@ import { closeCollectionEditor, renderCollections } from "./collections_ui.js";
 import { closeRecordEditor, ensureRelationOptionsForCollection, renderRecords } from "./records_ui.js";
 import { collectionPath, collectionRecordsPath, normalizedRecordPerPage, relationFieldNames } from "./data_helpers.js";
 import { metric, row, title } from "./render_helpers.js";
+import { renderSettings } from "./settings_ui.js";
 
 async function refresh() {
   state.error = "";
@@ -36,7 +37,7 @@ async function refresh() {
     }
 
     try {
-      state.settings = await api("/api/settings?fields=meta.appName,meta.appURL,batch.enabled,batch.maxRequests,rateLimits.enabled");
+      state.settings = await api("/api/settings?fields=meta.appName,meta.appURL,meta.senderName,meta.senderAddress,batch.enabled,batch.maxRequests,batch.maxBodySize,batch.timeout,rateLimits.enabled");
     } catch (error) {
       state.settings = null;
       state.error = error.message;
@@ -77,7 +78,7 @@ function render() {
   } else if (state.view === "records") {
     renderRecords({ currentCollection, render, loadRecords, resetRecordBrowser, setView });
   } else if (state.view === "settings") {
-    renderSettings();
+    renderSettings({ refresh, render });
   } else {
     renderOverview();
   }
@@ -93,27 +94,6 @@ function renderOverview() {
       ${row("Health", state.health)}
       ${row("Session", state.token ? "active" : "none")}
       ${row("Collections", String(state.collections.length))}
-    </div>
-  `;
-  $("refresh").addEventListener("click", refresh);
-}
-
-function renderSettings() {
-  const settings = state.settings || {};
-  const meta = settings.meta || {};
-  const batch = settings.batch || {};
-  const rateLimits = settings.rateLimits || {};
-  $("content").innerHTML = `
-    <div class="panel-head">
-      <h2>Settings</h2>
-      <button type="button" id="refresh">Refresh</button>
-    </div>
-    <div class="panel-body">
-      ${row("App name", meta.appName || "-")}
-      ${row("App URL", meta.appURL || "-")}
-      ${row("Batch", batch.enabled === false ? "disabled" : "enabled")}
-      ${row("Max requests", batch.maxRequests == null ? "-" : String(batch.maxRequests))}
-      ${row("Rate limits", rateLimits.enabled ? "enabled" : "disabled")}
     </div>
   `;
   $("refresh").addEventListener("click", refresh);
