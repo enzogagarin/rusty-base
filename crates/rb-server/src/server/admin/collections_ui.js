@@ -116,7 +116,15 @@ export function renderCollections(nextActions) {
   }
   const collectionType = $("collection-type-select");
   if (collectionType) {
-    collectionType.addEventListener("change", syncCollectionMetaFromControls);
+    collectionType.addEventListener("change", () => {
+      if (syncCollectionMetaFromControls()) {
+        actions.render();
+      }
+    });
+  }
+  const collectionViewQuery = $("collection-view-query-input");
+  if (collectionViewQuery) {
+    collectionViewQuery.addEventListener("input", syncCollectionMetaFromControls);
   }
   const cancel = $("cancel-collection");
   if (cancel) {
@@ -203,6 +211,12 @@ function collectionMetaToolsHtml(draft) {
             ${collectionTypeOptions(selectedType)}
           </select>
         </div>
+        ${selectedType === "view" ? `
+          <div class="field field-wide">
+            <label for="collection-view-query-input">View SQL</label>
+            <textarea id="collection-view-query-input" spellcheck="false" placeholder="SELECT id, created, updated FROM ...">${escapeHtml(payload.viewQuery || "")}</textarea>
+          </div>
+        ` : ""}
       </div>
     </div>
   `;
@@ -370,11 +384,19 @@ function syncCollectionMetaFromControls() {
 
   payload.name = $("collection-name-input") ? $("collection-name-input").value.trim() : "";
   payload.type = $("collection-type-select") ? $("collection-type-select").value : "base";
+  if (payload.type === "view") {
+    payload.viewQuery = $("collection-view-query-input")
+      ? $("collection-view-query-input").value.trim()
+      : payload.viewQuery || "";
+  } else {
+    delete payload.viewQuery;
+  }
   state.collectionEditorText = JSON.stringify(payload, null, 2);
   state.collectionEditorError = "";
   if (jsonInput) {
     jsonInput.value = state.collectionEditorText;
   }
+  return true;
 }
 
 function activeCollectionFieldEditIndex(fields) {

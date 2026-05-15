@@ -277,6 +277,7 @@ async function exerciseAdminUi(page) {
   );
 
   await exercisePostEditAndFileControls(page);
+  await exerciseViewCollectionEditor(page);
   await exerciseDestructiveActionGuards(page);
   await exerciseAuthRecordEditor(page);
 
@@ -329,15 +330,21 @@ async function createCollectionWithTypeControl(page, payload) {
   await page.setValue("#collection-json-input", JSON.stringify({
     name: "",
     type: "base",
+    viewQuery: payload.viewQuery || "",
     fields: payload.fields || []
   }, null, 2));
   await page.setValue("#collection-name-input", payload.name);
   await page.setSelectValue("#collection-type-select", payload.type || "base");
+  if ((payload.type || "base") === "view") {
+    await page.waitFor("document.querySelector('#collection-view-query-input')", `view query input ${payload.name}`);
+    await page.setValue("#collection-view-query-input", payload.viewQuery || "");
+  }
   await page.waitFor(
     `(() => {
       const payload = JSON.parse(document.querySelector('#collection-json-input')?.value || '{}');
       return payload.name === ${JSON.stringify(payload.name)}
-        && payload.type === ${JSON.stringify(payload.type || "base")};
+        && payload.type === ${JSON.stringify(payload.type || "base")}
+        && (${JSON.stringify(payload.viewQuery || "")} === "" || payload.viewQuery === ${JSON.stringify(payload.viewQuery || "")});
     })()`,
     `collection type controls ${payload.name}`
   );
@@ -345,6 +352,34 @@ async function createCollectionWithTypeControl(page, payload) {
   await page.waitFor(
     `document.querySelector('#view-title')?.textContent === 'Records' && document.body.textContent.includes(${JSON.stringify(`${payload.name} records`)})`,
     `created collection ${payload.name}`
+  );
+}
+
+async function exerciseViewCollectionEditor(page) {
+  console.log("admin browser smoke: creating a view collection through the UI");
+  const viewQuery = `SELECT id, json_extract(data, '$.title') AS title, created, updated FROM "_rb_records_ui_posts" WHERE json_extract(data, '$.published') = 1`;
+  await createCollectionWithTypeControl(page, {
+    name: "ui_published_posts",
+    type: "view",
+    viewQuery,
+    fields: [
+      { name: "title", type: "text" }
+    ]
+  });
+  await page.waitFor(
+    "document.querySelector('#view-title')?.textContent === 'Records' && document.body.textContent.includes('ui_published_posts records') && document.body.textContent.includes('Hello UI Edited') && !document.body.textContent.includes('Hidden UI')",
+    "view collection records"
+  );
+  await page.setValue("#record-filter", "title ~ 'Edited'");
+  await page.click("#apply-record-query");
+  await page.waitFor(
+    "document.body.textContent.includes('Hello UI Edited') && document.body.textContent.includes('1-1 of 1')",
+    "view collection filter"
+  );
+  await page.setSelectValue("#record-collection-select", "ui_posts");
+  await page.waitFor(
+    "document.querySelector('#view-title')?.textContent === 'Records' && document.body.textContent.includes('ui_posts records') && document.body.textContent.includes('Hello UI Edited')",
+    "returned to base records after view smoke"
   );
 }
 
@@ -482,6 +517,13 @@ async function exercisePostEditAndFileControls(page) {
 
 async function exerciseDestructiveActionGuards(page) {
   console.log("admin browser smoke: checking destructive action guards");
+  await page.setValue("#record-filter", "published = true");
+  await page.click("#apply-record-query");
+  await page.waitFor(
+    "document.body.textContent.includes('Hello UI Edited') && !document.body.textContent.includes('Hidden UI')",
+    "destructive guard filtered record view"
+  );
+
   await page.clickAndPrompt("[data-delete-record='ui_post_1']", "wrong-confirmation");
   await page.waitFor(
     "document.body.textContent.includes('Hello UI Edited')",

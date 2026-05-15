@@ -483,6 +483,14 @@ tr:last-child td {
   align-items: end;
 }
 
+.collection-tools-form .field-wide {
+  grid-column: 1 / -1;
+}
+
+.collection-tools-form textarea {
+  min-height: 96px;
+}
+
 .field-tools-form .field {
   min-width: 0;
 }
