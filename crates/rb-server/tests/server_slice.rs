@@ -246,10 +246,16 @@ fn serves_embedded_admin_ui_shell() {
     assert!(js_bundle.contains("editableCollectionPayload"));
     assert!(js_bundle.contains("collectionPath"));
     assert!(js_bundle.contains("new-field-name"));
+    assert!(js_bundle.contains("new-field-min-select"));
+    assert!(js_bundle.contains("new-field-max-select"));
+    assert!(js_bundle.contains("new-field-protected"));
+    assert!(js_bundle.contains("syncCollectionFieldToolControls"));
     assert!(js_bundle.contains("addCollectionField"));
     assert!(js_bundle.contains("removeCollectionField"));
     assert!(js_bundle.contains("Field name is required"));
     assert!(js_bundle.contains("Relation target collection is required"));
+    assert!(js_bundle.contains("Select values are required"));
+    assert!(js_bundle.contains("Protected only applies to file fields"));
     assert!(js_bundle.contains("Go to Collections"));
     assert!(js_bundle.contains("record-json-input"));
     assert!(js_bundle.contains("Create record"));

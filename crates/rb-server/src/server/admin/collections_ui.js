@@ -121,6 +121,11 @@ export function renderCollections(nextActions) {
   if (addField) {
     addField.addEventListener("click", addCollectionField);
   }
+  const fieldType = $("new-field-type");
+  if (fieldType) {
+    fieldType.addEventListener("change", syncCollectionFieldToolControls);
+    syncCollectionFieldToolControls();
+  }
   document.querySelectorAll("[data-field-remove]").forEach((button) => {
     button.addEventListener("click", () => {
       removeCollectionField(Number(button.dataset.fieldRemove));
@@ -189,22 +194,40 @@ function collectionFieldToolsHtml(draft) {
         </div>
       ` : `<div class="empty"><strong>No user fields yet</strong><span>Add a field or edit the JSON directly.</span></div>`}
       <div class="field-tools-form">
-        <input id="new-field-name" placeholder="field name">
-        <select id="new-field-type">
-          <option value="text">text</option>
-          <option value="email">email</option>
-          <option value="number">number</option>
-          <option value="bool">bool</option>
-          <option value="date">date</option>
-          <option value="select">select</option>
-          <option value="relation">relation</option>
-          <option value="file">file</option>
-          <option value="json">json</option>
-          <option value="url">url</option>
-          <option value="editor">editor</option>
-        </select>
-        <input id="new-field-option" placeholder="select values or relation target">
+        <div class="field">
+          <label for="new-field-name">Name</label>
+          <input id="new-field-name" placeholder="title">
+        </div>
+        <div class="field">
+          <label for="new-field-type">Type</label>
+          <select id="new-field-type">
+            <option value="text">text</option>
+            <option value="email">email</option>
+            <option value="number">number</option>
+            <option value="bool">bool</option>
+            <option value="date">date</option>
+            <option value="select">select</option>
+            <option value="relation">relation</option>
+            <option value="file">file</option>
+            <option value="json">json</option>
+            <option value="url">url</option>
+            <option value="editor">editor</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="new-field-option">Options</label>
+          <input id="new-field-option" placeholder="draft, published / posts / text/plain">
+        </div>
+        <div class="field">
+          <label for="new-field-min-select">Min</label>
+          <input id="new-field-min-select" type="number" min="0" step="1" placeholder="0">
+        </div>
+        <div class="field">
+          <label for="new-field-max-select">Max</label>
+          <input id="new-field-max-select" type="number" min="1" step="1" placeholder="1">
+        </div>
         <label class="check-field"><input id="new-field-required" type="checkbox">Required</label>
+        <label class="check-field"><input id="new-field-protected" type="checkbox">Protected</label>
         <button type="button" id="add-collection-field" class="primary">Add</button>
       </div>
     </div>
@@ -270,14 +293,50 @@ function writeCollectionEditorPayload(payload) {
   actions.render();
 }
 
+function syncCollectionFieldToolControls() {
+  const fieldType = $("new-field-type") ? $("new-field-type").value : "text";
+  const option = $("new-field-option");
+  if (option) {
+    option.disabled = !["select", "relation", "file"].includes(fieldType);
+    option.placeholder = {
+      select: "draft, published",
+      relation: "target collection",
+      file: "text/plain, image/png"
+    }[fieldType] || "";
+    if (option.disabled) {
+      option.value = "";
+    }
+  }
+  const minSelect = $("new-field-min-select");
+  if (minSelect) {
+    minSelect.disabled = fieldType !== "relation";
+    if (minSelect.disabled) {
+      minSelect.value = "";
+    }
+  }
+  const maxSelect = $("new-field-max-select");
+  if (maxSelect) {
+    maxSelect.disabled = !["select", "relation", "file"].includes(fieldType);
+    if (maxSelect.disabled) {
+      maxSelect.value = "";
+    }
+  }
+  const protectedFile = $("new-field-protected");
+  if (protectedFile) {
+    protectedFile.disabled = fieldType !== "file";
+    if (protectedFile.disabled) {
+      protectedFile.checked = false;
+    }
+  }
+}
+
 function addCollectionField() {
+  const jsonInput = $("collection-json-input");
   let payload = null;
   try {
     payload = readCollectionEditorPayload();
   } catch (error) {
-    state.collectionEditorText = $("collection-json-input") ? $("collection-json-input").value : state.collectionEditorText;
-    state.collectionEditorError = error.message;
-    actions.render();
+    showCollectionFieldToolError(error.message, jsonInput);
     return;
   }
 
@@ -285,24 +344,45 @@ function addCollectionField() {
   const fieldType = $("new-field-type") ? $("new-field-type").value : "text";
   const option = ($("new-field-option") ? $("new-field-option").value : "").trim();
   const required = Boolean($("new-field-required") && $("new-field-required").checked);
+  const protectedFile = Boolean($("new-field-protected") && $("new-field-protected").checked);
+  let minSelect = null;
+  let maxSelect = null;
+  try {
+    minSelect = optionalIntegerFieldValue("new-field-min-select", "Min", 0);
+    maxSelect = optionalIntegerFieldValue("new-field-max-select", "Max", 1);
+  } catch (error) {
+    showCollectionFieldToolError(error.message, jsonInput);
+    return;
+  }
+
   if (!name) {
-    state.collectionEditorError = "Field name is required";
-    state.collectionEditorText = $("collection-json-input") ? $("collection-json-input").value : state.collectionEditorText;
-    actions.render();
+    showCollectionFieldToolError("Field name is required", jsonInput);
     return;
   }
 
   const fields = Array.isArray(payload.fields) ? payload.fields : [];
   if (fields.some((field) => field && field.name === name)) {
-    state.collectionEditorError = `Field '${name}' already exists`;
-    state.collectionEditorText = $("collection-json-input") ? $("collection-json-input").value : state.collectionEditorText;
-    actions.render();
+    showCollectionFieldToolError(`Field '${name}' already exists`, jsonInput);
     return;
   }
   if (fieldType === "relation" && !option) {
-    state.collectionEditorError = "Relation target collection is required";
-    state.collectionEditorText = $("collection-json-input") ? $("collection-json-input").value : state.collectionEditorText;
-    actions.render();
+    showCollectionFieldToolError("Relation target collection is required", jsonInput);
+    return;
+  }
+  if (fieldType === "select" && !option) {
+    showCollectionFieldToolError("Select values are required", jsonInput);
+    return;
+  }
+  if (fieldType !== "relation" && minSelect != null) {
+    showCollectionFieldToolError("Min only applies to relation fields", jsonInput);
+    return;
+  }
+  if (!["relation", "file", "select"].includes(fieldType) && maxSelect != null) {
+    showCollectionFieldToolError("Max only applies to relation, file, and select fields", jsonInput);
+    return;
+  }
+  if (fieldType !== "file" && protectedFile) {
+    showCollectionFieldToolError("Protected only applies to file fields", jsonInput);
     return;
   }
 
@@ -311,18 +391,53 @@ function addCollectionField() {
     field.required = true;
   }
   if (fieldType === "relation") {
-    if (option) {
-      field.collection = option;
+    field.collection = option;
+    field.maxSelect = maxSelect || 1;
+    if (minSelect != null) {
+      if (minSelect > field.maxSelect) {
+        showCollectionFieldToolError("Min cannot be greater than Max", jsonInput);
+        return;
+      }
+      field.minSelect = minSelect;
     }
-    field.maxSelect = 1;
   } else if (fieldType === "select" && option) {
     field.values = option.split(",").map((value) => value.trim()).filter(Boolean);
+    if (!field.values.length) {
+      showCollectionFieldToolError("Select values are required", jsonInput);
+      return;
+    }
+    if (maxSelect != null) {
+      field.maxSelect = maxSelect;
+    }
   } else if (fieldType === "file") {
-    field.maxSelect = 1;
+    field.maxSelect = maxSelect || 1;
+    field.mimeTypes = option.split(",").map((value) => value.trim()).filter(Boolean);
+    if (protectedFile) {
+      field.protected = true;
+    }
   }
 
   payload.fields = fields.concat(field);
   writeCollectionEditorPayload(payload);
+}
+
+function optionalIntegerFieldValue(id, label, min) {
+  const input = $(id);
+  const raw = input ? input.value.trim() : "";
+  if (!raw) {
+    return null;
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min) {
+    throw new Error(`${label} must be an integer greater than or equal to ${min}`);
+  }
+  return value;
+}
+
+function showCollectionFieldToolError(message, jsonInput) {
+  state.collectionEditorText = jsonInput ? jsonInput.value : state.collectionEditorText;
+  state.collectionEditorError = message;
+  actions.render();
 }
 
 function removeCollectionField(index) {
@@ -344,16 +459,26 @@ function removeCollectionField(index) {
 }
 
 function collectionFieldExtra(field) {
+  const parts = [];
   if (field.collection) {
-    return `target: ${field.collection}`;
+    parts.push(`target: ${field.collection}`);
   }
   if (Array.isArray(field.values) && field.values.length) {
-    return `values: ${field.values.join(", ")}`;
+    parts.push(`values: ${field.values.join(", ")}`);
+  }
+  if (Array.isArray(field.mimeTypes) && field.mimeTypes.length) {
+    parts.push(`mime: ${field.mimeTypes.join(", ")}`);
+  }
+  if (field.minSelect != null) {
+    parts.push(`min: ${field.minSelect}`);
   }
   if (field.maxSelect != null) {
-    return `max: ${field.maxSelect}`;
+    parts.push(`max: ${field.maxSelect}`);
   }
-  return "";
+  if (field.protected) {
+    parts.push("protected");
+  }
+  return parts.join("; ");
 }
 
 async function saveCollection() {
@@ -434,4 +559,3 @@ async function deleteCollection(name) {
     status(error.message, true);
   }
 }
-

@@ -471,9 +471,13 @@ tr:last-child td {
 
 .field-tools-form {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) 150px minmax(160px, 1fr) auto auto;
+  grid-template-columns: minmax(120px, 1fr) 140px minmax(180px, 1.4fr) 78px 78px auto auto auto;
   gap: 8px;
-  align-items: center;
+  align-items: end;
+}
+
+.field-tools-form .field {
+  min-width: 0;
 }
 
 .check-field {
@@ -482,6 +486,7 @@ tr:last-child td {
   align-items: center;
   color: var(--muted);
   font-weight: 700;
+  min-height: 38px;
   white-space: nowrap;
 }
 

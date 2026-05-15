@@ -244,22 +244,21 @@ async function exerciseAdminUi(page) {
     name: "Ada Lovelace"
   });
 
-  await createCollection(page, {
-    name: "ui_posts",
-    fields: [
-      { name: "title", type: "text", required: true },
-      { name: "published", type: "bool" },
-      { name: "author", type: "relation", collection: "ui_authors", maxSelect: 1 },
-      { name: "asset", type: "file", maxSelect: 1, protected: true, mimeTypes: ["text/plain"] }
-    ]
-  });
+  await createCollectionWithFieldTools(page, "ui_posts", [
+    { name: "title", type: "text", required: true },
+    { name: "published", type: "bool" },
+    { name: "status", type: "select", option: "draft, published" },
+    { name: "author", type: "relation", option: "ui_authors", max: 1 },
+    { name: "asset", type: "file", option: "text/plain", max: 1, protected: true }
+  ]);
 
   console.log("admin browser smoke: creating relation and file records through the UI");
   await createPostWithFieldEditor(page);
   await createJsonRecord(page, {
     id: "ui_post_2",
     title: "Hidden UI",
-    published: false
+    published: false,
+    status: "draft"
   });
   await page.waitFor(
     "document.body.textContent.includes('Hello UI') && document.body.textContent.includes('Ada Lovelace') && document.body.textContent.includes('Hidden UI')",
@@ -300,6 +299,47 @@ async function createCollection(page, payload) {
   );
 }
 
+async function createCollectionWithFieldTools(page, name, fields) {
+  await page.click("[data-view='collections']");
+  await page.waitFor("document.querySelector('#view-title')?.textContent === 'Collections'", "collections view");
+  await page.click("#new-collection");
+  await page.waitFor("document.querySelector('#collection-json-input')", `collection editor ${name}`);
+  await page.setValue("#collection-json-input", JSON.stringify({ name, fields: [] }, null, 2));
+  for (const field of fields) {
+    await addCollectionField(page, field);
+  }
+  await page.click("#save-collection");
+  await page.waitFor(
+    `document.querySelector('#view-title')?.textContent === 'Records' && document.body.textContent.includes(${JSON.stringify(`${name} records`)})`,
+    `created collection ${name}`
+  );
+}
+
+async function addCollectionField(page, field) {
+  await page.setValue("#new-field-name", field.name);
+  await page.setSelectValue("#new-field-type", field.type);
+  if (field.option) {
+    await page.setValue("#new-field-option", field.option);
+  }
+  if (field.min != null) {
+    await page.setValue("#new-field-min-select", String(field.min));
+  }
+  if (field.max != null) {
+    await page.setValue("#new-field-max-select", String(field.max));
+  }
+  if (field.required) {
+    await page.setChecked("#new-field-required", true);
+  }
+  if (field.protected) {
+    await page.setChecked("#new-field-protected", true);
+  }
+  await page.click("#add-collection-field");
+  await page.waitFor(
+    `JSON.parse(document.querySelector('#collection-json-input')?.value || '{}').fields?.some((item) => item.name === ${JSON.stringify(field.name)})`,
+    `field ${field.name} added`
+  );
+}
+
 async function createJsonRecord(page, payload) {
   await page.click("#new-record");
   await page.waitFor("document.querySelector('#record-json-input')", `record editor ${payload.id}`);
@@ -318,6 +358,7 @@ async function createPostWithFieldEditor(page) {
   await page.setValue("#record-json-input", JSON.stringify({ id: "ui_post_1" }, null, 2));
   await page.setValue("[data-record-field='title']", "Hello UI");
   await page.setChecked("[data-record-field='published']", true);
+  await page.setSelectValue("[data-record-field='status']", "published");
   await page.waitFor(
     "Array.from(document.querySelector(\"[data-record-field='author']\")?.options || []).some((option) => option.value === 'ui_author_1')",
     "relation picker options"
