@@ -6,6 +6,7 @@ const ADMIN_COLLECTIONS_FIELDS_JS: &str = include_str!("admin/collections/fields
 const ADMIN_COLLECTIONS_IMPORT_EXPORT_JS: &str = include_str!("admin/collections/import_export.js");
 const ADMIN_COLLECTIONS_INDEXES_JS: &str = include_str!("admin/collections/indexes.js");
 const ADMIN_COLLECTIONS_META_JS: &str = include_str!("admin/collections/meta.js");
+const ADMIN_COLLECTIONS_RULES_JS: &str = include_str!("admin/collections/rules.js");
 const ADMIN_COLLECTIONS_UI_JS: &str = include_str!("admin/collections_ui.js");
 const ADMIN_DATA_HELPERS_JS: &str = include_str!("admin/data_helpers.js");
 const ADMIN_INDEX_HTML: &str = include_str!("admin/index.html");
@@ -67,6 +68,11 @@ pub(crate) fn admin_asset_response(asset: &str) -> Option<HttpResponse> {
             200,
             "text/javascript; charset=utf-8",
             ADMIN_COLLECTIONS_META_JS.as_bytes().to_vec(),
+        )),
+        "collections/rules.js" => Some(admin_response(
+            200,
+            "text/javascript; charset=utf-8",
+            ADMIN_COLLECTIONS_RULES_JS.as_bytes().to_vec(),
         )),
         "data_helpers.js" => Some(admin_response(
             200,

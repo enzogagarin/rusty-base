@@ -40,14 +40,6 @@ export function collectionAuthToolsHtml(draft) {
           <label for="collection-auth-identity-fields">Identity fields</label>
           <input id="collection-auth-identity-fields" placeholder="email, username" value="${escapeAttribute(identityFieldsValue(passwordAuth, payload))}">
         </div>
-        <div class="field field-wide">
-          <label for="collection-auth-rule">Auth rule</label>
-          <textarea id="collection-auth-rule" spellcheck="false" placeholder="@request.auth.id = id">${escapeHtml(payload.authRule || "")}</textarea>
-        </div>
-        <div class="field field-wide">
-          <label for="collection-manage-rule">Manage rule</label>
-          <textarea id="collection-manage-rule" spellcheck="false" placeholder="@request.auth.id = id">${escapeHtml(payload.manageRule || "")}</textarea>
-        </div>
         ${tokenDurationField("auth-token-duration", "Auth token", tokenDuration(payload, "authToken"))}
         ${tokenDurationField("password-reset-token-duration", "Password reset", tokenDuration(payload, "passwordResetToken"))}
         ${tokenDurationField("email-change-token-duration", "Email change", tokenDuration(payload, "emailChangeToken"))}
@@ -103,8 +95,6 @@ function syncCollectionAuthFromControls({ readPayload, showError }) {
     return true;
   }
 
-  payload.authRule = controlValue("collection-auth-rule");
-  payload.manageRule = controlValue("collection-manage-rule") || null;
   payload.passwordAuth = {
     enabled: checked("collection-auth-password-enabled"),
     identityFields: commaList(controlValue("collection-auth-identity-fields"))
@@ -137,8 +127,6 @@ function authInputIds() {
   return [
     "collection-auth-password-enabled",
     "collection-auth-identity-fields",
-    "collection-auth-rule",
-    "collection-manage-rule",
     "auth-token-duration",
     "password-reset-token-duration",
     "email-change-token-duration",

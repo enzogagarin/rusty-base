@@ -12,6 +12,7 @@ import {
   openCollectionImport
 } from "./collections/import_export.js";
 import { bindCollectionMetaTools, collectionMetaToolsHtml } from "./collections/meta.js";
+import { bindCollectionRuleTools, collectionRuleToolsHtml } from "./collections/rules.js";
 
 let actions = {
   render() {},
@@ -150,6 +151,10 @@ export function renderCollections(nextActions) {
     readPayload: readCollectionEditorPayload,
     showError: showCollectionToolError
   });
+  bindCollectionRuleTools({
+    readPayload: readCollectionEditorPayload,
+    showError: showCollectionToolError
+  });
   bindCollectionFieldTools({
     readPayload: readCollectionEditorPayload,
     render: actions.render,
@@ -182,6 +187,7 @@ function collectionEditorHtml() {
       <h2>${escapeHtml(title)}</h2>
       ${state.collectionEditorError ? `<div class="error">${escapeHtml(state.collectionEditorError)}</div>` : ""}
       ${collectionMetaToolsHtml(draft)}
+      ${collectionRuleToolsHtml(draft)}
       ${collectionAuthToolsHtml(draft)}
       ${collectionFieldToolsHtml(draft)}
       ${collectionIndexToolsHtml(draft, state.collectionIndexWarnings)}

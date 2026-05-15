@@ -257,6 +257,12 @@ async function exerciseAdminUi(page) {
     edits: [
       { name: "status", option: "draft, published" }
     ],
+    rules: {
+      viewRule: "title ~ 'UI'",
+      createRule: "@request.body.title ~ 'UI'",
+      updateRule: "title ~ 'UI'",
+      deleteRule: "title ~ 'UI'"
+    },
     indexes: [
       "CREATE INDEX idx_ui_posts_title ON ui_posts (title)",
       "CREATE UNIQUE INDEX idx_ui_posts_unique_title ON ui_posts (title)"
@@ -368,7 +374,7 @@ async function exerciseSettingsEditor(page) {
   );
 }
 
-async function createCollectionWithFieldTools(page, { name, fields, edits = [], indexes = [] }) {
+async function createCollectionWithFieldTools(page, { name, fields, edits = [], rules = {}, indexes = [] }) {
   await page.click("[data-view='collections']");
   await page.waitFor("document.querySelector('#view-title')?.textContent === 'Collections'", "collections view");
   await page.click("#new-collection");
@@ -380,6 +386,7 @@ async function createCollectionWithFieldTools(page, { name, fields, edits = [], 
   for (const edit of edits) {
     await editCollectionField(page, edit);
   }
+  await configureCollectionRules(page, rules);
   for (const index of indexes) {
     await addCollectionIndex(page, index);
   }
@@ -438,6 +445,7 @@ async function createCollectionWithTypeControl(page, payload) {
   if ((payload.type || "base") === "auth" && payload.authSettings) {
     await configureCollectionAuthSettings(page, payload.authSettings);
   }
+  await configureCollectionRules(page, payload.rules || {});
   await page.waitFor(
     `(() => {
       const payload = JSON.parse(document.querySelector('#collection-json-input')?.value || '{}');
@@ -451,6 +459,39 @@ async function createCollectionWithTypeControl(page, payload) {
   await page.waitFor(
     `document.querySelector('#view-title')?.textContent === 'Records' && document.body.textContent.includes(${JSON.stringify(`${payload.name} records`)})`,
     `created collection ${payload.name}`
+  );
+}
+
+async function configureCollectionRules(page, rules) {
+  const entries = Object.entries(rules || {});
+  if (!entries.length) {
+    return;
+  }
+
+  const selectors = {
+    listRule: "#collection-rule-list",
+    viewRule: "#collection-rule-view",
+    createRule: "#collection-rule-create",
+    updateRule: "#collection-rule-update",
+    deleteRule: "#collection-rule-delete",
+    authRule: "#collection-rule-auth",
+    manageRule: "#collection-rule-manage"
+  };
+  await page.waitFor("document.querySelector('#collection-rule-list')", "collection rule controls");
+  for (const [key, value] of entries) {
+    const selector = selectors[key];
+    if (!selector) {
+      throw new Error(`Unknown collection rule key: ${key}`);
+    }
+    await page.setValue(selector, value);
+  }
+  await page.waitFor(
+    `(() => {
+      const payload = JSON.parse(document.querySelector('#collection-json-input')?.value || '{}');
+      const expected = ${JSON.stringify(rules)};
+      return Object.entries(expected).every(([key, value]) => payload[key] === value);
+    })()`,
+    "collection rules synced"
   );
 }
 
@@ -704,6 +745,9 @@ async function exerciseAuthRecordEditor(page) {
       mfaEnabled: true,
       mfaDuration: "900",
       mfaRule: "@request.auth.id = id"
+    },
+    rules: {
+      manageRule: "@request.auth.id = id"
     }
   });
 

@@ -532,6 +532,16 @@ tr:last-child td {
   min-height: 72px;
 }
 
+.rule-tools-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.rule-tools-grid textarea {
+  min-height: 72px;
+}
+
 .collection-tools-form textarea {
   min-height: 96px;
 }
@@ -729,6 +739,7 @@ tr:last-child td {
   .collection-index-form,
   .collection-tools-form,
   .field-tools-form,
+  .rule-tools-grid,
   .record-collection-picker,
   .record-toolbar-grid,
   .record-form-grid,
