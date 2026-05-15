@@ -179,6 +179,7 @@ node scripts/check_admin_js.mjs
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 node scripts/admin_smoke.mjs
+node scripts/admin_browser_smoke.mjs
 ```
 
 Admin UI security note: the embedded admin shell is currently an MVP/self-hosted
@@ -191,6 +192,11 @@ session cookie flow so an XSS bug cannot directly read the superuser token.
 the embedded admin asset graph plus the HTTP flows the admin UI depends on:
 superuser bootstrap, collection metadata, relation expand, protected file
 upload/download/delete, filter/sort/pagination, and restart persistence.
+
+`scripts/admin_browser_smoke.mjs` runs the embedded admin UI in headless
+Chrome/Chromium through the DevTools protocol and clicks through the core admin
+flow: initialize/login, create collection, create records, filter, edit, and
+logout. Set `RB_ADMIN_BROWSER_CHROME` if Chrome is not on a standard path.
 
 Run the current CLI smoke path:
 

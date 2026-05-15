@@ -26,3 +26,5 @@ jobs:
         run: cargo test --workspace
       - name: Admin smoke
         run: node scripts/admin_smoke.mjs
+      - name: Admin browser smoke
+        run: node scripts/admin_browser_smoke.mjs
