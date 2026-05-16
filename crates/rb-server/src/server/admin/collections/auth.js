@@ -24,12 +24,15 @@ export function collectionAuthToolsHtml(draft) {
   const mfa = payload.mfa && typeof payload.mfa === "object"
     ? payload.mfa
     : { enabled: false, duration: 1800, rule: "" };
+  const oauth2 = oauthConfig(payload);
+  const provider = oauthProvider(oauth2);
+  const mappedFields = oauthMappedFields(oauth2);
 
   return `
     <div class="field-tools">
       <div class="field-tools-head">
         <h2>Auth</h2>
-        <span class="muted">password, OTP, MFA</span>
+        <span class="muted">password, OTP, MFA, OAuth2</span>
       </div>
       <div class="auth-tools-grid">
         <label class="check-field">
@@ -59,6 +62,58 @@ export function collectionAuthToolsHtml(draft) {
         <div class="field field-wide">
           <label for="collection-mfa-rule">MFA rule</label>
           <textarea id="collection-mfa-rule" spellcheck="false" placeholder="@request.auth.emailVisibility = true">${escapeHtml(mfa.rule || "")}</textarea>
+        </div>
+        <label class="check-field">
+          <input id="collection-oauth-enabled" type="checkbox" ${oauth2.enabled ? "checked" : ""}>
+          OAuth2
+        </label>
+        <div class="field">
+          <label for="collection-oauth-provider-name">Provider</label>
+          <input id="collection-oauth-provider-name" placeholder="github" value="${escapeAttribute(provider.name || "")}">
+        </div>
+        <div class="field">
+          <label for="collection-oauth-provider-display-name">Display name</label>
+          <input id="collection-oauth-provider-display-name" placeholder="GitHub" value="${escapeAttribute(provider.displayName || provider.display_name || "")}">
+        </div>
+        <div class="field">
+          <label for="collection-oauth-client-id">Client ID</label>
+          <input id="collection-oauth-client-id" value="${escapeAttribute(provider.clientId || provider.client_id || "")}">
+        </div>
+        <div class="field">
+          <label for="collection-oauth-client-secret">Client secret</label>
+          <input id="collection-oauth-client-secret" type="password" value="${escapeAttribute(provider.clientSecret || provider.client_secret || "")}">
+        </div>
+        <div class="field">
+          <label for="collection-oauth-auth-url">Auth URL</label>
+          <input id="collection-oauth-auth-url" placeholder="built-in for github/google" value="${escapeAttribute(provider.authUrl || provider.auth_url || "")}">
+        </div>
+        <div class="field">
+          <label for="collection-oauth-token-url">Token URL</label>
+          <input id="collection-oauth-token-url" placeholder="required with user info URL" value="${escapeAttribute(provider.tokenUrl || provider.token_url || "")}">
+        </div>
+        <div class="field">
+          <label for="collection-oauth-user-info-url">User info URL</label>
+          <input id="collection-oauth-user-info-url" placeholder="required with token URL" value="${escapeAttribute(provider.userInfoUrl || provider.user_info_url || "")}">
+        </div>
+        <div class="field">
+          <label for="collection-oauth-scopes">Scopes</label>
+          <input id="collection-oauth-scopes" placeholder="user:email, read:user" value="${escapeAttribute(providerScopesValue(provider))}">
+        </div>
+        <div class="field">
+          <label for="collection-oauth-map-id">Map ID</label>
+          <input id="collection-oauth-map-id" placeholder="id or sub" value="${escapeAttribute(mappedFields.id || "")}">
+        </div>
+        <div class="field">
+          <label for="collection-oauth-map-name">Map name</label>
+          <input id="collection-oauth-map-name" placeholder="name" value="${escapeAttribute(mappedFields.name || "")}">
+        </div>
+        <div class="field">
+          <label for="collection-oauth-map-username">Map username</label>
+          <input id="collection-oauth-map-username" placeholder="login" value="${escapeAttribute(mappedFields.username || "")}">
+        </div>
+        <div class="field">
+          <label for="collection-oauth-map-avatar-url">Map avatar URL</label>
+          <input id="collection-oauth-map-avatar-url" placeholder="avatar_url" value="${escapeAttribute(mappedFields.avatarURL || mappedFields.avatarUrl || mappedFields.avatar_url || "")}">
         </div>
       </div>
     </div>
@@ -114,6 +169,16 @@ function syncCollectionAuthFromControls({ readPayload, showError }) {
     duration: numericValue("collection-mfa-duration", 1800),
     rule: controlValue("collection-mfa-rule")
   };
+  payload.oauth2 = {
+    enabled: checked("collection-oauth-enabled"),
+    mappedFields: {
+      id: controlValue("collection-oauth-map-id"),
+      name: controlValue("collection-oauth-map-name"),
+      username: controlValue("collection-oauth-map-username"),
+      avatarURL: controlValue("collection-oauth-map-avatar-url")
+    },
+    providers: oauthProvidersFromControls(payload)
+  };
 
   state.collectionEditorText = JSON.stringify(payload, null, 2);
   state.collectionEditorError = "";
@@ -137,7 +202,20 @@ function authInputIds() {
     "collection-otp-length",
     "collection-mfa-enabled",
     "collection-mfa-duration",
-    "collection-mfa-rule"
+    "collection-mfa-rule",
+    "collection-oauth-enabled",
+    "collection-oauth-provider-name",
+    "collection-oauth-provider-display-name",
+    "collection-oauth-client-id",
+    "collection-oauth-client-secret",
+    "collection-oauth-auth-url",
+    "collection-oauth-token-url",
+    "collection-oauth-user-info-url",
+    "collection-oauth-scopes",
+    "collection-oauth-map-id",
+    "collection-oauth-map-name",
+    "collection-oauth-map-username",
+    "collection-oauth-map-avatar-url"
   ];
 }
 
@@ -177,6 +255,48 @@ function numberField(id, label, value, min, suffix = " seconds") {
 
 function durationConfig(id, fallback) {
   return { duration: numericValue(id, fallback) };
+}
+
+function oauthConfig(payload) {
+  const oauth2 = payload.oauth2 && typeof payload.oauth2 === "object" && !Array.isArray(payload.oauth2)
+    ? payload.oauth2
+    : {};
+  return {
+    enabled: Boolean(oauth2.enabled),
+    mappedFields: oauthMappedFields(oauth2),
+    providers: Array.isArray(oauth2.providers) ? oauth2.providers : []
+  };
+}
+
+function oauthProvider(oauth2) {
+  return oauth2.providers.find((provider) => provider && typeof provider === "object" && !Array.isArray(provider)) || {};
+}
+
+function oauthMappedFields(oauth2) {
+  return oauth2.mappedFields && typeof oauth2.mappedFields === "object" && !Array.isArray(oauth2.mappedFields)
+    ? oauth2.mappedFields
+    : {};
+}
+
+function providerScopesValue(provider) {
+  return Array.isArray(provider.scopes) ? provider.scopes.join(", ") : "";
+}
+
+function oauthProvidersFromControls(payload) {
+  const existing = oauthConfig(payload).providers
+    .filter((provider) => provider && typeof provider === "object" && !Array.isArray(provider));
+  const provider = {
+    name: controlValue("collection-oauth-provider-name"),
+    displayName: controlValue("collection-oauth-provider-display-name"),
+    clientId: controlValue("collection-oauth-client-id"),
+    clientSecret: controlValue("collection-oauth-client-secret"),
+    authUrl: controlValue("collection-oauth-auth-url"),
+    tokenUrl: controlValue("collection-oauth-token-url"),
+    userInfoUrl: controlValue("collection-oauth-user-info-url"),
+    scopes: commaList(controlValue("collection-oauth-scopes"))
+  };
+  const rest = existing.slice(1);
+  return provider.name ? [provider, ...rest] : rest;
 }
 
 function numericValue(id, fallback) {

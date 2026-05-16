@@ -310,6 +310,9 @@ fn serves_embedded_admin_ui_shell() {
     assert!(js_bundle.contains("collection-auth-identity-fields"));
     assert!(js_bundle.contains("collection-otp-enabled"));
     assert!(js_bundle.contains("collection-mfa-enabled"));
+    assert!(js_bundle.contains("collection-oauth-enabled"));
+    assert!(js_bundle.contains("collection-oauth-provider-name"));
+    assert!(js_bundle.contains("collection-oauth-map-avatar-url"));
     assert!(js_bundle.contains("collection-rule-list"));
     assert!(js_bundle.contains("data-collection-rule"));
     assert!(js_bundle.contains("collectionRecordsPath"));

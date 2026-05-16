@@ -511,16 +511,40 @@ async function configureCollectionAuthSettings(page, settings) {
   await page.setChecked("#collection-mfa-enabled", Boolean(settings.mfaEnabled));
   await page.setValue("#collection-mfa-duration", settings.mfaDuration || "1800");
   await page.setValue("#collection-mfa-rule", settings.mfaRule || "");
+  if (settings.oauthEnabled != null || settings.oauthProviderName) {
+    await page.setChecked("#collection-oauth-enabled", Boolean(settings.oauthEnabled));
+    await page.setValue("#collection-oauth-provider-name", settings.oauthProviderName || "");
+    await page.setValue("#collection-oauth-provider-display-name", settings.oauthProviderDisplayName || "");
+    await page.setValue("#collection-oauth-client-id", settings.oauthClientId || "");
+    await page.setValue("#collection-oauth-client-secret", settings.oauthClientSecret || "");
+    await page.setValue("#collection-oauth-auth-url", settings.oauthAuthUrl || "");
+    await page.setValue("#collection-oauth-token-url", settings.oauthTokenUrl || "");
+    await page.setValue("#collection-oauth-user-info-url", settings.oauthUserInfoUrl || "");
+    await page.setValue("#collection-oauth-scopes", settings.oauthScopes || "");
+    await page.setValue("#collection-oauth-map-id", settings.oauthMapId || "");
+    await page.setValue("#collection-oauth-map-name", settings.oauthMapName || "");
+    await page.setValue("#collection-oauth-map-username", settings.oauthMapUsername || "");
+    await page.setValue("#collection-oauth-map-avatar-url", settings.oauthMapAvatarUrl || "");
+  }
   await page.waitFor(
     `(() => {
       const payload = JSON.parse(document.querySelector('#collection-json-input')?.value || '{}');
+      const provider = payload.oauth2?.providers?.[0] || {};
       return payload.passwordAuth?.identityFields?.includes('email')
         && payload.authToken?.duration === ${Number(settings.authTokenDuration || 604800)}
         && payload.passwordResetToken?.duration === ${Number(settings.passwordResetTokenDuration || 1800)}
         && payload.verificationToken?.duration === ${Number(settings.verificationTokenDuration || 259200)}
         && payload.otp?.enabled === ${settings.otpEnabled ? "true" : "false"}
         && payload.otp?.length === ${Number(settings.otpLength || 8)}
-        && payload.mfa?.enabled === ${settings.mfaEnabled ? "true" : "false"};
+        && payload.mfa?.enabled === ${settings.mfaEnabled ? "true" : "false"}
+        && (${settings.oauthEnabled == null && !settings.oauthProviderName ? "true" : `payload.oauth2?.enabled === ${settings.oauthEnabled ? "true" : "false"}
+          && provider.name === ${JSON.stringify(settings.oauthProviderName || "")}
+          && provider.displayName === ${JSON.stringify(settings.oauthProviderDisplayName || "")}
+          && provider.clientId === ${JSON.stringify(settings.oauthClientId || "")}
+          && provider.clientSecret === ${JSON.stringify(settings.oauthClientSecret || "")}
+          && provider.scopes?.includes(${JSON.stringify((settings.oauthScopes || "").split(",")[0]?.trim() || "")})
+          && payload.oauth2?.mappedFields?.id === ${JSON.stringify(settings.oauthMapId || "")}
+          && payload.oauth2?.mappedFields?.avatarURL === ${JSON.stringify(settings.oauthMapAvatarUrl || "")}`});
     })()`,
     "auth collection settings synced"
   );
@@ -810,7 +834,17 @@ async function exerciseAuthRecordEditor(page) {
       otpLength: "6",
       mfaEnabled: true,
       mfaDuration: "900",
-      mfaRule: "@request.auth.id = id"
+      mfaRule: "@request.auth.id = id",
+      oauthEnabled: true,
+      oauthProviderName: "github",
+      oauthProviderDisplayName: "GitHub",
+      oauthClientId: "smoke-client",
+      oauthClientSecret: "smoke-secret",
+      oauthScopes: "user:email, read:user",
+      oauthMapId: "id",
+      oauthMapName: "name",
+      oauthMapUsername: "login",
+      oauthMapAvatarUrl: "avatar_url"
     },
     rules: {
       manageRule: "@request.auth.id = id"

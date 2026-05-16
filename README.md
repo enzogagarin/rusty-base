@@ -209,7 +209,7 @@ presentable flags, and relation cascade delete. It also adds collection rule
 controls, collection index metadata, exports/imports collection metadata, checks
 index warning visibility, and updates app and batch settings through the
 Settings view. Auth collection creation covers password identity, token
-duration, OTP, and MFA settings controls. Set
+duration, OTP, MFA, and OAuth2 provider/mapped-field settings controls. Set
 `RB_ADMIN_BROWSER_CHROME` if Chrome is not on a standard path.
 
 Run the current CLI smoke path:
