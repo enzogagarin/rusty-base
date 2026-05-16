@@ -1,5 +1,11 @@
 import { $, state } from "../state.js";
 import { escapeAttribute, escapeHtml } from "../render_helpers.js";
+import {
+  applyCollectionFieldAdvancedOptions,
+  collectionFieldAdvancedOptionsHtml,
+  readCollectionFieldAdvancedOptions,
+  syncCollectionFieldAdvancedOptionControls
+} from "./field_options.js";
 
 export function collectionFieldToolsHtml(draft) {
   if (!draft.ok) {
@@ -79,6 +85,7 @@ export function collectionFieldToolsHtml(draft) {
         ${editing ? `<button type="button" id="cancel-field-edit">Cancel</button>` : ""}
         <button type="button" id="add-collection-field" class="primary">${editing ? "Update" : "Add"}</button>
       </div>
+      ${collectionFieldAdvancedOptionsHtml(editingField, fieldType)}
     </div>
   `;
 }
@@ -101,8 +108,12 @@ export function bindCollectionFieldTools(callbacks) {
 
   const fieldType = $("new-field-type");
   if (fieldType) {
-    fieldType.addEventListener("change", syncCollectionFieldToolControls);
+    fieldType.addEventListener("change", () => {
+      syncCollectionFieldToolControls();
+      syncCollectionFieldAdvancedOptionControls();
+    });
     syncCollectionFieldToolControls();
+    syncCollectionFieldAdvancedOptionControls();
   }
 
   document.querySelectorAll("[data-field-edit]").forEach((button) => {
@@ -218,9 +229,11 @@ function addCollectionField({ readPayload, showError, writePayload }) {
   const protectedFile = Boolean($("new-field-protected") && $("new-field-protected").checked);
   let minSelect = null;
   let maxSelect = null;
+  let advancedOptions = null;
   try {
     minSelect = optionalIntegerFieldValue("new-field-min-select", "Min", 0);
     maxSelect = optionalIntegerFieldValue("new-field-max-select", "Max", 1);
+    advancedOptions = readCollectionFieldAdvancedOptions(fieldType);
   } catch (error) {
     showError(error.message, jsonInput);
     return;
@@ -266,6 +279,7 @@ function addCollectionField({ readPayload, showError, writePayload }) {
   if (required) {
     field.required = true;
   }
+  applyCollectionFieldAdvancedOptions(field, advancedOptions);
   if (fieldType === "relation") {
     field.collection = option;
     field.maxSelect = maxSelect || 1;
@@ -374,6 +388,27 @@ function collectionFieldExtra(field) {
   }
   if (field.protected) {
     parts.push("protected");
+  }
+  if (field.hidden) {
+    parts.push("hidden");
+  }
+  if (field.presentable) {
+    parts.push("presentable");
+  }
+  if (field.cascadeDelete) {
+    parts.push("cascade");
+  }
+  if (field.min != null) {
+    parts.push(`min: ${field.min}`);
+  }
+  if (field.max != null) {
+    parts.push(`max: ${field.max}`);
+  }
+  if (field.maxSize != null) {
+    parts.push(`size: ${field.maxSize}`);
+  }
+  if (field.pattern) {
+    parts.push(`pattern: ${field.pattern}`);
   }
   return parts.join("; ");
 }

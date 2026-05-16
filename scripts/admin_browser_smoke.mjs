@@ -248,11 +248,11 @@ async function exerciseAdminUi(page) {
   await createCollectionWithFieldTools(page, {
     name: "ui_posts",
     fields: [
-      { name: "title", type: "text", required: true },
+      { name: "title", type: "text", required: true, presentable: true, minValue: 3, maxValue: 80, pattern: "^H" },
       { name: "published", type: "bool" },
       { name: "status", type: "select", option: "draft" },
-      { name: "author", type: "relation", option: "ui_authors", max: 1 },
-      { name: "asset", type: "file", option: "text/plain", max: 1, protected: true }
+      { name: "author", type: "relation", option: "ui_authors", max: 1, cascadeDelete: true },
+      { name: "asset", type: "file", option: "text/plain", max: 1, protected: true, maxSize: 1024 }
     ],
     edits: [
       { name: "status", option: "draft, published" }
@@ -573,6 +573,27 @@ async function addCollectionField(page, field) {
   if (field.protected) {
     await page.setChecked("#new-field-protected", true);
   }
+  if (field.hidden) {
+    await page.setChecked("#new-field-hidden", true);
+  }
+  if (field.presentable) {
+    await page.setChecked("#new-field-presentable", true);
+  }
+  if (field.cascadeDelete) {
+    await page.setChecked("#new-field-cascade-delete", true);
+  }
+  if (field.minValue != null) {
+    await page.setValue("#new-field-min-value", String(field.minValue));
+  }
+  if (field.maxValue != null) {
+    await page.setValue("#new-field-max-value", String(field.maxValue));
+  }
+  if (field.maxSize != null) {
+    await page.setValue("#new-field-max-size", String(field.maxSize));
+  }
+  if (field.pattern != null) {
+    await page.setValue("#new-field-pattern", field.pattern);
+  }
   await page.click("#add-collection-field");
   await page.waitFor(
     `JSON.parse(document.querySelector('#collection-json-input')?.value || '{}').fields?.some((item) => item.name === ${JSON.stringify(field.name)})`,
@@ -613,6 +634,27 @@ async function editCollectionField(page, edit) {
   }
   if (edit.protected != null) {
     await page.setChecked("#new-field-protected", Boolean(edit.protected));
+  }
+  if (edit.hidden != null) {
+    await page.setChecked("#new-field-hidden", Boolean(edit.hidden));
+  }
+  if (edit.presentable != null) {
+    await page.setChecked("#new-field-presentable", Boolean(edit.presentable));
+  }
+  if (edit.cascadeDelete != null) {
+    await page.setChecked("#new-field-cascade-delete", Boolean(edit.cascadeDelete));
+  }
+  if (edit.minValue != null) {
+    await page.setValue("#new-field-min-value", String(edit.minValue));
+  }
+  if (edit.maxValue != null) {
+    await page.setValue("#new-field-max-value", String(edit.maxValue));
+  }
+  if (edit.maxSize != null) {
+    await page.setValue("#new-field-max-size", String(edit.maxSize));
+  }
+  if (edit.pattern != null) {
+    await page.setValue("#new-field-pattern", edit.pattern);
   }
   await page.click("#add-collection-field");
   await page.waitFor(

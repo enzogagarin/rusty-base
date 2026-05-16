@@ -579,6 +579,17 @@ tr:last-child td {
   min-width: 0;
 }
 
+.field-options-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr)) repeat(3, minmax(120px, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+
+.field-options-grid .field-wide {
+  grid-column: span 3;
+}
+
 .check-field {
   display: inline-flex;
   gap: 6px;
@@ -739,6 +750,7 @@ tr:last-child td {
   .collection-index-form,
   .collection-tools-form,
   .field-tools-form,
+  .field-options-grid,
   .rule-tools-grid,
   .record-collection-picker,
   .record-toolbar-grid,
