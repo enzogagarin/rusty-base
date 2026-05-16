@@ -9,6 +9,7 @@ mod password;
 mod superusers;
 mod tokens;
 
+pub use action_tokens::AuthMailTemplate;
 pub use oauth::{OAuth2Config, OAuth2MappedFields, OAuth2ProviderConfig};
 pub use otp::{MfaConfig, OtpConfig};
 pub use password::AuthPasswordConfig;

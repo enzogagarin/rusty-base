@@ -484,6 +484,9 @@ The first server slice supports:
   tokens;
 - verification, password-reset, and email-change request/confirm auth flows
   backed by opaque action tokens;
+- per-auth-collection mail templates for verification, password reset, and
+  email-change request mails, with PocketBase-style placeholders such as
+  `{APP_NAME}`, `{EMAIL}`, `{ACTION_URL}`, and `{TOKEN}`;
 - SQLite-backed dev mail outbox for verification, password-reset, and
   email-change request mails, exposed to superusers at `/api/dev/mail/outbox`;
 - first SMTP delivery path for auth action mails through non-TLS SMTP relays

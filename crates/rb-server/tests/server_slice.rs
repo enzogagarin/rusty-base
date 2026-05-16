@@ -388,6 +388,9 @@ fn serves_embedded_admin_ui_shell() {
     assert!(js_bundle.contains("collection-oauth-enabled"));
     assert!(js_bundle.contains("collection-oauth-provider-name"));
     assert!(js_bundle.contains("collection-oauth-map-avatar-url"));
+    assert!(js_bundle.contains("collection-template-verification-subject"));
+    assert!(js_bundle.contains("collection-template-password-reset-subject"));
+    assert!(js_bundle.contains("collection-template-email-change-subject"));
     assert!(js_bundle.contains("collection-rule-list"));
     assert!(js_bundle.contains("data-collection-rule"));
     assert!(js_bundle.contains("collectionRecordsPath"));
@@ -2162,6 +2165,14 @@ fn supports_verification_and_password_reset_tokens() {
             json!({
                 "name": "users",
                 "type": "auth",
+                "verificationTemplate": {
+                    "subject": "Verify {APP_NAME} for {EMAIL}",
+                    "body": "Hi {EMAIL}\nUse {ACTION_URL}\nToken {TOKEN}"
+                },
+                "passwordResetTemplate": {
+                    "subject": "Reset {APP_NAME} for {EMAIL}",
+                    "body": "Reset {EMAIL}\nUse {ACTION_URL}\nToken {TOKEN}"
+                },
                 "fields": [
                     {"name": "email", "type": "email"},
                     {"name": "name", "kind": "text"},
@@ -2246,14 +2257,14 @@ fn supports_verification_and_password_reset_tokens() {
         .unwrap();
     assert_eq!(verification_mail["recipient"], "burak@example.com");
     assert_eq!(verification_mail["data"]["token"], verification_token);
-    assert!(verification_mail["subject"]
-        .as_str()
-        .unwrap()
-        .contains("Verify your Rusty Base email"));
-    assert!(verification_mail["text"]
-        .as_str()
-        .unwrap()
-        .contains("/api/collections/users/confirm-verification"));
+    assert_eq!(
+        verification_mail["subject"],
+        "Verify Rusty Base for burak@example.com"
+    );
+    let verification_text = verification_mail["text"].as_str().unwrap();
+    assert!(verification_text.contains("Hi burak@example.com"));
+    assert!(verification_text.contains("/api/collections/users/confirm-verification"));
+    assert!(verification_text.contains(&format!("Token {verification_token}")));
 
     let confirm_verification = app.handle(
         HttpRequest::json(
@@ -2303,10 +2314,14 @@ fn supports_verification_and_password_reset_tokens() {
         .unwrap();
     assert_eq!(reset_mail["recipient"], "burak@example.com");
     assert_eq!(reset_mail["data"]["token"], reset_token);
-    assert!(reset_mail["text"]
-        .as_str()
-        .unwrap()
-        .contains("/api/collections/users/confirm-password-reset"));
+    assert_eq!(
+        reset_mail["subject"],
+        "Reset Rusty Base for burak@example.com"
+    );
+    let reset_text = reset_mail["text"].as_str().unwrap();
+    assert!(reset_text.contains("Reset burak@example.com"));
+    assert!(reset_text.contains("/api/collections/users/confirm-password-reset"));
+    assert!(reset_text.contains(&format!("Token {reset_token}")));
 
     let mismatch = app.handle(
         HttpRequest::json(

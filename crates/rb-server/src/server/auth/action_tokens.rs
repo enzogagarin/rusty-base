@@ -237,6 +237,55 @@ pub(crate) fn invalid_auth_action_token(kind: AuthActionKind) -> ServerError {
     ServerError::BadRequest(format!("invalid or expired {} token", kind.as_str()))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthMailTemplate {
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub html: String,
+}
+
+pub(crate) fn default_auth_mail_template(kind: AuthActionKind) -> AuthMailTemplate {
+    match kind {
+        AuthActionKind::Verification => AuthMailTemplate {
+            subject: "Verify your {APP_NAME} email".to_string(),
+            body: "Use this token to verify your email address.\n\nEndpoint: {ACTION_URL}\nToken: {TOKEN}\n".to_string(),
+            html: String::new(),
+        },
+        AuthActionKind::PasswordReset => AuthMailTemplate {
+            subject: "Reset your {APP_NAME} password".to_string(),
+            body: "Use this token to reset your password.\n\nEndpoint: {ACTION_URL}\nToken: {TOKEN}\n".to_string(),
+            html: String::new(),
+        },
+        AuthActionKind::EmailChange => AuthMailTemplate {
+            subject: "Confirm your {APP_NAME} email change".to_string(),
+            body: "Use this token to confirm your new email address.\n\nEndpoint: {ACTION_URL}\nToken: {TOKEN}\n".to_string(),
+            html: String::new(),
+        },
+        AuthActionKind::Otp => AuthMailTemplate {
+            subject: "Your {APP_NAME} one-time password".to_string(),
+            body: "Use this one-time password to sign in.\n\nEndpoint: {ACTION_URL}\nToken: {TOKEN}\n".to_string(),
+            html: String::new(),
+        },
+    }
+}
+
+pub(crate) fn auth_mail_template_for_kind(
+    collection: &CollectionConfig,
+    kind: AuthActionKind,
+) -> AuthMailTemplate {
+    match kind {
+        AuthActionKind::Verification => collection.verification_template.clone(),
+        AuthActionKind::PasswordReset => collection.password_reset_template.clone(),
+        AuthActionKind::EmailChange => collection.email_change_template.clone(),
+        AuthActionKind::Otp => None,
+    }
+    .unwrap_or_else(|| default_auth_mail_template(kind))
+}
+
 impl Store {
     pub fn request_verification(
         &self,
@@ -417,11 +466,12 @@ impl Store {
             &conn,
             AuthActionMail {
                 kind: AuthActionKind::EmailChange,
-                collection_name: collection.name,
+                collection_name: collection.name.clone(),
                 record_id,
                 recipient: new_email,
                 token,
                 data: token_data,
+                template: auth_mail_template_for_kind(&collection, AuthActionKind::EmailChange),
             },
         )?;
 
@@ -601,11 +651,12 @@ impl Store {
             &conn,
             AuthActionMail {
                 kind,
-                collection_name: collection.name,
+                collection_name: collection.name.clone(),
                 record_id,
                 recipient: email.to_string(),
                 token: token.clone(),
                 data: token_data,
+                template: auth_mail_template_for_kind(&collection, kind),
             },
         )?;
 

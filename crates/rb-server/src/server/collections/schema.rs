@@ -153,6 +153,15 @@ pub(crate) fn apply_collection_patch(collection: &mut CollectionConfig, patch: C
     if let Some(file_token) = patch.file_token {
         collection.file_token = Some(file_token);
     }
+    if let Some(template) = patch.verification_template {
+        collection.verification_template = Some(template);
+    }
+    if let Some(template) = patch.password_reset_template {
+        collection.password_reset_template = Some(template);
+    }
+    if let Some(template) = patch.email_change_template {
+        collection.email_change_template = Some(template);
+    }
     if let Some(oauth2) = patch.oauth2 {
         collection.oauth2 = Some(oauth2);
     }
@@ -186,6 +195,9 @@ pub(crate) fn normalize_collection(collection: &mut CollectionConfig) {
         collection.email_change_token = None;
         collection.verification_token = None;
         collection.file_token = None;
+        collection.verification_template = None;
+        collection.password_reset_template = None;
+        collection.email_change_template = None;
         collection.oauth2 = None;
         collection.mfa = None;
         collection.otp = None;
@@ -217,6 +229,15 @@ pub(crate) fn normalize_collection(collection: &mut CollectionConfig) {
     collection
         .file_token
         .get_or_insert_with(|| TokenDurationConfig::seconds((FILE_TOKEN_TTL_MILLIS / 1000) as u64));
+    collection
+        .verification_template
+        .get_or_insert_with(|| default_auth_mail_template(AuthActionKind::Verification));
+    collection
+        .password_reset_template
+        .get_or_insert_with(|| default_auth_mail_template(AuthActionKind::PasswordReset));
+    collection
+        .email_change_template
+        .get_or_insert_with(|| default_auth_mail_template(AuthActionKind::EmailChange));
     collection.oauth2.get_or_insert_with(Default::default);
     collection.mfa.get_or_insert_with(Default::default);
 
@@ -353,6 +374,21 @@ pub(crate) fn collection_scaffolds() -> JsonValue {
                 "emailChangeToken": { "duration": 1800 },
                 "verificationToken": { "duration": 259200 },
                 "fileToken": { "duration": 180 },
+                "verificationTemplate": {
+                    "subject": "Verify your {APP_NAME} email",
+                    "body": "Use this token to verify your email address.\n\nEndpoint: {ACTION_URL}\nToken: {TOKEN}\n",
+                    "html": ""
+                },
+                "passwordResetTemplate": {
+                    "subject": "Reset your {APP_NAME} password",
+                    "body": "Use this token to reset your password.\n\nEndpoint: {ACTION_URL}\nToken: {TOKEN}\n",
+                    "html": ""
+                },
+                "emailChangeTemplate": {
+                    "subject": "Confirm your {APP_NAME} email change",
+                    "body": "Use this token to confirm your new email address.\n\nEndpoint: {ACTION_URL}\nToken: {TOKEN}\n",
+                    "html": ""
+                },
                 "oauth2": {
                     "enabled": false,
                     "mappedFields": {

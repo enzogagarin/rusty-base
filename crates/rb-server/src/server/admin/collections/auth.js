@@ -9,6 +9,21 @@ const TOKEN_DEFAULTS = {
   fileToken: 180
 };
 
+const TEMPLATE_DEFAULTS = {
+  verificationTemplate: {
+    subject: "Verify your {APP_NAME} email",
+    body: "Use this token to verify your email address.\n\nEndpoint: {ACTION_URL}\nToken: {TOKEN}\n"
+  },
+  passwordResetTemplate: {
+    subject: "Reset your {APP_NAME} password",
+    body: "Use this token to reset your password.\n\nEndpoint: {ACTION_URL}\nToken: {TOKEN}\n"
+  },
+  emailChangeTemplate: {
+    subject: "Confirm your {APP_NAME} email change",
+    body: "Use this token to confirm your new email address.\n\nEndpoint: {ACTION_URL}\nToken: {TOKEN}\n"
+  }
+};
+
 export function collectionAuthToolsHtml(draft) {
   if (!draft.ok || !draft.value || draft.value.type !== "auth") {
     return "";
@@ -27,6 +42,9 @@ export function collectionAuthToolsHtml(draft) {
   const oauth2 = oauthConfig(payload);
   const provider = oauthProvider(oauth2);
   const mappedFields = oauthMappedFields(oauth2);
+  const verificationTemplate = templateConfig(payload, "verificationTemplate");
+  const passwordResetTemplate = templateConfig(payload, "passwordResetTemplate");
+  const emailChangeTemplate = templateConfig(payload, "emailChangeTemplate");
 
   return `
     <div class="field-tools">
@@ -115,6 +133,9 @@ export function collectionAuthToolsHtml(draft) {
           <label for="collection-oauth-map-avatar-url">Map avatar URL</label>
           <input id="collection-oauth-map-avatar-url" placeholder="avatar_url" value="${escapeAttribute(mappedFields.avatarURL || mappedFields.avatarUrl || mappedFields.avatar_url || "")}">
         </div>
+        ${templateToolsHtml("verification", "Verification mail", verificationTemplate)}
+        ${templateToolsHtml("password-reset", "Password reset mail", passwordResetTemplate)}
+        ${templateToolsHtml("email-change", "Email change mail", emailChangeTemplate)}
       </div>
     </div>
   `;
@@ -179,6 +200,9 @@ function syncCollectionAuthFromControls({ readPayload, showError }) {
     },
     providers: oauthProvidersFromControls(payload)
   };
+  payload.verificationTemplate = templateFromControls(payload, "verification", "verificationTemplate");
+  payload.passwordResetTemplate = templateFromControls(payload, "password-reset", "passwordResetTemplate");
+  payload.emailChangeTemplate = templateFromControls(payload, "email-change", "emailChangeTemplate");
 
   state.collectionEditorText = JSON.stringify(payload, null, 2);
   state.collectionEditorError = "";
@@ -215,7 +239,13 @@ function authInputIds() {
     "collection-oauth-map-id",
     "collection-oauth-map-name",
     "collection-oauth-map-username",
-    "collection-oauth-map-avatar-url"
+    "collection-oauth-map-avatar-url",
+    "collection-template-verification-subject",
+    "collection-template-verification-body",
+    "collection-template-password-reset-subject",
+    "collection-template-password-reset-body",
+    "collection-template-email-change-subject",
+    "collection-template-email-change-body"
   ];
 }
 
@@ -255,6 +285,41 @@ function numberField(id, label, value, min, suffix = " seconds") {
 
 function durationConfig(id, fallback) {
   return { duration: numericValue(id, fallback) };
+}
+
+function templateToolsHtml(prefix, label, template) {
+  return `
+    <div class="field field-wide">
+      <label for="collection-template-${prefix}-subject">${escapeHtml(label)} subject</label>
+      <input id="collection-template-${prefix}-subject" value="${escapeAttribute(template.subject || "")}">
+    </div>
+    <div class="field field-wide">
+      <label for="collection-template-${prefix}-body">${escapeHtml(label)} body</label>
+      <textarea id="collection-template-${prefix}-body" spellcheck="false">${escapeHtml(template.body || "")}</textarea>
+    </div>
+  `;
+}
+
+function templateConfig(payload, key) {
+  const template = payload[key] && typeof payload[key] === "object" && !Array.isArray(payload[key])
+    ? payload[key]
+    : {};
+  const defaults = TEMPLATE_DEFAULTS[key] || {};
+  return {
+    subject: template.subject || defaults.subject || "",
+    body: template.body || defaults.body || "",
+    html: template.html || ""
+  };
+}
+
+function templateFromControls(payload, prefix, key) {
+  const current = templateConfig(payload, key);
+  const defaults = TEMPLATE_DEFAULTS[key] || {};
+  return {
+    subject: controlValue(`collection-template-${prefix}-subject`) || defaults.subject || "",
+    body: controlRawValue(`collection-template-${prefix}-body`) || defaults.body || "",
+    html: current.html || ""
+  };
 }
 
 function oauthConfig(payload) {
@@ -308,6 +373,11 @@ function numericValue(id, fallback) {
 function controlValue(id) {
   const input = $(id);
   return input ? input.value.trim() : "";
+}
+
+function controlRawValue(id) {
+  const input = $(id);
+  return input ? input.value : "";
 }
 
 function checked(id) {

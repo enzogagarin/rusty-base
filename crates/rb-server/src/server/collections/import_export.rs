@@ -65,6 +65,21 @@ pub(crate) fn collection_export_value(collection: CollectionConfig) -> JsonValue
     insert_optional_json(object, "emailChangeToken", collection.email_change_token);
     insert_optional_json(object, "verificationToken", collection.verification_token);
     insert_optional_json(object, "fileToken", collection.file_token);
+    insert_optional_json(
+        object,
+        "verificationTemplate",
+        collection.verification_template,
+    );
+    insert_optional_json(
+        object,
+        "passwordResetTemplate",
+        collection.password_reset_template,
+    );
+    insert_optional_json(
+        object,
+        "emailChangeTemplate",
+        collection.email_change_template,
+    );
     insert_optional_json(object, "oauth2", collection.oauth2);
     insert_optional_json(object, "mfa", collection.mfa);
     insert_optional_json(object, "otp", collection.otp);

@@ -9,6 +9,7 @@ pub(crate) struct AuthActionMail {
     pub(crate) recipient: String,
     pub(crate) token: String,
     pub(crate) data: JsonValue,
+    pub(crate) template: AuthMailTemplate,
 }
 
 impl Store {
@@ -25,13 +26,12 @@ impl Store {
         } else {
             meta.app_name.trim().to_string()
         };
-        let action_path = auth_action_path(&message.collection_name, message.kind);
-        let action_url = action_url(meta.app_url.trim(), &action_path);
-        let subject = auth_action_subject_line(&app_name, message.kind);
         let sender_name = meta.sender_name.trim().to_string();
         let sender_address = meta.sender_address.trim().to_string();
         let created = now_timestamp();
         let id = generate_id();
+        let action_path = auth_action_path(&message.collection_name, message.kind);
+        let action_url = action_url(meta.app_url.trim(), &action_path);
 
         let mut data = data_object(&message.data)?.clone();
         data.insert("appName".to_string(), JsonValue::String(app_name.clone()));
@@ -60,8 +60,9 @@ impl Store {
             JsonValue::String(action_url.clone()),
         );
 
-        let text = auth_action_text_body(&app_name, message.kind, &action_url, &message.token);
-        let html = auth_action_html_body(&app_name, message.kind, &action_url, &message.token);
+        let subject = auth_action_subject_line(&message.template, message.kind, &data);
+        let text = auth_action_text_body(&message.template, message.kind, &data);
+        let html = auth_action_html_body(&message.template, &text, &data);
         conn.execute(
             r#"
             INSERT INTO "_rb_mail_outbox"
@@ -430,49 +431,72 @@ fn action_url(app_url: &str, path: &str) -> String {
     format!("{}{}", app_url.trim_end_matches('/'), path)
 }
 
-fn auth_action_subject_line(app_name: &str, kind: AuthActionKind) -> String {
-    match kind {
-        AuthActionKind::Verification => format!("Verify your {app_name} email"),
-        AuthActionKind::PasswordReset => format!("Reset your {app_name} password"),
-        AuthActionKind::EmailChange => format!("Confirm your {app_name} email change"),
-        AuthActionKind::Otp => format!("Your {app_name} one-time password"),
-    }
+fn auth_action_subject_line(
+    template: &AuthMailTemplate,
+    kind: AuthActionKind,
+    data: &Map<String, JsonValue>,
+) -> String {
+    let default = default_auth_mail_template(kind);
+    let subject = if template.subject.trim().is_empty() {
+        default.subject.as_str()
+    } else {
+        template.subject.as_str()
+    };
+    render_auth_template(subject, data)
 }
 
 fn auth_action_text_body(
-    app_name: &str,
+    template: &AuthMailTemplate,
     kind: AuthActionKind,
-    action_url: &str,
-    token: &str,
+    data: &Map<String, JsonValue>,
 ) -> String {
-    let lead = match kind {
-        AuthActionKind::Verification => "Use this token to verify your email address.",
-        AuthActionKind::PasswordReset => "Use this token to reset your password.",
-        AuthActionKind::EmailChange => "Use this token to confirm your new email address.",
-        AuthActionKind::Otp => "Use this one-time password to sign in.",
+    let default = default_auth_mail_template(kind);
+    let body = if template.body.trim().is_empty() {
+        default.body.as_str()
+    } else {
+        template.body.as_str()
     };
-    format!("{app_name}\n\n{lead}\n\nEndpoint: {action_url}\nToken: {token}\n")
+    render_auth_template(body, data)
 }
 
 fn auth_action_html_body(
-    app_name: &str,
-    kind: AuthActionKind,
-    action_url: &str,
-    token: &str,
+    template: &AuthMailTemplate,
+    text: &str,
+    data: &Map<String, JsonValue>,
 ) -> String {
-    let lead = match kind {
-        AuthActionKind::Verification => "Use this token to verify your email address.",
-        AuthActionKind::PasswordReset => "Use this token to reset your password.",
-        AuthActionKind::EmailChange => "Use this token to confirm your new email address.",
-        AuthActionKind::Otp => "Use this one-time password to sign in.",
-    };
-    format!(
-        "<p><strong>{}</strong></p><p>{}</p><p>Endpoint: <code>{}</code></p><p>Token: <code>{}</code></p>",
-        html_escape(app_name),
-        html_escape(lead),
-        html_escape(action_url),
-        html_escape(token)
-    )
+    if !template.html.trim().is_empty() {
+        return render_auth_template(&template.html, data);
+    }
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| format!("<p>{}</p>", html_escape(line)))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn render_auth_template(template: &str, data: &Map<String, JsonValue>) -> String {
+    let placeholders = [
+        ("APP_NAME", "appName"),
+        ("ACTION_URL", "actionUrl"),
+        ("ACTION_PATH", "actionPath"),
+        ("TOKEN", "token"),
+        ("EMAIL", "email"),
+        ("NEW_EMAIL", "newEmail"),
+        ("RECIPIENT", "recipient"),
+        ("COLLECTION_NAME", "collectionName"),
+        ("RECORD_ID", "recordId"),
+    ];
+    placeholders
+        .iter()
+        .fold(template.to_string(), |rendered, (placeholder, key)| {
+            let value = data
+                .get(*key)
+                .and_then(JsonValue::as_str)
+                .unwrap_or_default();
+            rendered
+                .replace(&format!("{{{placeholder}}}"), value)
+                .replace(&format!("{{{{{placeholder}}}}}"), value)
+        })
 }
 
 fn html_escape(value: &str) -> String {

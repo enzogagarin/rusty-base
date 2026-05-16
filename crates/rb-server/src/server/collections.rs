@@ -52,6 +52,12 @@ pub struct CollectionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_token: Option<TokenDurationConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_template: Option<AuthMailTemplate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_reset_template: Option<AuthMailTemplate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email_change_template: Option<AuthMailTemplate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth2: Option<OAuth2Config>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mfa: Option<MfaConfig>,
@@ -81,6 +87,9 @@ impl CollectionConfig {
             email_change_token: None,
             verification_token: None,
             file_token: None,
+            verification_template: None,
+            password_reset_template: None,
+            email_change_template: None,
             oauth2: None,
             mfa: None,
             otp: None,
@@ -359,6 +368,12 @@ pub struct CollectionPatch {
     pub verification_token: Option<TokenDurationConfig>,
     #[serde(default)]
     pub file_token: Option<TokenDurationConfig>,
+    #[serde(default)]
+    pub verification_template: Option<AuthMailTemplate>,
+    #[serde(default)]
+    pub password_reset_template: Option<AuthMailTemplate>,
+    #[serde(default)]
+    pub email_change_template: Option<AuthMailTemplate>,
     #[serde(default)]
     pub oauth2: Option<OAuth2Config>,
     #[serde(default)]

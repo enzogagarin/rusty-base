@@ -2,8 +2,8 @@ mod server;
 
 pub use server::app::RustyBaseApp;
 pub use server::auth::{
-    AuthPasswordConfig, AuthResponse, MfaConfig, OAuth2Config, OAuth2MappedFields,
-    OAuth2ProviderConfig, OtpConfig, TokenDurationConfig,
+    AuthMailTemplate, AuthPasswordConfig, AuthResponse, MfaConfig, OAuth2Config,
+    OAuth2MappedFields, OAuth2ProviderConfig, OtpConfig, TokenDurationConfig,
 };
 pub use server::collections::{
     CollectionConfig, CollectionField, CollectionFieldKind, CollectionImportRequest,

@@ -544,6 +544,24 @@ async function configureCollectionAuthSettings(page, settings) {
     await page.setValue("#collection-oauth-map-username", settings.oauthMapUsername || "");
     await page.setValue("#collection-oauth-map-avatar-url", settings.oauthMapAvatarUrl || "");
   }
+  if (settings.verificationTemplateSubject != null) {
+    await page.setValue("#collection-template-verification-subject", settings.verificationTemplateSubject);
+  }
+  if (settings.verificationTemplateBody != null) {
+    await page.setValue("#collection-template-verification-body", settings.verificationTemplateBody);
+  }
+  if (settings.passwordResetTemplateSubject != null) {
+    await page.setValue("#collection-template-password-reset-subject", settings.passwordResetTemplateSubject);
+  }
+  if (settings.passwordResetTemplateBody != null) {
+    await page.setValue("#collection-template-password-reset-body", settings.passwordResetTemplateBody);
+  }
+  if (settings.emailChangeTemplateSubject != null) {
+    await page.setValue("#collection-template-email-change-subject", settings.emailChangeTemplateSubject);
+  }
+  if (settings.emailChangeTemplateBody != null) {
+    await page.setValue("#collection-template-email-change-body", settings.emailChangeTemplateBody);
+  }
   await page.waitFor(
     `(() => {
       const payload = JSON.parse(document.querySelector('#collection-json-input')?.value || '{}');
@@ -555,6 +573,9 @@ async function configureCollectionAuthSettings(page, settings) {
         && payload.otp?.enabled === ${settings.otpEnabled ? "true" : "false"}
         && payload.otp?.length === ${Number(settings.otpLength || 8)}
         && payload.mfa?.enabled === ${settings.mfaEnabled ? "true" : "false"}
+        && (${settings.verificationTemplateSubject == null ? "true" : `payload.verificationTemplate?.subject === ${JSON.stringify(settings.verificationTemplateSubject)}`})
+        && (${settings.passwordResetTemplateSubject == null ? "true" : `payload.passwordResetTemplate?.subject === ${JSON.stringify(settings.passwordResetTemplateSubject)}`})
+        && (${settings.emailChangeTemplateSubject == null ? "true" : `payload.emailChangeTemplate?.subject === ${JSON.stringify(settings.emailChangeTemplateSubject)}`})
         && (${settings.oauthEnabled == null && !settings.oauthProviderName ? "true" : `payload.oauth2?.enabled === ${settings.oauthEnabled ? "true" : "false"}
           && provider.name === ${JSON.stringify(settings.oauthProviderName || "")}
           && provider.displayName === ${JSON.stringify(settings.oauthProviderDisplayName || "")}
@@ -862,7 +883,13 @@ async function exerciseAuthRecordEditor(page) {
       oauthMapId: "id",
       oauthMapName: "name",
       oauthMapUsername: "login",
-      oauthMapAvatarUrl: "avatar_url"
+      oauthMapAvatarUrl: "avatar_url",
+      verificationTemplateSubject: "Verify {APP_NAME} smoke account",
+      verificationTemplateBody: "Hello {EMAIL}\\n{ACTION_URL}\\n{TOKEN}",
+      passwordResetTemplateSubject: "Reset {APP_NAME} smoke password",
+      passwordResetTemplateBody: "Reset {EMAIL}\\n{ACTION_URL}\\n{TOKEN}",
+      emailChangeTemplateSubject: "Confirm {NEW_EMAIL}",
+      emailChangeTemplateBody: "Confirm {NEW_EMAIL}\\n{ACTION_URL}\\n{TOKEN}"
     },
     rules: {
       manageRule: "@request.auth.id = id"
