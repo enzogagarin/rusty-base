@@ -21,6 +21,7 @@ export function renderSettings(nextActions) {
   const settings = state.settings || {};
   const meta = settings.meta || {};
   const batch = settings.batch || {};
+  const smtp = settings.smtp || {};
   const rateLimits = settings.rateLimits || {};
   const outbox = Array.isArray(state.mailOutbox) ? state.mailOutbox : [];
   $("content").innerHTML = `
@@ -72,6 +73,43 @@ export function renderSettings(nextActions) {
         </div>
       </div>
       <div class="settings-section">
+        <h3>SMTP</h3>
+        <div class="settings-grid">
+          <label class="check-field">
+            <input id="settings-smtp-enabled" type="checkbox" ${smtp.enabled ? "checked" : ""}>
+            Enabled
+          </label>
+          <label class="check-field">
+            <input id="settings-smtp-tls" type="checkbox" ${smtp.tls === false ? "" : "checked"}>
+            TLS
+          </label>
+          <div class="field">
+            <label for="settings-smtp-host">Host</label>
+            <input id="settings-smtp-host" value="${escapeAttribute(smtp.host || "")}">
+          </div>
+          <div class="field">
+            <label for="settings-smtp-port">Port</label>
+            <input id="settings-smtp-port" type="number" min="1" step="1" value="${escapeAttribute(smtp.port == null ? 587 : smtp.port)}">
+          </div>
+          <div class="field">
+            <label for="settings-smtp-username">Username</label>
+            <input id="settings-smtp-username" autocomplete="off" value="${escapeAttribute(smtp.username || "")}">
+          </div>
+          <div class="field">
+            <label for="settings-smtp-password">Password</label>
+            <input id="settings-smtp-password" type="password" autocomplete="new-password" value="${escapeAttribute(smtp.password || "")}">
+          </div>
+          <div class="field">
+            <label for="settings-smtp-auth-method">Auth method</label>
+            <input id="settings-smtp-auth-method" placeholder="plain or login" value="${escapeAttribute(smtp.authMethod || "")}">
+          </div>
+          <div class="field">
+            <label for="settings-smtp-local-name">Local name</label>
+            <input id="settings-smtp-local-name" placeholder="localhost" value="${escapeAttribute(smtp.localName || "")}">
+          </div>
+        </div>
+      </div>
+      <div class="settings-section">
         <h3>Rate limits</h3>
         <label class="check-field">
           <input id="settings-rate-limits-enabled" type="checkbox" ${rateLimits.enabled ? "checked" : ""}>
@@ -114,6 +152,16 @@ async function saveSettings(event) {
       maxRequests: numberValue("settings-batch-max-requests"),
       timeout: numberValue("settings-batch-timeout"),
       maxBodySize: numberValue("settings-batch-max-body-size")
+    },
+    smtp: {
+      enabled: checked("settings-smtp-enabled"),
+      host: value("settings-smtp-host").trim(),
+      port: numberValue("settings-smtp-port"),
+      username: value("settings-smtp-username").trim(),
+      password: value("settings-smtp-password"),
+      authMethod: value("settings-smtp-auth-method").trim(),
+      tls: checked("settings-smtp-tls"),
+      localName: value("settings-smtp-local-name").trim()
     },
     rateLimits: {
       enabled: checked("settings-rate-limits-enabled")

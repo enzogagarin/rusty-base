@@ -366,15 +366,23 @@ async function exerciseSettingsEditor(page) {
   await page.setValue("#settings-batch-max-requests", "3");
   await page.setValue("#settings-batch-timeout", "12");
   await page.setValue("#settings-batch-max-body-size", "1024");
+  await page.setChecked("#settings-smtp-enabled", false);
+  await page.setValue("#settings-smtp-host", "127.0.0.1");
+  await page.setValue("#settings-smtp-port", "2525");
+  await page.setValue("#settings-smtp-username", "mailer");
+  await page.setValue("#settings-smtp-password", "smtp-secret");
+  await page.setValue("#settings-smtp-auth-method", "plain");
+  await page.setChecked("#settings-smtp-tls", false);
+  await page.setValue("#settings-smtp-local-name", "rusty-base-smoke");
   await page.setChecked("#settings-rate-limits-enabled", true);
   await page.click("#settings-form button[type='submit']");
   await page.waitFor(
-    "document.querySelector('#settings-app-name')?.value === 'Rusty Base Smoke' && document.body.textContent.includes('Rusty Base Smoke')",
+    "document.querySelector('#settings-app-name')?.value === 'Rusty Base Smoke' && document.body.textContent.includes('Rusty Base Smoke') && document.querySelector('#settings-smtp-host')?.value === '127.0.0.1'",
     "settings save"
   );
   await page.click("#refresh-settings");
   await page.waitFor(
-    "document.querySelector('#settings-app-name')?.value === 'Rusty Base Smoke' && document.querySelector('#settings-batch-max-requests')?.value === '3' && document.querySelector('#settings-rate-limits-enabled')?.checked",
+    "document.querySelector('#settings-app-name')?.value === 'Rusty Base Smoke' && document.querySelector('#settings-batch-max-requests')?.value === '3' && document.querySelector('#settings-smtp-host')?.value === '127.0.0.1' && !document.querySelector('#settings-smtp-tls')?.checked && document.querySelector('#settings-rate-limits-enabled')?.checked",
     "settings persisted"
   );
   await page.click("#clear-mail-outbox");

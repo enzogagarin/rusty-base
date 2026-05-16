@@ -486,6 +486,8 @@ The first server slice supports:
   backed by opaque action tokens;
 - SQLite-backed dev mail outbox for verification, password-reset, and
   email-change request mails, exposed to superusers at `/api/dev/mail/outbox`;
+- first SMTP delivery path for auth action mails through non-TLS SMTP relays
+  such as local test servers or MailHog, while still keeping the dev outbox;
 - relation expand respects target collection view rules and omits hidden related
   records from the `expand` payload;
 - PocketBase-like error response shape with `code`, `message`, and `data`;
@@ -531,7 +533,7 @@ Not implemented yet:
 - cross-collection identifiers such as `@collection.*`;
 - full PocketBase auth provider/settings parity beyond the current persisted
   settings surface, password/verification/reset token flow, dev mail outbox,
-  and first OAuth2 path;
+  non-TLS SMTP relay delivery, and first OAuth2 path;
 - exact PocketBase admin API/export compatibility;
 - complete relation `expand` edge-case parity and relation permission fixtures;
 - complete realtime parity, including subscription options, SDK edge cases, and

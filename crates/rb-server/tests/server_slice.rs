@@ -10,7 +10,9 @@ use std::{
     io::{BufRead, BufReader, Cursor, Read, Write},
     net::{TcpListener, TcpStream},
     path::PathBuf,
-    process, thread,
+    process,
+    sync::mpsc,
+    thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -18,6 +20,74 @@ struct OAuth2FixtureProvider {
     token_url: String,
     user_info_url: String,
     handle: thread::JoinHandle<()>,
+}
+
+struct SmtpFixtureServer {
+    addr: std::net::SocketAddr,
+    receiver: mpsc::Receiver<String>,
+    handle: thread::JoinHandle<()>,
+}
+
+impl SmtpFixtureServer {
+    fn transcript(self) -> String {
+        let transcript = self.receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+        self.handle.join().unwrap();
+        transcript
+    }
+}
+
+fn spawn_smtp_fixture_server() -> SmtpFixtureServer {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (sender, receiver) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut transcript = String::new();
+        stream
+            .write_all(b"220 rusty-base smtp fixture\r\n")
+            .unwrap();
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line.is_empty() {
+                break;
+            }
+            transcript.push_str(&line);
+            let command = line.trim_end();
+            if command.starts_with("EHLO") {
+                stream
+                    .write_all(b"250-localhost\r\n250 AUTH PLAIN LOGIN\r\n")
+                    .unwrap();
+            } else if command.starts_with("AUTH ") {
+                stream.write_all(b"235 authenticated\r\n").unwrap();
+            } else if command.starts_with("MAIL FROM:") || command.starts_with("RCPT TO:") {
+                stream.write_all(b"250 ok\r\n").unwrap();
+            } else if command == "DATA" {
+                stream.write_all(b"354 end with dot\r\n").unwrap();
+                loop {
+                    let mut data_line = String::new();
+                    reader.read_line(&mut data_line).unwrap();
+                    if data_line.trim_end() == "." {
+                        break;
+                    }
+                    transcript.push_str(&data_line);
+                }
+                stream.write_all(b"250 queued\r\n").unwrap();
+            } else if command == "QUIT" {
+                stream.write_all(b"221 bye\r\n").unwrap();
+                break;
+            } else {
+                stream.write_all(b"250 ok\r\n").unwrap();
+            }
+        }
+        sender.send(transcript).unwrap();
+    });
+    SmtpFixtureServer {
+        addr,
+        receiver,
+        handle,
+    }
 }
 
 fn spawn_oauth2_fixture_provider() -> OAuth2FixtureProvider {
@@ -300,6 +370,9 @@ fn serves_embedded_admin_ui_shell() {
     assert!(js_bundle.contains("/api/settings?fields="));
     assert!(js_bundle.contains("/api/dev/mail/outbox"));
     assert!(js_bundle.contains("settings-app-name"));
+    assert!(js_bundle.contains("settings-smtp-enabled"));
+    assert!(js_bundle.contains("settings-smtp-host"));
+    assert!(js_bundle.contains("settings-smtp-tls"));
     assert!(js_bundle.contains("Settings saved"));
     assert!(js_bundle.contains("clear-mail-outbox"));
     assert!(js_bundle.contains("/api/collections/meta/export"));
@@ -2292,6 +2365,88 @@ fn supports_verification_and_password_reset_tokens() {
         .unwrap(),
     );
     assert_eq!(new_password.status, 200);
+}
+
+#[test]
+fn sends_auth_action_mail_through_plain_smtp() {
+    let smtp = spawn_smtp_fixture_server();
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+    app.store()
+        .update_settings(json!({
+            "meta": {
+                "appName": "Mail App",
+                "appURL": "https://example.test",
+                "senderName": "Rusty Base",
+                "senderAddress": "noreply@example.test"
+            },
+            "smtp": {
+                "enabled": true,
+                "host": smtp.addr.ip().to_string(),
+                "port": smtp.addr.port(),
+                "username": "mailer",
+                "password": "smtp-secret",
+                "authMethod": "plain",
+                "tls": false,
+                "localName": "rusty-base.test"
+            }
+        }))
+        .unwrap();
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [
+                    {"name": "email", "type": "email"},
+                    {"name": "verified", "kind": "bool"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(users.status, 200);
+
+    let user = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({
+                "id": "user_1",
+                "email": "burak@example.com",
+                "verified": false,
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(user.status, 200);
+
+    let request_reset = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/request-password-reset",
+            json!({"email": "burak@example.com"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(request_reset.status, 204);
+    let reset_token = app
+        .store()
+        .latest_auth_action_token("users", "user_1", "passwordReset")
+        .unwrap()
+        .unwrap();
+    let transcript = smtp.transcript();
+    assert!(transcript.contains("EHLO rusty-base.test"));
+    assert!(transcript.contains("AUTH PLAIN"));
+    assert!(transcript.contains("MAIL FROM:<noreply@example.test>"));
+    assert!(transcript.contains("RCPT TO:<burak@example.com>"));
+    assert!(transcript.contains("Subject: Reset your Mail App password"));
+    assert!(transcript.contains("/api/collections/users/confirm-password-reset"));
+    assert!(transcript.contains(&format!("Token: {reset_token}")));
 }
 
 #[test]

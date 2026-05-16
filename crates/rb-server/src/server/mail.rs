@@ -1,5 +1,6 @@
 use super::*;
 use super::{auth::*, settings::*, storage::*, validation::*};
+use std::net::ToSocketAddrs;
 
 pub(crate) struct AuthActionMail {
     pub(crate) kind: AuthActionKind,
@@ -17,7 +18,8 @@ impl Store {
         message: AuthActionMail,
     ) -> Result<(), ServerError> {
         let settings = app_settings_from_conn(conn)?;
-        let meta = settings.meta;
+        let meta = settings.meta.clone();
+        let smtp = settings.smtp.clone();
         let app_name = if meta.app_name.trim().is_empty() {
             default_app_name()
         } else {
@@ -81,6 +83,17 @@ impl Store {
                 created
             ],
         )?;
+        if smtp.enabled {
+            send_smtp_mail(
+                &smtp,
+                &sender_name,
+                &sender_address,
+                &message.recipient,
+                &subject,
+                &text,
+                &html,
+            )?;
+        }
         Ok(())
     }
 
@@ -164,6 +177,240 @@ fn mail_outbox_row(row: &rusqlite::Row<'_>) -> Result<JsonValue, rusqlite::Error
         "data": data,
         "created": row.get::<_, String>(11)?
     }))
+}
+
+fn send_smtp_mail(
+    smtp: &SmtpSettings,
+    sender_name: &str,
+    sender_address: &str,
+    recipient: &str,
+    subject: &str,
+    text: &str,
+    html: &str,
+) -> Result<(), ServerError> {
+    if smtp.tls {
+        return Err(ServerError::BadRequest(
+            "SMTP TLS delivery is not implemented yet; use a local non-TLS relay or disable SMTP."
+                .to_string(),
+        ));
+    }
+
+    let sender_address = smtp_sender_address(smtp, sender_address)?;
+    let recipient = recipient.trim();
+    if recipient.is_empty() {
+        return Err(ServerError::BadRequest(
+            "SMTP recipient address is required.".to_string(),
+        ));
+    }
+
+    let address = format!("{}:{}", smtp.host.trim(), smtp.port);
+    let mut addresses = address
+        .to_socket_addrs()
+        .map_err(|err| ServerError::BadRequest(format!("SMTP address failed: {err}")))?;
+    let address = addresses
+        .next()
+        .ok_or_else(|| ServerError::BadRequest("SMTP address did not resolve.".to_string()))?;
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(5))?;
+    stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
+    let mut reader = BufReader::new(stream.try_clone()?);
+
+    smtp_expect(&mut reader, &[220])?;
+    let local_name = if smtp.local_name.trim().is_empty() {
+        "localhost"
+    } else {
+        smtp.local_name.trim()
+    };
+    smtp_command(
+        &mut stream,
+        &mut reader,
+        &format!("EHLO {local_name}"),
+        &[250],
+    )?;
+    smtp_auth(smtp, &mut stream, &mut reader)?;
+    smtp_command(
+        &mut stream,
+        &mut reader,
+        &format!("MAIL FROM:<{}>", smtp_path_address(&sender_address)),
+        &[250],
+    )?;
+    smtp_command(
+        &mut stream,
+        &mut reader,
+        &format!("RCPT TO:<{}>", smtp_path_address(recipient)),
+        &[250, 251],
+    )?;
+    smtp_command(&mut stream, &mut reader, "DATA", &[354])?;
+    let raw = smtp_message(sender_name, &sender_address, recipient, subject, text, html);
+    stream.write_all(smtp_dot_stuffed(&raw).as_bytes())?;
+    stream.write_all(b"\r\n.\r\n")?;
+    smtp_expect(&mut reader, &[250])?;
+    smtp_command(&mut stream, &mut reader, "QUIT", &[221]).ok();
+    Ok(())
+}
+
+fn smtp_auth(
+    smtp: &SmtpSettings,
+    stream: &mut TcpStream,
+    reader: &mut BufReader<TcpStream>,
+) -> Result<(), ServerError> {
+    if smtp.username.trim().is_empty() && smtp.password.is_empty() {
+        return Ok(());
+    }
+    let method = smtp.auth_method.trim().to_ascii_lowercase();
+    if method == "login" {
+        smtp_command(stream, reader, "AUTH LOGIN", &[334])?;
+        smtp_command(
+            stream,
+            reader,
+            &base64::engine::general_purpose::STANDARD.encode(smtp.username.trim()),
+            &[334],
+        )?;
+        smtp_command(
+            stream,
+            reader,
+            &base64::engine::general_purpose::STANDARD.encode(smtp.password.as_str()),
+            &[235],
+        )?;
+        return Ok(());
+    }
+
+    let payload = format!("\0{}\0{}", smtp.username.trim(), smtp.password);
+    smtp_command(
+        stream,
+        reader,
+        &format!(
+            "AUTH PLAIN {}",
+            base64::engine::general_purpose::STANDARD.encode(payload)
+        ),
+        &[235],
+    )?;
+    Ok(())
+}
+
+fn smtp_sender_address(
+    smtp: &SmtpSettings,
+    configured_sender: &str,
+) -> Result<String, ServerError> {
+    let sender = configured_sender.trim();
+    if !sender.is_empty() {
+        return Ok(sender.to_string());
+    }
+    let username = smtp.username.trim();
+    if !username.is_empty() && username.contains('@') {
+        return Ok(username.to_string());
+    }
+    Err(ServerError::BadRequest(
+        "SMTP sender address is required.".to_string(),
+    ))
+}
+
+fn smtp_command(
+    stream: &mut TcpStream,
+    reader: &mut BufReader<TcpStream>,
+    command: &str,
+    expected: &[u16],
+) -> Result<String, ServerError> {
+    stream.write_all(command.as_bytes())?;
+    stream.write_all(b"\r\n")?;
+    smtp_expect(reader, expected)
+}
+
+fn smtp_expect(reader: &mut BufReader<TcpStream>, expected: &[u16]) -> Result<String, ServerError> {
+    let mut response = String::new();
+    let code = loop {
+        let mut line = String::new();
+        let read = reader.read_line(&mut line)?;
+        if read == 0 {
+            return Err(ServerError::BadRequest(
+                "SMTP server closed the connection.".to_string(),
+            ));
+        }
+        let line_code = line
+            .get(0..3)
+            .and_then(|value| value.parse::<u16>().ok())
+            .ok_or_else(|| ServerError::BadRequest(format!("Invalid SMTP response: {line}")))?;
+        let more = line.as_bytes().get(3).is_some_and(|value| *value == b'-');
+        response.push_str(&line);
+        if !more {
+            break line_code;
+        }
+    };
+    if !expected.contains(&code) {
+        return Err(ServerError::BadRequest(format!(
+            "SMTP delivery failed with response: {}",
+            response.trim()
+        )));
+    }
+    Ok(response)
+}
+
+fn smtp_message(
+    sender_name: &str,
+    sender_address: &str,
+    recipient: &str,
+    subject: &str,
+    text: &str,
+    html: &str,
+) -> String {
+    let boundary = format!("rb-{}", generate_id());
+    format!(
+        "From: {}\r\nTo: {}\r\nSubject: {}\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"{}\"\r\n\r\n--{}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{}\r\n--{}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{}\r\n--{}--\r\n",
+        smtp_from_header(sender_name, sender_address),
+        smtp_header_value(recipient),
+        smtp_header_value(subject),
+        boundary,
+        boundary,
+        text,
+        boundary,
+        html,
+        boundary
+    )
+}
+
+fn smtp_dot_stuffed(value: &str) -> String {
+    value
+        .replace("\r\n", "\n")
+        .split('\n')
+        .map(|line| {
+            if line.starts_with('.') {
+                format!(".{line}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\r\n")
+}
+
+fn smtp_from_header(sender_name: &str, sender_address: &str) -> String {
+    let sender_name = smtp_header_value(sender_name);
+    let sender_address = smtp_header_value(sender_address);
+    if sender_name.is_empty() {
+        sender_address
+    } else {
+        format!(
+            "\"{}\" <{}>",
+            sender_name.replace('"', "\\\""),
+            sender_address
+        )
+    }
+}
+
+fn smtp_header_value(value: &str) -> String {
+    value
+        .replace(['\r', '\n'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn smtp_path_address(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .replace(['\r', '\n'], "")
 }
 
 fn auth_action_path(collection_name: &str, kind: AuthActionKind) -> String {

@@ -37,7 +37,7 @@ async function refresh() {
     }
 
     try {
-      state.settings = await api("/api/settings?fields=meta.appName,meta.appURL,meta.senderName,meta.senderAddress,batch.enabled,batch.maxRequests,batch.maxBodySize,batch.timeout,rateLimits.enabled");
+      state.settings = await api("/api/settings?fields=meta.appName,meta.appURL,meta.senderName,meta.senderAddress,batch.enabled,batch.maxRequests,batch.maxBodySize,batch.timeout,smtp.enabled,smtp.host,smtp.port,smtp.username,smtp.password,smtp.authMethod,smtp.tls,smtp.localName,rateLimits.enabled");
     } catch (error) {
       state.settings = null;
       state.error = error.message;
