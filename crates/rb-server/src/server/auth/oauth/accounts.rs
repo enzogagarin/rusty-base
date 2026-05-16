@@ -31,12 +31,7 @@ pub(crate) fn insert_oauth2_auth_record_tx(
     insert_profile_field(object, collection, "email", profile.email.as_deref());
     insert_profile_field(object, collection, "username", profile.username.as_deref());
     insert_profile_field(object, collection, "name", profile.name.as_deref());
-    if collection_has_field(collection, "verified") {
-        object.insert("verified".to_string(), JsonValue::Bool(true));
-    }
-    if collection_has_field(collection, "emailVisibility") {
-        object.insert("emailVisibility".to_string(), JsonValue::Bool(false));
-    }
+    apply_auth_record_create_defaults(collection, object, true);
 
     validate_record_fields(collection, object)?;
     let id = generate_id();
@@ -70,19 +65,12 @@ pub(crate) fn insert_profile_field(
     field: &str,
     value: Option<&str>,
 ) {
-    if object.contains_key(field) || !collection_has_field(collection, field) {
+    if object.contains_key(field) || !auth_collection_has_field(collection, field) {
         return;
     }
     if let Some(value) = value {
         object.insert(field.to_string(), JsonValue::String(value.to_string()));
     }
-}
-
-pub(crate) fn collection_has_field(collection: &CollectionConfig, field: &str) -> bool {
-    collection
-        .fields
-        .iter()
-        .any(|candidate| candidate.name == field)
 }
 
 pub(crate) fn upsert_external_auth_account(

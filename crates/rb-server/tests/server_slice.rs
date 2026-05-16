@@ -634,7 +634,9 @@ fn hashes_auth_passwords_and_uses_login_tokens_for_rules() {
                 "type": "auth",
                 "fields": [
                     {"name": "email", "kind": "text"},
-                    {"name": "name", "kind": "text"}
+                    {"name": "name", "kind": "text"},
+                    {"name": "verified", "kind": "bool"},
+                    {"name": "emailVisibility", "kind": "bool"}
                 ]
             }),
         )
@@ -657,6 +659,8 @@ fn hashes_auth_passwords_and_uses_login_tokens_for_rules() {
     );
     assert_eq!(user.status, 200);
     assert_eq!(user.body["email"], "burak@example.com");
+    assert_eq!(user.body["verified"], false);
+    assert_eq!(user.body["emailVisibility"], false);
     assert!(user.body.get("password").is_none());
     assert!(user.body.get("passwordHash").is_none());
     let user_id = user.body["id"].as_str().unwrap().to_string();
@@ -691,6 +695,8 @@ fn hashes_auth_passwords_and_uses_login_tokens_for_rules() {
         .parse::<u128>()
         .is_ok());
     assert_eq!(login.body["record"]["id"], user_id);
+    assert_eq!(login.body["record"]["verified"], false);
+    assert_eq!(login.body["record"]["emailVisibility"], false);
     assert!(login.body["record"].get("passwordHash").is_none());
 
     let admins = app.handle(

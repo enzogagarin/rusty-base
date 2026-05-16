@@ -502,6 +502,8 @@ The first server slice supports:
 - `_superusers` auth tokens bypass record access rules and protect subsequent
   `_superusers` record management;
 - auth collections with Argon2 password hashing;
+- auth record create defaults for PocketBase-style `verified` and
+  `emailVisibility` boolean fields;
 - PocketBase-style `email` collection field input, mapped to text-compatible
   filtering for now;
 - `auth-with-password` login with opaque bearer tokens and expiration metadata;

@@ -99,8 +99,9 @@ impl Store {
         let object = data_object_mut(&mut data)?;
         let file_changes = prepare_file_changes(&collection, object, uploads, None)?;
         prepare_record_value_modifiers(&collection, object, None)?;
-        validate_record_fields(&collection, object)?;
         prepare_auth_password(&collection, object, true)?;
+        apply_auth_record_create_defaults(&collection, object, false);
+        validate_record_fields(&collection, object)?;
         let now = now_timestamp();
         apply_autodate_fields(&collection, object, true, &now);
         validate_record_field_options(&collection, object)?;

@@ -129,6 +129,39 @@ pub(crate) fn prepare_auth_password_with_message(
     Ok(())
 }
 
+pub(crate) fn apply_auth_record_create_defaults(
+    collection: &CollectionConfig,
+    object: &mut Map<String, JsonValue>,
+    verified: bool,
+) {
+    if collection.collection_type != CollectionType::Auth {
+        return;
+    }
+
+    insert_auth_bool_default(collection, object, "verified", verified);
+    insert_auth_bool_default(collection, object, "emailVisibility", false);
+}
+
+fn insert_auth_bool_default(
+    collection: &CollectionConfig,
+    object: &mut Map<String, JsonValue>,
+    field: &str,
+    value: bool,
+) {
+    if object.contains_key(field) || !auth_collection_has_field(collection, field) {
+        return;
+    }
+
+    object.insert(field.to_string(), JsonValue::Bool(value));
+}
+
+pub(crate) fn auth_collection_has_field(collection: &CollectionConfig, field: &str) -> bool {
+    collection
+        .fields
+        .iter()
+        .any(|candidate| candidate.name == field)
+}
+
 pub(crate) fn take_string_field(
     object: &mut Map<String, JsonValue>,
     field: &str,
