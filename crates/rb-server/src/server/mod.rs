@@ -36,6 +36,7 @@ pub(crate) mod auth;
 pub(crate) mod collections;
 pub(crate) mod files;
 pub(crate) mod http;
+pub(crate) mod mail;
 pub(crate) mod realtime;
 pub(crate) mod records;
 pub(crate) mod settings;

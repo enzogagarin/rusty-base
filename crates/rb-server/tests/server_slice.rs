@@ -298,8 +298,10 @@ fn serves_embedded_admin_ui_shell() {
     assert!(js_bundle.contains("/api/collections/_superusers/auth-with-password"));
     assert!(js_bundle.contains("/api/collections?fields="));
     assert!(js_bundle.contains("/api/settings?fields="));
+    assert!(js_bundle.contains("/api/dev/mail/outbox"));
     assert!(js_bundle.contains("settings-app-name"));
     assert!(js_bundle.contains("Settings saved"));
+    assert!(js_bundle.contains("clear-mail-outbox"));
     assert!(js_bundle.contains("/api/collections/meta/export"));
     assert!(js_bundle.contains("/api/collections/import"));
     assert!(js_bundle.contains("collection-transfer-input"));
@@ -987,6 +989,20 @@ fn manages_settings_and_applies_batch_limits() {
     );
     assert_eq!(login.status, 200);
     let superuser_token = login.body["token"].as_str().unwrap().to_string();
+
+    let blocked_outbox = app.handle(HttpRequest::new("GET", "/api/dev/mail/outbox"));
+    assert_eq!(blocked_outbox.status, 403);
+    let empty_outbox = app.handle(
+        HttpRequest::new("GET", "/api/dev/mail/outbox")
+            .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(empty_outbox.status, 200);
+    assert_eq!(empty_outbox.body["totalItems"], 0);
+    let clear_outbox = app.handle(
+        HttpRequest::new("DELETE", "/api/dev/mail/outbox")
+            .with_header("Authorization", format!("Bearer {superuser_token}")),
+    );
+    assert_eq!(clear_outbox.status, 204);
 
     let settings = app.handle(
         HttpRequest::json(
@@ -2150,6 +2166,21 @@ fn supports_verification_and_password_reset_tokens() {
         .latest_auth_action_token("users", "user_1", "verification")
         .unwrap()
         .unwrap();
+    let verification_mail = app
+        .store()
+        .latest_mail_outbox("users", "user_1", "verification")
+        .unwrap()
+        .unwrap();
+    assert_eq!(verification_mail["recipient"], "burak@example.com");
+    assert_eq!(verification_mail["data"]["token"], verification_token);
+    assert!(verification_mail["subject"]
+        .as_str()
+        .unwrap()
+        .contains("Verify your Rusty Base email"));
+    assert!(verification_mail["text"]
+        .as_str()
+        .unwrap()
+        .contains("/api/collections/users/confirm-verification"));
 
     let confirm_verification = app.handle(
         HttpRequest::json(
@@ -2192,6 +2223,17 @@ fn supports_verification_and_password_reset_tokens() {
         .latest_auth_action_token("users", "user_1", "passwordReset")
         .unwrap()
         .unwrap();
+    let reset_mail = app
+        .store()
+        .latest_mail_outbox("users", "user_1", "passwordReset")
+        .unwrap()
+        .unwrap();
+    assert_eq!(reset_mail["recipient"], "burak@example.com");
+    assert_eq!(reset_mail["data"]["token"], reset_token);
+    assert!(reset_mail["text"]
+        .as_str()
+        .unwrap()
+        .contains("/api/collections/users/confirm-password-reset"));
 
     let mismatch = app.handle(
         HttpRequest::json(
@@ -2577,6 +2619,18 @@ fn supports_email_change_tokens() {
         .latest_auth_action_token("users", "user_1", "emailChange")
         .unwrap()
         .unwrap();
+    let change_mail = app
+        .store()
+        .latest_mail_outbox("users", "user_1", "emailChange")
+        .unwrap()
+        .unwrap();
+    assert_eq!(change_mail["recipient"], "changed@example.com");
+    assert_eq!(change_mail["data"]["newEmail"], "changed@example.com");
+    assert_eq!(change_mail["data"]["token"], change_token);
+    assert!(change_mail["text"]
+        .as_str()
+        .unwrap()
+        .contains("/api/collections/users/confirm-email-change"));
 
     let wrong_password = app.handle(
         HttpRequest::json(

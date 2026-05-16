@@ -1,5 +1,5 @@
-import { $, jsonApi, state, status } from "./state.js";
-import { escapeAttribute } from "./render_helpers.js";
+import { $, api, jsonApi, state, status } from "./state.js";
+import { escapeAttribute, escapeHtml } from "./render_helpers.js";
 
 let actions = {
   refresh: async () => {},
@@ -22,6 +22,7 @@ export function renderSettings(nextActions) {
   const meta = settings.meta || {};
   const batch = settings.batch || {};
   const rateLimits = settings.rateLimits || {};
+  const outbox = Array.isArray(state.mailOutbox) ? state.mailOutbox : [];
   $("content").innerHTML = `
     <div class="panel-head">
       <h2>Settings</h2>
@@ -77,6 +78,13 @@ export function renderSettings(nextActions) {
           Enabled
         </label>
       </div>
+      <div class="settings-section">
+        <div class="panel-head compact">
+          <h3>Dev mail outbox</h3>
+          <button type="button" id="clear-mail-outbox" ${outbox.length ? "" : "disabled"}>Clear</button>
+        </div>
+        ${state.mailOutboxError ? `<div class="error">${escapeHtml(state.mailOutboxError)}</div>` : mailOutboxHtml(outbox)}
+      </div>
       ${state.settingsError ? `<div class="error">${escapeAttribute(state.settingsError)}</div>` : ""}
       <div class="editor-actions">
         <button type="button" id="refresh-settings">Reset</button>
@@ -87,6 +95,7 @@ export function renderSettings(nextActions) {
   $("refresh").addEventListener("click", actions.refresh);
   $("refresh-settings").addEventListener("click", actions.refresh);
   $("settings-form").addEventListener("submit", saveSettings);
+  $("clear-mail-outbox").addEventListener("click", clearMailOutbox);
 }
 
 async function saveSettings(event) {
@@ -120,6 +129,50 @@ async function saveSettings(event) {
     status(error.message, true);
     actions.render();
   }
+}
+
+async function clearMailOutbox() {
+  try {
+    await api("/api/dev/mail/outbox", { method: "DELETE" });
+    state.mailOutbox = [];
+    status("Mail outbox cleared");
+    actions.render();
+  } catch (error) {
+    state.mailOutboxError = error.message;
+    status(error.message, true);
+    actions.render();
+  }
+}
+
+function mailOutboxHtml(items) {
+  if (!items.length) {
+    return `<div class="empty compact"><strong>No dev mails</strong><span>Auth action requests will appear here.</span></div>`;
+  }
+
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Kind</th>
+            <th>Recipient</th>
+            <th>Subject</th>
+            <th>Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${items.map((item) => `
+            <tr>
+              <td>${escapeHtml(item.kind || "")}</td>
+              <td>${escapeHtml(item.recipient || "")}</td>
+              <td>${escapeHtml(item.subject || "")}</td>
+              <td>${escapeHtml(item.created || "")}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
 }
 
 function value(id) {

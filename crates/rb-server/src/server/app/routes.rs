@@ -53,6 +53,18 @@ impl RustyBaseApp {
                 project_json_response(&mut payload, &fields)?;
                 Ok(HttpResponse::json(200, payload))
             }
+            ("GET", ["api", "dev", "mail", "outbox"]) => {
+                self.require_superuser_admin(&request)?;
+                let mut payload = self.store.list_mail_outbox()?;
+                let fields = field_options_from_query(&query)?;
+                project_json_response(&mut payload, &fields)?;
+                Ok(HttpResponse::json(200, payload))
+            }
+            ("DELETE", ["api", "dev", "mail", "outbox"]) => {
+                self.require_superuser_admin(&request)?;
+                self.store.clear_mail_outbox()?;
+                Ok(HttpResponse::json(204, JsonValue::Null))
+            }
             ("POST", ["api", "files", "token"]) => {
                 let auth_token = bearer_token(&request)
                     .ok_or_else(|| ServerError::Forbidden("missing auth token".to_string()))?;

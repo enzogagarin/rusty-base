@@ -484,6 +484,8 @@ The first server slice supports:
   tokens;
 - verification, password-reset, and email-change request/confirm auth flows
   backed by opaque action tokens;
+- SQLite-backed dev mail outbox for verification, password-reset, and
+  email-change request mails, exposed to superusers at `/api/dev/mail/outbox`;
 - relation expand respects target collection view rules and omits hidden related
   records from the `expand` payload;
 - PocketBase-like error response shape with `code`, `message`, and `data`;
@@ -528,8 +530,8 @@ Not implemented yet:
   SQLite-backed file MVP;
 - cross-collection identifiers such as `@collection.*`;
 - full PocketBase auth provider/settings parity beyond the current persisted
-  settings surface, password/verification/reset token flow, and first OAuth2
-  path;
+  settings surface, password/verification/reset token flow, dev mail outbox,
+  and first OAuth2 path;
 - exact PocketBase admin API/export compatibility;
 - complete relation `expand` edge-case parity and relation permission fixtures;
 - complete realtime parity, including subscription options, SDK edge cases, and

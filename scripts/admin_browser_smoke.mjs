@@ -354,6 +354,11 @@ async function exerciseSettingsEditor(page) {
   console.log("admin browser smoke: updating settings through the UI");
   await page.click("[data-view='settings']");
   await page.waitFor("document.querySelector('#view-title')?.textContent === 'Settings' && document.querySelector('#settings-form')", "settings form");
+  await page.click("#refresh");
+  await page.waitFor(
+    "document.body.textContent.includes('member@example.com') && document.body.textContent.includes('verification') && document.querySelector('#clear-mail-outbox')",
+    "dev mail outbox row"
+  );
   await page.setValue("#settings-app-name", "Rusty Base Smoke");
   await page.setValue("#settings-app-url", "https://example.test");
   await page.setValue("#settings-sender-name", "Smoke Admin");
@@ -371,6 +376,11 @@ async function exerciseSettingsEditor(page) {
   await page.waitFor(
     "document.querySelector('#settings-app-name')?.value === 'Rusty Base Smoke' && document.querySelector('#settings-batch-max-requests')?.value === '3' && document.querySelector('#settings-rate-limits-enabled')?.checked",
     "settings persisted"
+  );
+  await page.click("#clear-mail-outbox");
+  await page.waitFor(
+    "document.body.textContent.includes('No dev mails') && document.querySelector('#clear-mail-outbox')?.disabled",
+    "dev mail outbox clear"
   );
 }
 
@@ -874,6 +884,17 @@ async function exerciseAuthRecordEditor(page) {
   `);
   if (!loginOk) {
     throw new Error("Created auth record could not authenticate");
+  }
+
+  const verificationRequested = await page.eval(`
+    fetch("/api/collections/ui_members/request-verification", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "member@example.com" })
+    }).then((response) => response.status)
+  `);
+  if (verificationRequested !== 204) {
+    throw new Error("Created auth record could not request verification");
   }
 }
 

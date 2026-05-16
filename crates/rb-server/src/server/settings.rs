@@ -439,20 +439,7 @@ pub(crate) fn default_true() -> bool {
 impl Store {
     pub fn get_settings(&self) -> Result<AppSettings, ServerError> {
         let conn = self.connection()?;
-        let value = conn
-            .query_row(
-                r#"SELECT value FROM "_rb_settings" WHERE key = 'app' LIMIT 1"#,
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-
-        let settings = match value {
-            Some(value) => serde_json::from_str(&value)?,
-            None => AppSettings::default(),
-        };
-        validate_app_settings(&settings)?;
-        Ok(settings)
+        app_settings_from_conn(&conn)
     }
 
     pub fn update_settings(&self, patch: JsonValue) -> Result<AppSettings, ServerError> {
@@ -484,4 +471,21 @@ impl Store {
 
         Ok(settings)
     }
+}
+
+pub(crate) fn app_settings_from_conn(conn: &Connection) -> Result<AppSettings, ServerError> {
+    let value = conn
+        .query_row(
+            r#"SELECT value FROM "_rb_settings" WHERE key = 'app' LIMIT 1"#,
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    let settings = match value {
+        Some(value) => serde_json::from_str(&value)?,
+        None => AppSettings::default(),
+    };
+    validate_app_settings(&settings)?;
+    Ok(settings)
 }

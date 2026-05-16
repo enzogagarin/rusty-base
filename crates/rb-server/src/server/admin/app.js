@@ -42,6 +42,15 @@ async function refresh() {
       state.settings = null;
       state.error = error.message;
     }
+
+    try {
+      const outbox = await api("/api/dev/mail/outbox?fields=items.id,items.kind,items.recipient,items.subject,items.created,totalItems");
+      state.mailOutbox = outbox.items || [];
+      state.mailOutboxError = "";
+    } catch (error) {
+      state.mailOutbox = [];
+      state.mailOutboxError = error.message;
+    }
   } else {
     state.collections = [];
     state.collectionDetails = {};
@@ -52,6 +61,8 @@ async function refresh() {
     state.recordCount = 0;
     state.recordTotalPages = 1;
     state.settings = null;
+    state.mailOutbox = [];
+    state.mailOutboxError = "";
   }
 
   render();

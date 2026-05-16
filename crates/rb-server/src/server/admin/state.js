@@ -35,6 +35,8 @@ export const state = {
   collectionTransferDeleteMissing: false,
   settings: null,
   settingsError: "",
+  mailOutbox: [],
+  mailOutboxError: "",
   error: ""
 };
 

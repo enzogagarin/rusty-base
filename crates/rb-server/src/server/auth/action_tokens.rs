@@ -1,5 +1,5 @@
 use super::*;
-use crate::server::{collections::*, storage::*};
+use crate::server::{collections::*, mail::*, storage::*};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AuthEmailRequest {
@@ -396,6 +396,7 @@ impl Store {
         let expires = (now_millis()
             + auth_action_ttl_millis(&collection, AuthActionKind::EmailChange))
         .to_string();
+        let token_data = json!({ "newEmail": new_email });
         conn.execute(
             r#"
             INSERT INTO "_rb_auth_action_tokens"
@@ -407,10 +408,21 @@ impl Store {
                 AuthActionKind::EmailChange.as_str(),
                 &collection.name,
                 &record_id,
-                json!({ "newEmail": new_email }).to_string(),
+                token_data.to_string(),
                 created,
                 expires
             ],
+        )?;
+        self.queue_auth_action_mail_tx(
+            &conn,
+            AuthActionMail {
+                kind: AuthActionKind::EmailChange,
+                collection_name: collection.name,
+                record_id,
+                recipient: new_email,
+                token,
+                data: token_data,
+            },
         )?;
 
         Ok(())
@@ -568,6 +580,7 @@ impl Store {
         let token = generate_token();
         let created = now_timestamp();
         let expires = (now_millis() + auth_action_ttl_millis(&collection, kind)).to_string();
+        let token_data = json!({ "email": email });
         conn.execute(
             r#"
             INSERT INTO "_rb_auth_action_tokens"
@@ -579,10 +592,21 @@ impl Store {
                 kind.as_str(),
                 &collection.name,
                 &record_id,
-                json!({ "email": email }).to_string(),
+                token_data.to_string(),
                 created,
                 expires
             ],
+        )?;
+        self.queue_auth_action_mail_tx(
+            &conn,
+            AuthActionMail {
+                kind,
+                collection_name: collection.name,
+                record_id,
+                recipient: email.to_string(),
+                token: token.clone(),
+                data: token_data,
+            },
         )?;
 
         Ok(Some(token))

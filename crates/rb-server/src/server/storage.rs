@@ -271,6 +271,20 @@ impl Store {
                 value TEXT NOT NULL,
                 updated TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS "_rb_mail_outbox" (
+                id TEXT PRIMARY KEY NOT NULL,
+                kind TEXT NOT NULL,
+                collection_name TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                recipient TEXT NOT NULL,
+                sender_name TEXT NOT NULL,
+                sender_address TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                text TEXT NOT NULL,
+                html TEXT NOT NULL,
+                data TEXT NOT NULL,
+                created TEXT NOT NULL
+            );
             "#,
         )?;
         ensure_auth_token_columns(&conn)?;
