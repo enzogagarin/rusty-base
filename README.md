@@ -204,11 +204,12 @@ also creates an auth collection via the type selector and a read-only view
 collection via the view SQL control, so relation/select/file field creation,
 collection type updates, view query editing, and read-only view record controls
 stay covered. Field creation covers advanced options such as text min/max,
-patterns, file max size, presentable flags, and relation cascade delete. It also
-adds collection rule controls, collection index metadata, exports/imports
-collection metadata, checks index warning visibility, and updates app and batch
-settings through the Settings view. Auth collection creation covers password
-identity, token duration, OTP, and MFA settings controls. Set
+patterns, file max size, thumbnail presets, email/url domain constraints,
+presentable flags, and relation cascade delete. It also adds collection rule
+controls, collection index metadata, exports/imports collection metadata, checks
+index warning visibility, and updates app and batch settings through the
+Settings view. Auth collection creation covers password identity, token
+duration, OTP, and MFA settings controls. Set
 `RB_ADMIN_BROWSER_CHROME` if Chrome is not on a standard path.
 
 Run the current CLI smoke path:

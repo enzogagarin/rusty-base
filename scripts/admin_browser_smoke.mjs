@@ -252,7 +252,7 @@ async function exerciseAdminUi(page) {
       { name: "published", type: "bool" },
       { name: "status", type: "select", option: "draft" },
       { name: "author", type: "relation", option: "ui_authors", max: 1, cascadeDelete: true },
-      { name: "asset", type: "file", option: "text/plain", max: 1, protected: true, maxSize: 1024 }
+      { name: "asset", type: "file", option: "text/plain", max: 1, protected: true, maxSize: 1024, thumbs: "100x100, 320x0" }
     ],
     edits: [
       { name: "status", option: "draft, published" }
@@ -446,6 +446,9 @@ async function createCollectionWithTypeControl(page, payload) {
     await configureCollectionAuthSettings(page, payload.authSettings);
   }
   await configureCollectionRules(page, payload.rules || {});
+  for (const edit of payload.fieldEdits || []) {
+    await editCollectionField(page, edit);
+  }
   await page.waitFor(
     `(() => {
       const payload = JSON.parse(document.querySelector('#collection-json-input')?.value || '{}');
@@ -594,6 +597,15 @@ async function addCollectionField(page, field) {
   if (field.pattern != null) {
     await page.setValue("#new-field-pattern", field.pattern);
   }
+  if (field.onlyDomains != null) {
+    await page.setValue("#new-field-only-domains", field.onlyDomains);
+  }
+  if (field.exceptDomains != null) {
+    await page.setValue("#new-field-except-domains", field.exceptDomains);
+  }
+  if (field.thumbs != null) {
+    await page.setValue("#new-field-thumbs", field.thumbs);
+  }
   await page.click("#add-collection-field");
   await page.waitFor(
     `JSON.parse(document.querySelector('#collection-json-input')?.value || '{}').fields?.some((item) => item.name === ${JSON.stringify(field.name)})`,
@@ -655,6 +667,15 @@ async function editCollectionField(page, edit) {
   }
   if (edit.pattern != null) {
     await page.setValue("#new-field-pattern", edit.pattern);
+  }
+  if (edit.onlyDomains != null) {
+    await page.setValue("#new-field-only-domains", edit.onlyDomains);
+  }
+  if (edit.exceptDomains != null) {
+    await page.setValue("#new-field-except-domains", edit.exceptDomains);
+  }
+  if (edit.thumbs != null) {
+    await page.setValue("#new-field-thumbs", edit.thumbs);
   }
   await page.click("#add-collection-field");
   await page.waitFor(
@@ -775,6 +796,9 @@ async function exerciseAuthRecordEditor(page) {
     type: "auth",
     fields: [
       { name: "email", type: "email", required: true }
+    ],
+    fieldEdits: [
+      { name: "email", onlyDomains: "example.com", exceptDomains: "blocked.example.com" }
     ],
     authSettings: {
       identityFields: "email",

@@ -410,5 +410,14 @@ function collectionFieldExtra(field) {
   if (field.pattern) {
     parts.push(`pattern: ${field.pattern}`);
   }
+  if (Array.isArray(field.onlyDomains) && field.onlyDomains.length) {
+    parts.push(`only: ${field.onlyDomains.join(", ")}`);
+  }
+  if (Array.isArray(field.exceptDomains) && field.exceptDomains.length) {
+    parts.push(`except: ${field.exceptDomains.join(", ")}`);
+  }
+  if (Array.isArray(field.thumbs) && field.thumbs.length) {
+    parts.push(`thumbs: ${field.thumbs.join(", ")}`);
+  }
   return parts.join("; ");
 }

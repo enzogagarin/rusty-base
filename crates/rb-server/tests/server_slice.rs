@@ -348,6 +348,9 @@ fn serves_embedded_admin_ui_shell() {
     assert!(js_bundle.contains("new-field-cascade-delete"));
     assert!(js_bundle.contains("new-field-pattern"));
     assert!(js_bundle.contains("new-field-max-size"));
+    assert!(js_bundle.contains("new-field-only-domains"));
+    assert!(js_bundle.contains("new-field-except-domains"));
+    assert!(js_bundle.contains("new-field-thumbs"));
     assert!(js_bundle.contains("collectionFieldEditIndex"));
     assert!(js_bundle.contains("data-field-edit"));
     assert!(js_bundle.contains("cancel-field-edit"));

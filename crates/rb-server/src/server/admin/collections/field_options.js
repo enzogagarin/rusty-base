@@ -4,6 +4,7 @@ import { escapeAttribute } from "../render_helpers.js";
 const MIN_MAX_TYPES = ["text", "email", "number"];
 const PATTERN_TYPES = ["text", "email"];
 const MAX_SIZE_TYPES = ["file", "json", "editor"];
+const DOMAIN_TYPES = ["email", "url"];
 
 export function collectionFieldAdvancedOptionsHtml(field, fieldType) {
   const type = fieldType || "text";
@@ -28,6 +29,18 @@ export function collectionFieldAdvancedOptionsHtml(field, fieldType) {
         <label for="new-field-pattern">Pattern</label>
         <input id="new-field-pattern" placeholder="^[A-Z].+" value="${escapeAttribute(field && field.pattern ? field.pattern : "")}">
       </div>
+      <div class="field">
+        <label for="new-field-only-domains">Only domains</label>
+        <input id="new-field-only-domains" placeholder="example.com" value="${escapeAttribute(listValue(field, "onlyDomains"))}">
+      </div>
+      <div class="field">
+        <label for="new-field-except-domains">Except domains</label>
+        <input id="new-field-except-domains" placeholder="blocked.example.com" value="${escapeAttribute(listValue(field, "exceptDomains"))}">
+      </div>
+      <div class="field">
+        <label for="new-field-thumbs">Thumbs</label>
+        <input id="new-field-thumbs" placeholder="100x100, 320x0" value="${escapeAttribute(listValue(field, "thumbs"))}">
+      </div>
     </div>
   `;
 }
@@ -45,6 +58,9 @@ export function syncCollectionFieldAdvancedOptionControls() {
       pattern.value = "";
     }
   }
+  toggleList("new-field-only-domains", DOMAIN_TYPES.includes(fieldType));
+  toggleList("new-field-except-domains", DOMAIN_TYPES.includes(fieldType));
+  toggleList("new-field-thumbs", fieldType === "file");
 
   const cascadeDelete = $("new-field-cascade-delete");
   if (cascadeDelete) {
@@ -63,7 +79,10 @@ export function readCollectionFieldAdvancedOptions(fieldType) {
     min: optionalIntegerFieldValue("new-field-min-value", "Min", 0),
     max: optionalIntegerFieldValue("new-field-max-value", "Max", 0),
     maxSize: optionalIntegerFieldValue("new-field-max-size", "Max size", 1),
-    pattern: controlValue("new-field-pattern")
+    pattern: controlValue("new-field-pattern"),
+    onlyDomains: commaList(controlValue("new-field-only-domains")),
+    exceptDomains: commaList(controlValue("new-field-except-domains")),
+    thumbs: commaList(controlValue("new-field-thumbs"))
   };
 
   if (!MIN_MAX_TYPES.includes(fieldType) && (options.min != null || options.max != null)) {
@@ -74,6 +93,12 @@ export function readCollectionFieldAdvancedOptions(fieldType) {
   }
   if (!MAX_SIZE_TYPES.includes(fieldType) && options.maxSize != null) {
     throw new Error("Max size only applies to file, json, and editor fields");
+  }
+  if (!DOMAIN_TYPES.includes(fieldType) && (options.onlyDomains.length || options.exceptDomains.length)) {
+    throw new Error("Domain options only apply to email and url fields");
+  }
+  if (fieldType !== "file" && options.thumbs.length) {
+    throw new Error("Thumbs only apply to file fields");
   }
   if (fieldType !== "relation" && options.cascadeDelete) {
     throw new Error("Cascade delete only applies to relation fields");
@@ -111,6 +136,15 @@ export function applyCollectionFieldAdvancedOptions(field, options) {
   if (options.pattern) {
     field.pattern = options.pattern;
   }
+  if (options.onlyDomains.length) {
+    field.onlyDomains = options.onlyDomains;
+  }
+  if (options.exceptDomains.length) {
+    field.exceptDomains = options.exceptDomains;
+  }
+  if (options.thumbs.length) {
+    field.thumbs = options.thumbs;
+  }
 }
 
 function toggleNumeric(id, enabled) {
@@ -124,8 +158,23 @@ function toggleNumeric(id, enabled) {
   }
 }
 
+function toggleList(id, enabled) {
+  const input = $(id);
+  if (!input) {
+    return;
+  }
+  input.disabled = !enabled;
+  if (input.disabled) {
+    input.value = "";
+  }
+}
+
 function optionValue(field, key) {
   return field && field[key] != null ? String(field[key]) : "";
+}
+
+function listValue(field, key) {
+  return field && Array.isArray(field[key]) ? field[key].join(", ") : "";
 }
 
 function optionalIntegerFieldValue(id, label, min) {
@@ -149,4 +198,18 @@ function controlValue(id) {
 function checked(id) {
   const input = $(id);
   return Boolean(input && input.checked);
+}
+
+function commaList(value) {
+  const seen = new Set();
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => {
+      if (!item || seen.has(item)) {
+        return false;
+      }
+      seen.add(item);
+      return true;
+    });
 }
