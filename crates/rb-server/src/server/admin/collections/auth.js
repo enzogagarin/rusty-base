@@ -21,6 +21,10 @@ const TEMPLATE_DEFAULTS = {
   emailChangeTemplate: {
     subject: "Confirm your {APP_NAME} email change",
     body: "Use this token to confirm your new email address.\n\nEndpoint: {ACTION_URL}\nToken: {TOKEN}\n"
+  },
+  otpTemplate: {
+    subject: "Your {APP_NAME} one-time password",
+    body: "Use this one-time password to sign in.\n\nEndpoint: {ACTION_URL}\nToken: {TOKEN}\n"
   }
 };
 
@@ -45,6 +49,7 @@ export function collectionAuthToolsHtml(draft) {
   const verificationTemplate = templateConfig(payload, "verificationTemplate");
   const passwordResetTemplate = templateConfig(payload, "passwordResetTemplate");
   const emailChangeTemplate = templateConfig(payload, "emailChangeTemplate");
+  const otpTemplate = templateConfig(payload, "otpTemplate");
 
   return `
     <div class="field-tools">
@@ -136,6 +141,7 @@ export function collectionAuthToolsHtml(draft) {
         ${templateToolsHtml("verification", "Verification mail", verificationTemplate)}
         ${templateToolsHtml("password-reset", "Password reset mail", passwordResetTemplate)}
         ${templateToolsHtml("email-change", "Email change mail", emailChangeTemplate)}
+        ${templateToolsHtml("otp", "OTP mail", otpTemplate)}
       </div>
     </div>
   `;
@@ -203,6 +209,7 @@ function syncCollectionAuthFromControls({ readPayload, showError }) {
   payload.verificationTemplate = templateFromControls(payload, "verification", "verificationTemplate");
   payload.passwordResetTemplate = templateFromControls(payload, "password-reset", "passwordResetTemplate");
   payload.emailChangeTemplate = templateFromControls(payload, "email-change", "emailChangeTemplate");
+  payload.otpTemplate = templateFromControls(payload, "otp", "otpTemplate");
 
   state.collectionEditorText = JSON.stringify(payload, null, 2);
   state.collectionEditorError = "";
@@ -245,7 +252,9 @@ function authInputIds() {
     "collection-template-password-reset-subject",
     "collection-template-password-reset-body",
     "collection-template-email-change-subject",
-    "collection-template-email-change-body"
+    "collection-template-email-change-body",
+    "collection-template-otp-subject",
+    "collection-template-otp-body"
   ];
 }
 

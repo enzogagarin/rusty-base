@@ -1,4 +1,5 @@
 use super::*;
+use crate::server::mail::AuthActionMail;
 use crate::server::{collections::*, records::*, storage::*};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,6 +120,11 @@ impl Store {
         let password = generate_otp_password(otp.length);
         let created = now_timestamp();
         let expires = (now_millis() + u128::from(otp.duration) * 1000).to_string();
+        let token_data = json!({
+            "email": email.clone(),
+            "otpId": otp_id.clone(),
+            "password": password.clone()
+        });
         conn.execute(
             r#"
             INSERT INTO "_rb_auth_action_tokens"
@@ -130,10 +136,22 @@ impl Store {
                 AuthActionKind::Otp.as_str(),
                 &collection.name,
                 &record_id,
-                json!({ "email": email, "password": password }).to_string(),
+                token_data.to_string(),
                 created,
                 expires
             ],
+        )?;
+        self.queue_auth_action_mail_tx(
+            &conn,
+            AuthActionMail {
+                kind: AuthActionKind::Otp,
+                collection_name: collection.name.clone(),
+                record_id,
+                recipient: email.to_string(),
+                token: password,
+                data: token_data,
+                template: auth_mail_template_for_kind(&collection, AuthActionKind::Otp),
+            },
         )?;
 
         Ok(otp_id)

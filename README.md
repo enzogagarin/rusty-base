@@ -481,14 +481,15 @@ The first server slice supports:
 - superuser-only `impersonate` endpoint for auth records, including custom
   duration and nonrenewable impersonation tokens;
 - `request-otp` and `auth-with-otp` backed by short-lived one-time auth action
-  tokens;
+  tokens and mail delivery for the generated code;
 - verification, password-reset, and email-change request/confirm auth flows
   backed by opaque action tokens;
-- per-auth-collection mail templates for verification, password reset, and
-  email-change request mails, with PocketBase-style placeholders such as
-  `{APP_NAME}`, `{EMAIL}`, `{ACTION_URL}`, and `{TOKEN}`;
+- per-auth-collection mail templates for verification, password reset,
+  email-change, and OTP request mails, with PocketBase-style placeholders such
+  as `{APP_NAME}`, `{EMAIL}`, `{ACTION_URL}`, and `{TOKEN}`;
 - SQLite-backed dev mail outbox for verification, password-reset, and
-  email-change request mails, exposed to superusers at `/api/dev/mail/outbox`;
+  email-change, and OTP request mails, exposed to superusers at
+  `/api/dev/mail/outbox`;
 - first SMTP delivery path for auth action mails through non-TLS SMTP relays
   such as local test servers or MailHog, while still keeping the dev outbox;
 - relation expand respects target collection view rules and omits hidden related

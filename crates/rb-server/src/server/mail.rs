@@ -480,6 +480,8 @@ fn render_auth_template(template: &str, data: &Map<String, JsonValue>) -> String
         ("ACTION_URL", "actionUrl"),
         ("ACTION_PATH", "actionPath"),
         ("TOKEN", "token"),
+        ("OTP_ID", "otpId"),
+        ("PASSWORD", "password"),
         ("EMAIL", "email"),
         ("NEW_EMAIL", "newEmail"),
         ("RECIPIENT", "recipient"),

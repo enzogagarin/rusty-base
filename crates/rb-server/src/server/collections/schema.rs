@@ -162,6 +162,9 @@ pub(crate) fn apply_collection_patch(collection: &mut CollectionConfig, patch: C
     if let Some(template) = patch.email_change_template {
         collection.email_change_template = Some(template);
     }
+    if let Some(template) = patch.otp_template {
+        collection.otp_template = Some(template);
+    }
     if let Some(oauth2) = patch.oauth2 {
         collection.oauth2 = Some(oauth2);
     }
@@ -198,6 +201,7 @@ pub(crate) fn normalize_collection(collection: &mut CollectionConfig) {
         collection.verification_template = None;
         collection.password_reset_template = None;
         collection.email_change_template = None;
+        collection.otp_template = None;
         collection.oauth2 = None;
         collection.mfa = None;
         collection.otp = None;
@@ -238,6 +242,9 @@ pub(crate) fn normalize_collection(collection: &mut CollectionConfig) {
     collection
         .email_change_template
         .get_or_insert_with(|| default_auth_mail_template(AuthActionKind::EmailChange));
+    collection
+        .otp_template
+        .get_or_insert_with(|| default_auth_mail_template(AuthActionKind::Otp));
     collection.oauth2.get_or_insert_with(Default::default);
     collection.mfa.get_or_insert_with(Default::default);
 
@@ -387,6 +394,11 @@ pub(crate) fn collection_scaffolds() -> JsonValue {
                 "emailChangeTemplate": {
                     "subject": "Confirm your {APP_NAME} email change",
                     "body": "Use this token to confirm your new email address.\n\nEndpoint: {ACTION_URL}\nToken: {TOKEN}\n",
+                    "html": ""
+                },
+                "otpTemplate": {
+                    "subject": "Your {APP_NAME} one-time password",
+                    "body": "Use this one-time password to sign in.\n\nEndpoint: {ACTION_URL}\nToken: {TOKEN}\n",
                     "html": ""
                 },
                 "oauth2": {

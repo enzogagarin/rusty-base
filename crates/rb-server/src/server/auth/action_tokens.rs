@@ -281,7 +281,7 @@ pub(crate) fn auth_mail_template_for_kind(
         AuthActionKind::Verification => collection.verification_template.clone(),
         AuthActionKind::PasswordReset => collection.password_reset_template.clone(),
         AuthActionKind::EmailChange => collection.email_change_template.clone(),
-        AuthActionKind::Otp => None,
+        AuthActionKind::Otp => collection.otp_template.clone(),
     }
     .unwrap_or_else(|| default_auth_mail_template(kind))
 }

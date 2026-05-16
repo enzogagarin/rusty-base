@@ -80,6 +80,7 @@ pub(crate) fn collection_export_value(collection: CollectionConfig) -> JsonValue
         "emailChangeTemplate",
         collection.email_change_template,
     );
+    insert_optional_json(object, "otpTemplate", collection.otp_template);
     insert_optional_json(object, "oauth2", collection.oauth2);
     insert_optional_json(object, "mfa", collection.mfa);
     insert_optional_json(object, "otp", collection.otp);

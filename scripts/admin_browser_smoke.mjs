@@ -562,6 +562,12 @@ async function configureCollectionAuthSettings(page, settings) {
   if (settings.emailChangeTemplateBody != null) {
     await page.setValue("#collection-template-email-change-body", settings.emailChangeTemplateBody);
   }
+  if (settings.otpTemplateSubject != null) {
+    await page.setValue("#collection-template-otp-subject", settings.otpTemplateSubject);
+  }
+  if (settings.otpTemplateBody != null) {
+    await page.setValue("#collection-template-otp-body", settings.otpTemplateBody);
+  }
   await page.waitFor(
     `(() => {
       const payload = JSON.parse(document.querySelector('#collection-json-input')?.value || '{}');
@@ -576,6 +582,7 @@ async function configureCollectionAuthSettings(page, settings) {
         && (${settings.verificationTemplateSubject == null ? "true" : `payload.verificationTemplate?.subject === ${JSON.stringify(settings.verificationTemplateSubject)}`})
         && (${settings.passwordResetTemplateSubject == null ? "true" : `payload.passwordResetTemplate?.subject === ${JSON.stringify(settings.passwordResetTemplateSubject)}`})
         && (${settings.emailChangeTemplateSubject == null ? "true" : `payload.emailChangeTemplate?.subject === ${JSON.stringify(settings.emailChangeTemplateSubject)}`})
+        && (${settings.otpTemplateSubject == null ? "true" : `payload.otpTemplate?.subject === ${JSON.stringify(settings.otpTemplateSubject)}`})
         && (${settings.oauthEnabled == null && !settings.oauthProviderName ? "true" : `payload.oauth2?.enabled === ${settings.oauthEnabled ? "true" : "false"}
           && provider.name === ${JSON.stringify(settings.oauthProviderName || "")}
           && provider.displayName === ${JSON.stringify(settings.oauthProviderDisplayName || "")}
@@ -889,7 +896,9 @@ async function exerciseAuthRecordEditor(page) {
       passwordResetTemplateSubject: "Reset {APP_NAME} smoke password",
       passwordResetTemplateBody: "Reset {EMAIL}\\n{ACTION_URL}\\n{TOKEN}",
       emailChangeTemplateSubject: "Confirm {NEW_EMAIL}",
-      emailChangeTemplateBody: "Confirm {NEW_EMAIL}\\n{ACTION_URL}\\n{TOKEN}"
+      emailChangeTemplateBody: "Confirm {NEW_EMAIL}\\n{ACTION_URL}\\n{TOKEN}",
+      otpTemplateSubject: "OTP for {EMAIL}",
+      otpTemplateBody: "OTP {TOKEN}\\n{OTP_ID}\\n{ACTION_URL}"
     },
     rules: {
       manageRule: "@request.auth.id = id"

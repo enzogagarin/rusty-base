@@ -391,6 +391,7 @@ fn serves_embedded_admin_ui_shell() {
     assert!(js_bundle.contains("collection-template-verification-subject"));
     assert!(js_bundle.contains("collection-template-password-reset-subject"));
     assert!(js_bundle.contains("collection-template-email-change-subject"));
+    assert!(js_bundle.contains("collection-template-otp-subject"));
     assert!(js_bundle.contains("collection-rule-list"));
     assert!(js_bundle.contains("data-collection-rule"));
     assert!(js_bundle.contains("collectionRecordsPath"));
@@ -1902,6 +1903,10 @@ fn supports_otp_request_and_auth_flow() {
             json!({
                 "name": "users",
                 "type": "auth",
+                "otpTemplate": {
+                    "subject": "OTP for {EMAIL}",
+                    "body": "Code {TOKEN}\nOtpId {OTP_ID}\nUse {ACTION_URL}"
+                },
                 "fields": [
                     {"name": "email", "type": "email"},
                     {"name": "name", "kind": "text"},
@@ -1999,6 +2004,19 @@ fn supports_otp_request_and_auth_flow() {
         .unwrap();
     let password = otp_data["password"].as_str().unwrap().to_string();
     assert_eq!(password.len(), 8);
+    let otp_mail = app
+        .store()
+        .latest_mail_outbox("users", "user_1", "otp")
+        .unwrap()
+        .unwrap();
+    assert_eq!(otp_mail["recipient"], "burak@example.com");
+    assert_eq!(otp_mail["data"]["token"], password);
+    assert_eq!(otp_mail["data"]["otpId"], otp_id);
+    assert_eq!(otp_mail["subject"], "OTP for burak@example.com");
+    let otp_text = otp_mail["text"].as_str().unwrap();
+    assert!(otp_text.contains(&format!("Code {password}")));
+    assert!(otp_text.contains(&format!("OtpId {otp_id}")));
+    assert!(otp_text.contains("/api/collections/users/auth-with-otp"));
 
     let missing_otp_id = app.handle(
         HttpRequest::json(

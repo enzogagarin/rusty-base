@@ -58,6 +58,8 @@ pub struct CollectionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email_change_template: Option<AuthMailTemplate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub otp_template: Option<AuthMailTemplate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth2: Option<OAuth2Config>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mfa: Option<MfaConfig>,
@@ -90,6 +92,7 @@ impl CollectionConfig {
             verification_template: None,
             password_reset_template: None,
             email_change_template: None,
+            otp_template: None,
             oauth2: None,
             mfa: None,
             otp: None,
@@ -374,6 +377,8 @@ pub struct CollectionPatch {
     pub password_reset_template: Option<AuthMailTemplate>,
     #[serde(default)]
     pub email_change_template: Option<AuthMailTemplate>,
+    #[serde(default)]
+    pub otp_template: Option<AuthMailTemplate>,
     #[serde(default)]
     pub oauth2: Option<OAuth2Config>,
     #[serde(default)]
