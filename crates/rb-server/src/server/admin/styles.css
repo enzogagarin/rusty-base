@@ -178,6 +178,26 @@ textarea:focus {
   margin-top: auto;
 }
 
+.auth-session {
+  display: none;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.has-token .auth-session {
+  display: grid;
+}
+
+.has-token .auth .field,
+.has-token .auth-actions {
+  display: none;
+}
+
+body:not(.has-token) #logout {
+  display: none;
+}
+
 .field {
   display: grid;
   gap: 5px;
@@ -238,6 +258,10 @@ h2 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 14px;
+}
+
+.grid[hidden] {
+  display: none;
 }
 
 .metric,
@@ -435,6 +459,25 @@ tr:last-child td {
   justify-content: space-between;
 }
 
+.record-query-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.record-query-panel summary,
+.raw-editor summary {
+  color: var(--accent-strong);
+  cursor: pointer;
+  font-weight: 800;
+  list-style-position: outside;
+  padding: 2px 0;
+}
+
+.record-query-panel[open] summary,
+.raw-editor[open] summary {
+  margin-bottom: 10px;
+}
+
 .record-page-summary {
   color: var(--muted);
   font-weight: 700;
@@ -473,6 +516,17 @@ tr:last-child td {
 
 .record-form textarea {
   min-height: 74px;
+}
+
+.raw-editor {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcf8;
+  padding: 10px 12px;
+}
+
+.raw-editor textarea {
+  min-height: 210px;
 }
 
 .editor-actions {

@@ -35,13 +35,18 @@ export function recordEditorHtml(actions) {
   const title = state.editorMode === "edit" ? `Edit ${state.editorRecordId}` : "Create record";
   const collection = actions.currentCollection();
   const draft = recordEditorDraft();
+  const fields = recordEditorFields(collection);
+  const rawOpen = !fields.length || !draft.ok || Boolean(state.editorError);
   return `
     <div class="record-editor">
       <h2>${escapeHtml(title)}</h2>
       ${state.editorError ? `<div class="error">${escapeHtml(state.editorError)}</div>` : ""}
       ${recordValidationSummaryHtml(collection)}
-      ${recordFieldFormHtml(collection, draft)}
-      <textarea id="record-json-input" spellcheck="false">${escapeHtml(state.editorText)}</textarea>
+      ${recordFieldFormHtml(draft, fields)}
+      <details class="raw-editor" ${rawOpen ? "open" : ""}>
+        <summary>Raw JSON</summary>
+        <textarea id="record-json-input" spellcheck="false">${escapeHtml(state.editorText)}</textarea>
+      </details>
       <div class="editor-actions">
         <button type="button" id="cancel-record">Cancel</button>
         <button type="button" id="save-record" class="primary">Save</button>
@@ -80,8 +85,7 @@ export function bindRecordEditorControls(actions) {
   bindRecordFileControls(actions, currentEditorRecordId, clearRecordFieldValidationFeedback);
 }
 
-function recordFieldFormHtml(collection, draft) {
-  const fields = recordEditorFields(collection);
+function recordFieldFormHtml(draft, fields) {
   if (!fields.length) {
     return "";
   }

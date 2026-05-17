@@ -355,6 +355,7 @@ async function exerciseSettingsEditor(page) {
   await page.click("[data-view='settings']");
   await page.waitFor("document.querySelector('#view-title')?.textContent === 'Settings' && document.querySelector('#settings-form')", "settings form");
   await page.click("#refresh");
+  await sleep(300);
   await page.waitFor(
     "document.body.textContent.includes('member@example.com') && document.body.textContent.includes('verification') && document.querySelector('#clear-mail-outbox')",
     "dev mail outbox row"
@@ -377,7 +378,7 @@ async function exerciseSettingsEditor(page) {
   await page.setChecked("#settings-rate-limits-enabled", true);
   await page.click("#settings-form button[type='submit']");
   await page.waitFor(
-    "document.querySelector('#settings-app-name')?.value === 'Rusty Base Smoke' && document.body.textContent.includes('Rusty Base Smoke') && document.querySelector('#settings-smtp-host')?.value === '127.0.0.1'",
+    "document.querySelector('#settings-app-name')?.value === 'Rusty Base Smoke' && document.querySelector('#settings-smtp-host')?.value === '127.0.0.1'",
     "settings save"
   );
   await page.click("#refresh-settings");

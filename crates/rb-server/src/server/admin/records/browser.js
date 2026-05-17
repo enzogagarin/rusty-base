@@ -184,24 +184,6 @@ function recordBrowserControlsHtml() {
 
   return `
     <div class="record-toolbar">
-      <div class="record-toolbar-grid">
-        <div class="field">
-          <label for="record-filter">Filter</label>
-          <input id="record-filter" value="${escapeAttribute(state.recordFilter)}" placeholder="published = true">
-        </div>
-        <div class="field">
-          <label for="record-sort">Sort</label>
-          <input id="record-sort" value="${escapeAttribute(state.recordSort)}" placeholder="-created">
-        </div>
-        <div class="field">
-          <label for="record-per-page">Per page</label>
-          <select id="record-per-page">${perPageOptions}</select>
-        </div>
-        <div class="record-query-actions">
-          <button type="button" id="apply-record-query" class="primary">Apply</button>
-          <button type="button" id="clear-record-query">Clear</button>
-        </div>
-      </div>
       <div class="record-pager">
         <span class="muted">${start}-${end} of ${totalItems}</span>
         <div class="record-query-actions">
@@ -210,6 +192,27 @@ function recordBrowserControlsHtml() {
           <button type="button" id="record-next-page" ${page >= totalPages ? "disabled" : ""}>Next</button>
         </div>
       </div>
+      <details class="record-query-panel" ${state.recordFilter || state.recordSort !== "-created" ? "open" : ""}>
+        <summary>Filter and sort</summary>
+        <div class="record-toolbar-grid">
+          <div class="field">
+            <label for="record-filter">Filter</label>
+            <input id="record-filter" value="${escapeAttribute(state.recordFilter)}" placeholder="published = true">
+          </div>
+          <div class="field">
+            <label for="record-sort">Sort</label>
+            <input id="record-sort" value="${escapeAttribute(state.recordSort)}" placeholder="-created">
+          </div>
+          <div class="field">
+            <label for="record-per-page">Per page</label>
+            <select id="record-per-page">${perPageOptions}</select>
+          </div>
+          <div class="record-query-actions">
+            <button type="button" id="apply-record-query" class="primary">Apply</button>
+            <button type="button" id="clear-record-query">Clear</button>
+          </div>
+        </div>
+      </details>
     </div>
   `;
 }

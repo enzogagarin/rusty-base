@@ -182,6 +182,7 @@ function collectionEditorHtml() {
     ? `Edit ${state.collectionEditorName}`
     : "Create collection";
   const draft = collectionEditorDraft();
+  const rawOpen = !draft.ok || Boolean(state.collectionEditorError);
   return `
     <div class="record-editor">
       <h2>${escapeHtml(title)}</h2>
@@ -191,7 +192,10 @@ function collectionEditorHtml() {
       ${collectionAuthToolsHtml(draft)}
       ${collectionFieldToolsHtml(draft)}
       ${collectionIndexToolsHtml(draft, state.collectionIndexWarnings)}
-      <textarea id="collection-json-input" spellcheck="false">${escapeHtml(state.collectionEditorText)}</textarea>
+      <details class="raw-editor" ${rawOpen ? "open" : ""}>
+        <summary>Raw JSON</summary>
+        <textarea id="collection-json-input" spellcheck="false">${escapeHtml(state.collectionEditorText)}</textarea>
+      </details>
       <div class="editor-actions">
         <button type="button" id="cancel-collection">Cancel</button>
         <button type="button" id="save-collection" class="primary">Save</button>

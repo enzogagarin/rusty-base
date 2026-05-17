@@ -501,6 +501,9 @@ fn serves_embedded_admin_ui_shell() {
     let css = String::from_utf8(styles.raw_body).unwrap();
     assert!(css.contains(".shell"));
     assert!(css.contains(".record-form-grid"));
+    assert!(css.contains(".has-token"));
+    assert!(css.contains(".record-query-panel"));
+    assert!(css.contains(".raw-editor"));
 
     let missing_asset = app.handle(HttpRequest::new("GET", "/_/admin/missing.js"));
     assert_eq!(missing_asset.status, 404);

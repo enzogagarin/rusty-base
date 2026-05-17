@@ -69,6 +69,7 @@ async function refresh() {
 }
 
 function render() {
+  document.body.classList.toggle("has-token", Boolean(state.token));
   $("health").textContent = state.health;
   $("session").textContent = state.token ? "Superuser token active" : "No token";
   status(state.error || "Ready", Boolean(state.error));
@@ -77,11 +78,7 @@ function render() {
   });
 
   const appName = state.settings && state.settings.meta ? state.settings.meta.appName : "Rusty Base";
-  $("metrics").innerHTML = [
-    metric("App", appName),
-    metric("Collections", String(state.collections.length)),
-    metric("Records", state.selectedCollection ? String(state.recordCount) : "-")
-  ].join("");
+  renderMetrics(appName);
 
   $("view-title").textContent = title(state.view);
   if (state.view === "collections") {
@@ -93,6 +90,19 @@ function render() {
   } else {
     renderOverview();
   }
+}
+
+function renderMetrics(appName) {
+  const metrics = $("metrics");
+  const showMetrics = state.view === "overview";
+  metrics.hidden = !showMetrics;
+  metrics.innerHTML = showMetrics
+    ? [
+        metric("App", appName),
+        metric("Collections", String(state.collections.length)),
+        metric("Records", state.selectedCollection ? String(state.recordCount) : "-")
+      ].join("")
+    : "";
 }
 
 function renderOverview() {
