@@ -20,14 +20,19 @@ Rusty Base explores those exact pressure points in Rust.
 
 ## Current status
 
-This repository currently contains the first safe steps:
+This repository currently contains the first tested Rusty Base slice:
 
-- `crates/rb-filter-engine`: a typed, bounded filter/access-rule parser and SQL compiler prototype.
-- `crates/rb-server`: a minimal PocketBase-style HTTP/SQLite slice with
-  collection metadata, record CRUD, and list/view filtering through
-  `rb-filter-engine`.
+- `crates/rb-filter-engine`: a typed, bounded filter/access-rule parser and SQL
+  compiler with schema-aware validation, request context, relation planning,
+  fuzz-smoke coverage, and PocketBase-style compatibility fixtures.
+- `crates/rb-server`: a PocketBase-style HTTP/SQLite slice with collection
+  metadata, record CRUD, list/view/create/update/delete rules, auth, files,
+  realtime, batch, settings, import/export, view collections, and an embedded
+  admin shell.
 - `fixtures/pocketbase`: JSON compatibility fixtures that record input filters,
   expected SQL, expected params, server API behavior, and PocketBase notes.
+- `docs/POCKETBASE_COMPATIBILITY_PLAN.md`: the current comparison target,
+  fixture ledger, known gaps, intentional differences, and harness plan.
 
 It is intentionally small and tested. It does **not** pretend to be fully
 PocketBase-compatible yet. Compatibility will be earned with golden tests, not

@@ -1,21 +1,210 @@
 # Rusty Base Roadmap
 
-This roadmap tracks the path from the current filter-engine prototype to a
-working Rust-powered PocketBase-style backend.
+This roadmap tracks the path from the current Rust-powered PocketBase-style
+slice to a compatibility-tested, self-hostable backend.
 
 ## Current Baseline
 
 - Local repository: `https://github.com/enzogagarin/rusty-base`
-- Main branch head: `c427081d740b1adfa0368e949fd459f24b08ddf8`
+- Last local audit head: `f913570`
+- PocketBase comparison target: `v0.38.1` (`a286d28` from
+  `https://github.com/pocketbase/pocketbase`)
 - Implemented crates:
   - `rb-filter-engine`: bounded filter/access-rule parser and SQL compiler
   - `rb-cli`: smoke CLI for filter compilation
+  - `rb-server`: PocketBase-style HTTP/SQLite slice with collection metadata,
+    record CRUD, rules, auth, files, realtime, batch, settings, import/export,
+    read-only view collections, and an embedded admin shell
 - Verified locally:
-  - `cargo fmt --check`
-  - `cargo check --workspace`
-  - `cargo test`
+  - `node scripts/check_admin_js.mjs`
+  - `cargo test --workspace`
+  - `node scripts/admin_smoke.mjs`
+  - `node scripts/admin_browser_smoke.mjs`
 
-## Phase 1: Compatibility-Grade Filter Engine
+The project is no longer only a filter-engine prototype. The current risk is
+not lack of surface area; it is unproven PocketBase compatibility, storage
+semantics that intentionally differ from PocketBase, and production hardening
+around auth, files, realtime, and the admin session model.
+
+See `docs/POCKETBASE_COMPATIBILITY_PLAN.md` for the fixture and comparison
+harness plan.
+
+## Next Development Sequence
+
+### Phase 0: Baseline And Compatibility Ledger
+
+Goal: keep the project honest about what matches PocketBase and what is a
+deliberate Rusty Base difference.
+
+Deliverables:
+
+- Keep this roadmap aligned with the current implemented surface.
+- Record the upstream PocketBase version and source commit used for comparison.
+- Maintain a compatibility ledger grouped by filters, record APIs, auth, files,
+  realtime, settings, admin API, and storage behavior.
+- Treat fixtures as the source of truth for compatibility claims.
+
+Exit criteria:
+
+- Every public "works today" claim has a fixture, integration test, smoke test,
+  or an explicit "not yet" note.
+- The next implementation phase can start without rediscovering the same
+  PocketBase gaps.
+
+### Phase 1: PocketBase Comparison Harness
+
+Goal: run the same behavioral fixtures against Rusty Base and a pinned
+PocketBase target.
+
+Deliverables:
+
+- Add a harness script that can locate or download a PocketBase binary for the
+  pinned target version.
+- Start PocketBase and Rusty Base with isolated temporary data directories.
+- Apply the same setup data and HTTP operations to both servers where their API
+  shapes overlap.
+- Produce machine-readable fixture outcomes with status, response shape, and
+  known-difference notes.
+- Keep Rusty Base-only behavior, such as `auth-logout`, out of strict parity
+  assertions unless explicitly marked as an extension.
+
+Exit criteria:
+
+- Filter fixtures and at least one server fixture category can be compared
+  against PocketBase automatically.
+- The harness can run locally without mutating repository state.
+
+### Phase 2: Filter And Rule Parity
+
+Goal: make `rb-filter-engine` and the server rule resolver match PocketBase for
+the security-critical rule/filter subset.
+
+Deliverables:
+
+- Add `@collection.*` cross-collection identifiers.
+- Expand relation and back-relation filter fixtures from PocketBase examples.
+- Fill relation-edge modifier gaps for `:each`, `:length`, `:lower`,
+  `:isset`, and `:changed` where PocketBase supports them.
+- Expand placeholder, wildcard, comments, missing-field, and null semantics
+  coverage.
+- Keep parameterized SQL output and bounded parser settings.
+
+Exit criteria:
+
+- The comparison harness can identify exact matches, intentional differences,
+  and unsupported expressions for filter/rule fixtures.
+- New rule features have fuzz-smoke coverage before being wired into server
+  access decisions.
+
+### Phase 3: Storage Semantics Decision
+
+Goal: decide whether Rusty Base remains JSON-backed internally or moves toward
+PocketBase-style physical field columns.
+
+Deliverables:
+
+- Benchmark JSON-backed records against column-backed alternatives for common
+  list/filter/sort/index paths.
+- Define unique index and conflict response behavior before executing unique
+  imported indexes.
+- Decide how generated columns, expression indexes, and migration snapshots
+  should work if JSON-backed storage remains.
+- Document compatibility costs of any deliberate storage divergence.
+
+Exit criteria:
+
+- The storage model is a product decision rather than an accidental MVP
+  artifact.
+- Compound and unique index implementation can proceed without rewriting the
+  compatibility story.
+
+### Phase 4: Auth And Admin Session Hardening
+
+Goal: make auth behavior explicit, compatible where needed, and safer for the
+embedded admin surface.
+
+Deliverables:
+
+- Decide whether to keep only revocable opaque tokens or add a
+  PocketBase-compatible JWT mode.
+- Add an optional httpOnly admin session cookie flow so the superuser token does
+  not need to live in `localStorage`.
+- Enforce MFA paths that are currently represented in metadata.
+- Harden OAuth2 callback validation around redirect URLs, state, PKCE, and
+  provider-specific edge cases.
+- Add fixtures for token invalidation, auth visibility, superuser IP policy,
+  and auth provider settings.
+
+Exit criteria:
+
+- Public alpha admin usage does not require exposing long-lived superuser
+  credentials to JavaScript storage.
+- Intentional token-model differences are documented and covered by tests.
+
+### Phase 5: Files And Media Engine
+
+Goal: move file handling from MVP storage to a bounded production subsystem.
+
+Deliverables:
+
+- Add local filesystem and S3-compatible adapters.
+- Stream large uploads/downloads instead of holding all file bytes in memory.
+- Verify MIME types by magic bytes, not only submitted content type.
+- Add thumbnail worker limits, singleflight-like deduplication, metadata
+  stripping, and cleanup of orphaned files/thumbs.
+- Expand protected-file and uploaded-file compatibility fixtures.
+
+Exit criteria:
+
+- File storage no longer depends on SQLite blobs for production use.
+- Thumbnail generation has explicit queue, timeout, and size policy.
+
+### Phase 6: Realtime Engine
+
+Goal: replace the first in-process SSE broker with a bounded realtime engine.
+
+Deliverables:
+
+- Add a topic index for collection, record, and wildcard subscriptions.
+- Use bounded per-client queues and slow-client eviction.
+- Add keepalive and disconnect behavior compatible with PocketBase SDK
+  expectations.
+- Re-evaluate subscriptions after auth token invalidation or auth record
+  changes.
+- Leave space for optional Redis or NATS fanout later.
+
+Exit criteria:
+
+- Realtime behavior remains bounded under many clients and slow consumers.
+- Compatibility fixtures cover subscribe, reconnect, auth change, and hidden
+  field/event visibility paths.
+
+### Phase 7: Product Alpha
+
+Goal: package the project as a small backend that someone can try without
+knowing the internal engine split.
+
+Deliverables:
+
+- Stabilize CLI flags, config, logs, backups, migrations, and release builds.
+- Add Docker and reverse-proxy examples.
+- Produce admin UI smoke coverage for the expected first-run workflow.
+- Publish an API compatibility matrix.
+- Add Criterion benches and `cargo-fuzz` targets for parser/media/realtime
+  engines.
+
+Exit criteria:
+
+- A user can run one binary, create collections, write rules, use auth/files/
+  realtime, and understand which PocketBase behaviors are supported.
+
+## Previous Roadmap Checkpoints
+
+The sections below are kept as historical checkpoints from the earlier
+filter-engine-first roadmap. Several items are now complete, while others have
+been folded into the new development sequence above.
+
+### Previous Phase 1: Compatibility-Grade Filter Engine
 
 Goal: make `rb-filter-engine` a trustworthy replacement candidate for
 PocketBase's filter/access-rule compiler.
@@ -41,7 +230,7 @@ Exit criteria:
 - Public compilation APIs can require schema/resolver validation for untrusted
   filters.
 
-## Phase 2: PocketBase Integration Proof
+### Previous Phase 2: PocketBase Integration Proof
 
 Goal: prove that the Rust filter engine can power PocketBase-style rules from a
 host application.
@@ -64,7 +253,7 @@ Exit criteria:
 - Errors and parameters round-trip cleanly across the boundary.
 - Integration overhead is measured.
 
-## Phase 3: Rust-Powered PocketBase Slice
+### Previous Phase 3: Rust-Powered PocketBase Slice
 
 Goal: run a small PocketBase-like backend where at least one production-facing
 path is powered by Rust.
@@ -84,7 +273,7 @@ Exit criteria:
 - List/view rules are enforced through Rust.
 - SQLite writes and reads work end to end.
 
-## Phase 4: High-Risk Rust Engines
+### Previous Phase 4: High-Risk Rust Engines
 
 Goal: add Rust engines where safety, boundedness, or concurrency materially
 improves the PocketBase model.
@@ -112,7 +301,7 @@ Exit criteria:
 - Each engine has isolated tests, fuzz/property tests where relevant, and
   benchmarks before public integration.
 
-## Phase 5: Developer Experience
+### Previous Phase 5: Developer Experience
 
 Goal: keep the PocketBase promise: one small backend that is pleasant to run and
 extend.
