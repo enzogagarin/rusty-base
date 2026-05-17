@@ -105,6 +105,8 @@ pub(crate) fn oauth2_auth_response_payload(
 ) -> Result<JsonValue, ServerError> {
     let context = context_with_auth_record_values(context, &response.record);
     store.expand_record_response(collection_name, &mut response.record, expands, &context)?;
+    let collection = store.get_collection(collection_name)?;
+    sanitize_record_response(&collection, &mut response.record, &context)?;
 
     let mut payload = json!(response);
     if let Some(object) = payload.as_object_mut() {

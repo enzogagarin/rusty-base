@@ -24,10 +24,6 @@ impl RustyBaseApp {
             return Vec::new();
         };
 
-        let payload = json!({
-            "action": action,
-            "record": record,
-        });
         let mut deliveries = Vec::new();
         for client in self.realtime.snapshots() {
             for subscription in client
@@ -50,6 +46,14 @@ impl RustyBaseApp {
                     continue;
                 }
 
+                let mut record = record.clone();
+                if sanitize_record_response(&collection, &mut record, &client.context).is_err() {
+                    continue;
+                }
+                let payload = json!({
+                    "action": action,
+                    "record": record,
+                });
                 deliveries.push(RealtimeDelivery {
                     client_id: client.client_id.clone(),
                     sender: client.sender.clone(),

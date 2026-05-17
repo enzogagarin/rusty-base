@@ -349,6 +349,7 @@ impl RustyBaseApp {
                 let expands = expand_options_from_query(&query)?;
                 self.store
                     .expand_record_response(collection, &mut record, &expands, &context)?;
+                sanitize_record_response(&collection_config, &mut record, &context)?;
                 let fields = field_options_from_query(&query)?;
                 project_record_response(&mut record, &fields)?;
                 self.publish_realtime_record_event(collection, "create", &realtime_record);
@@ -361,6 +362,8 @@ impl RustyBaseApp {
                 let expands = expand_options_from_query(&query)?;
                 self.store
                     .expand_record_response(collection, &mut record, &expands, &context)?;
+                let collection_config = self.store.get_collection(collection)?;
+                sanitize_record_response(&collection_config, &mut record, &context)?;
                 let fields = field_options_from_query(&query)?;
                 project_record_response(&mut record, &fields)?;
                 Ok(HttpResponse::json(200, record))
@@ -381,6 +384,7 @@ impl RustyBaseApp {
                 let expands = expand_options_from_query(&query)?;
                 self.store
                     .expand_record_response(collection, &mut record, &expands, &context)?;
+                sanitize_record_response(&collection_config, &mut record, &context)?;
                 let fields = field_options_from_query(&query)?;
                 project_record_response(&mut record, &fields)?;
                 self.publish_realtime_record_event(collection, "update", &realtime_record);

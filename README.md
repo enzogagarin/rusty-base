@@ -407,6 +407,8 @@ The first server slice supports:
   required/`maxSize`, editor `maxSize`, custom autodate stamping, relation
   `minSelect`/`maxSelect`, and relation target existence, evaluated against
   the final record state on updates;
+- hidden collection fields are omitted from public record create/view/list,
+  relation expand, and realtime event responses;
 - PocketBase-style record value modifiers for number add/subtract and
   multi-select/relation append, prepend, and remove operations;
 - relation `cascadeDelete` support for deleting dependent records atomically

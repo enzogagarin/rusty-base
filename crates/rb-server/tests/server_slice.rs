@@ -3479,6 +3479,107 @@ fn handles_pocketbase_style_records_http_routes() {
 }
 
 #[test]
+fn omits_hidden_fields_from_record_responses_expand_and_realtime() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    for collection in [
+        json!({
+            "name": "authors",
+            "fields": [
+                {"name": "name", "kind": "text"},
+                {"name": "privateNote", "kind": "text", "hidden": true}
+            ]
+        }),
+        json!({
+            "name": "posts",
+            "fields": [
+                {"name": "title", "kind": "text"},
+                {"name": "secret", "kind": "text", "hidden": true},
+                {
+                    "name": "author",
+                    "kind": "relation",
+                    "collection": "authors",
+                    "maxSelect": 1
+                }
+            ]
+        }),
+    ] {
+        let response =
+            app.handle(HttpRequest::json("POST", "/api/collections", collection).unwrap());
+        assert_eq!(response.status, 200);
+    }
+
+    let author = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/authors/records",
+            json!({"id": "author_1", "name": "Ada", "privateNote": "compiler notes"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(author.status, 200);
+    assert_eq!(author.body["name"], "Ada");
+    assert!(author.body.get("privateNote").is_none());
+
+    let connection = app.realtime_connect().unwrap();
+    let connect = expect_realtime_event(&connection);
+    assert_eq!(connect.event, "PB_CONNECT");
+    let subscribe = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/realtime",
+            json!({"clientId": connection.client_id, "subscriptions": ["posts/*"]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(subscribe.status, 204);
+
+    let post = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records?expand=author",
+            json!({
+                "id": "post_1",
+                "title": "Rusty Base",
+                "secret": "launch plan",
+                "author": "author_1"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(post.status, 200);
+    assert_eq!(post.body["title"], "Rusty Base");
+    assert!(post.body.get("secret").is_none());
+    assert_eq!(post.body["expand"]["author"]["name"], "Ada");
+    assert!(post.body["expand"]["author"].get("privateNote").is_none());
+
+    let event = expect_realtime_event(&connection);
+    assert_eq!(event.event, "posts/*");
+    assert_eq!(event.data["record"]["title"], "Rusty Base");
+    assert!(event.data["record"].get("secret").is_none());
+
+    let projected = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts/records/post_1?expand=author&fields=title,secret,expand.author.name,expand.author.privateNote",
+    ));
+    assert_eq!(projected.status, 200);
+    assert_eq!(projected.body["title"], "Rusty Base");
+    assert!(projected.body.get("secret").is_none());
+    assert_eq!(projected.body["expand"]["author"]["name"], "Ada");
+    assert!(projected.body["expand"]["author"]
+        .get("privateNote")
+        .is_none());
+
+    let list = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/posts/records?fields=title,secret",
+    ));
+    assert_eq!(list.status, 200);
+    assert_eq!(list.body["items"][0]["title"], "Rusty Base");
+    assert!(list.body["items"][0].get("secret").is_none());
+}
+
+#[test]
 fn handles_json_record_batch_requests_transactionally() {
     let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
 

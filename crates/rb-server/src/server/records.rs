@@ -6,6 +6,7 @@ mod expand;
 mod mutation;
 mod projection;
 mod query;
+mod response;
 mod rules;
 mod view;
 
@@ -14,6 +15,7 @@ pub(crate) use mutation::*;
 pub(crate) use projection::*;
 pub(crate) use query::*;
 pub use query::{ListOptions, RecordList};
+pub(crate) use response::*;
 pub(crate) use rules::*;
 pub(crate) use view::*;
 
@@ -244,6 +246,7 @@ impl Store {
         if !options.expand.is_empty() {
             self.expand_records(&collection, &mut items, &options.expand, &options.context)?;
         }
+        sanitize_record_responses(&collection, &mut items, &options.context)?;
         if !options.fields.is_empty() {
             project_record_responses(&mut items, &options.fields)?;
         }

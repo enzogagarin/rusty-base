@@ -191,6 +191,8 @@ impl Store {
             self.expand_record_with_collection(&target, &mut record, nested_expands, context)?;
         }
 
+        let target = self.get_collection(target_collection)?;
+        sanitize_record_response(&target, &mut record, context)?;
         let record = record.as_object().cloned().ok_or_else(|| {
             ServerError::BadRequest("record response must be a JSON object".to_string())
         })?;
