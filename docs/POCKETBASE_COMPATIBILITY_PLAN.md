@@ -118,7 +118,9 @@ matrix.
 2. Add a Rusty Base server start helper that reuses the same random-port and
    cleanup code. Started in `scripts/pocketbase_compare.mjs`.
 3. Port one server fixture category with low setup cost. Started with the
-   settings access checks from `fixtures/pocketbase/server/settings.json`.
+   settings lifecycle checks from `fixtures/pocketbase/server/settings.json`,
+   including access control, PATCH behavior, secret redaction, field
+   projection, and validation-code extraction.
 4. Port one filter fixture category to direct PocketBase comparison.
 5. Add normalization helpers for timestamps, generated IDs, tokens, and
    response ordering.
@@ -140,5 +142,5 @@ Current harness smoke command:
 
 ```bash
 node scripts/pocketbase_compare.mjs --pocketbase ./pocketbase
-node scripts/pocketbase_compare.mjs --pocketbase ./pocketbase --fixture settings-access
+node scripts/pocketbase_compare.mjs --pocketbase ./pocketbase --fixture settings
 ```

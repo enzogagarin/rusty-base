@@ -33,6 +33,8 @@ This repository currently contains the first tested Rusty Base slice:
   expected SQL, expected params, server API behavior, and PocketBase notes.
 - `docs/POCKETBASE_COMPATIBILITY_PLAN.md`: the current comparison target,
   fixture ledger, known gaps, intentional differences, and harness plan.
+- `scripts/pocketbase_compare.mjs`: a local PocketBase-vs-Rusty-Base harness
+  for smoke checks and the first settings lifecycle comparison.
 
 It is intentionally small and tested. It does **not** pretend to be fully
 PocketBase-compatible yet. Compatibility will be earned with golden tests, not

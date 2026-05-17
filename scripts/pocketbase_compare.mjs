@@ -10,6 +10,37 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const targetPocketBaseVersion = "0.38.1";
+const settingsSecretProjection =
+  "smtp.password,s3.secret,backups.s3.secret,batch.maxRequests";
+const settingsFieldsProjection = "meta.appName,batch.maxRequests,smtp.password";
+const settingsDefaultComparisonPaths = [
+  ["meta", "appName"],
+  ["batch", "maxRequests"]
+];
+const settingsPatchComparisonPaths = [
+  ["meta", "appName"],
+  ["meta", "appURL"],
+  ["batch", "maxRequests"],
+  ["smtp", "password"],
+  ["s3", "secret"],
+  ["backups", "s3", "secret"],
+  ["rateLimits", "rules", 0, "label"],
+  ["trustedProxy", "useLeftmostIp"]
+];
+const settingsSecretComparisonPaths = [
+  ["smtp", "password"],
+  ["s3", "secret"],
+  ["backups", "s3", "secret"],
+  ["batch", "maxRequests"]
+];
+const settingsProjectionComparisonPaths = [
+  ["meta", "appName"],
+  ["batch", "maxRequests"],
+  ["smtp", "password"],
+  ["s3"]
+];
+const invalidBatchValidationPaths = [["data", "batch.maxRequests", "code"]];
+const invalidBackupValidationPaths = [["data", "backups.s3.secret", "code"]];
 
 const options = parseArgs(process.argv.slice(2));
 
@@ -72,7 +103,7 @@ async function runComparison() {
   if (options.fixture === "health") {
     return compareHealth();
   }
-  if (options.fixture === "settings-access") {
+  if (options.fixture === "settings" || options.fixture === "settings-access") {
     return compareSettingsAccess();
   }
   if (options.fixture === "all") {
@@ -139,7 +170,8 @@ async function compareSettingsAccess() {
     });
     const token = login.body && login.body.token;
     const authed = await jsonRequest(`${baseUrl}/api/settings`, { token });
-    return { blocked, login, authed };
+    const settingsFlow = await runSettingsSuperuserFlow(baseUrl, token);
+    return { blocked, login, authed, ...settingsFlow };
   });
 
   const rustyBase = await withRustyBaseServer(rustyBaseDbPath, async (baseUrl) => {
@@ -155,8 +187,14 @@ async function compareSettingsAccess() {
     });
     const token = login.body && login.body.token;
     const authed = await jsonRequest(`${baseUrl}/api/settings`, { token });
-    return { before, blocked, login, authed };
+    const settingsFlow = await runSettingsSuperuserFlow(baseUrl, token);
+    return { before, blocked, login, authed, ...settingsFlow };
   });
+
+  const pocketbaseLogin = normalizeHttpOutcome(pocketbaseAfter.login);
+  const rustyBaseLogin = normalizeHttpOutcome(rustyBase.login);
+  const pocketbaseAuthed = normalizeSettingsOutcome(pocketbaseAfter.authed);
+  const rustyBaseAuthed = normalizeSettingsOutcome(rustyBase.authed);
 
   return {
     target: {
@@ -171,7 +209,8 @@ async function compareSettingsAccess() {
         fixture,
         "settings defaults are readable before superuser bootstrap",
         pocketbaseBefore,
-        rustyBase.before
+        rustyBase.before,
+        { paths: settingsDefaultComparisonPaths }
       ),
       compareCase(
         fixture,
@@ -182,18 +221,163 @@ async function compareSettingsAccess() {
       {
         name: "superuser password auth returns a token for settings comparison",
         route: "POST /api/collections/_superusers/auth-with-password",
-        pocketbase: normalizeHttpOutcome(pocketbaseAfter.login),
-        rustyBase: normalizeHttpOutcome(rustyBase.login),
-        status: statusMatch(pocketbaseAfter.login, rustyBase.login) ? "matched" : "different"
+        pocketbase: pocketbaseLogin,
+        rustyBase: rustyBaseLogin,
+        status: normalizedMatch(pocketbaseLogin, rustyBaseLogin) ? "matched" : "different"
       },
       {
         name: "superuser can read settings after bootstrap",
         route: "GET /api/settings",
-        pocketbase: normalizeSettingsOutcome(pocketbaseAfter.authed),
-        rustyBase: normalizeSettingsOutcome(rustyBase.authed),
-        status: statusMatch(pocketbaseAfter.authed, rustyBase.authed) ? "matched" : "different"
-      }
+        pocketbase: pocketbaseAuthed,
+        rustyBase: rustyBaseAuthed,
+        status: normalizedMatch(pocketbaseAuthed, rustyBaseAuthed) ? "matched" : "different"
+      },
+      compareCase(
+        fixture,
+        "superuser patch updates settings and redacts secrets",
+        pocketbaseAfter.patched,
+        rustyBase.patched,
+        { paths: settingsPatchComparisonPaths }
+      ),
+      compareCase(
+        fixture,
+        "redacted secret placeholders preserve stored secrets",
+        pocketbaseAfter.redactedPatch,
+        rustyBase.redactedPatch,
+        { paths: settingsSecretComparisonPaths }
+      ),
+      compareCase(
+        fixture,
+        "settings fields projection returns selected settings",
+        pocketbaseAfter.projected,
+        rustyBase.projected,
+        { paths: settingsProjectionComparisonPaths }
+      ),
+      compareCase(
+        fixture,
+        "invalid batch settings return field validation errors",
+        pocketbaseAfter.invalidBatch,
+        rustyBase.invalidBatch,
+        { validationPaths: invalidBatchValidationPaths }
+      ),
+      compareCase(
+        fixture,
+        "enabled backup s3 settings require a secret",
+        pocketbaseAfter.invalidBackup,
+        rustyBase.invalidBackup,
+        { validationPaths: invalidBackupValidationPaths }
+      )
     ]
+  };
+}
+
+async function runSettingsSuperuserFlow(baseUrl, token) {
+  const patched = await jsonRequest(`${baseUrl}/api/settings`, {
+    method: "PATCH",
+    token,
+    body: settingsPatchBody()
+  });
+  const redactedPatch = await jsonRequest(
+    `${baseUrl}/api/settings?fields=${settingsSecretProjection}`,
+    {
+      method: "PATCH",
+      token,
+      body: settingsRedactedPatchBody()
+    }
+  );
+  const projected = await jsonRequest(
+    `${baseUrl}/api/settings?fields=${settingsFieldsProjection}`,
+    { token }
+  );
+  const invalidBatch = await jsonRequest(`${baseUrl}/api/settings`, {
+    method: "PATCH",
+    token,
+    body: { batch: { maxRequests: 0 } }
+  });
+  const invalidBackup = await jsonRequest(`${baseUrl}/api/settings`, {
+    method: "PATCH",
+    token,
+    body: { backups: { s3: { enabled: true, secret: "" } } }
+  });
+  return { patched, redactedPatch, projected, invalidBatch, invalidBackup };
+}
+
+function settingsPatchBody() {
+  return {
+    meta: {
+      appName: "Acme",
+      appURL: "https://example.com",
+      senderName: "Acme Ops",
+      senderAddress: "noreply@example.com",
+      hideControls: true
+    },
+    logs: {
+      maxDays: 14,
+      minLevel: 1,
+      logIp: false,
+      logAuthId: true
+    },
+    batch: {
+      enabled: true,
+      maxRequests: 2,
+      timeout: 30,
+      maxBodySize: 2048
+    },
+    smtp: {
+      enabled: true,
+      host: "smtp.example.com",
+      port: 2525,
+      username: "mailer",
+      password: "smtp-secret",
+      authMethod: "plain",
+      tls: false,
+      localName: "rusty-base"
+    },
+    s3: {
+      enabled: true,
+      bucket: "assets",
+      region: "auto",
+      endpoint: "https://s3.example.com",
+      accessKey: "access",
+      secret: "s3-secret",
+      forcePathStyle: true
+    },
+    backups: {
+      cron: "0 3 * * *",
+      cronMaxKeep: 7,
+      s3: {
+        enabled: true,
+        bucket: "backups",
+        region: "auto",
+        endpoint: "https://s3.example.com",
+        accessKey: "backup-access",
+        secret: "backup-secret"
+      }
+    },
+    rateLimits: {
+      enabled: true,
+      rules: [
+        {
+          label: "/api/custom",
+          audience: "@request.auth.id",
+          duration: 15,
+          maxRequests: 4
+        }
+      ]
+    },
+    trustedProxy: {
+      headers: ["X-Forwarded-For", "CF-Connecting-IP"],
+      useLeftmostIp: true
+    }
+  };
+}
+
+function settingsRedactedPatchBody() {
+  return {
+    smtp: { password: "******" },
+    s3: { secret: "******" },
+    backups: { s3: { secret: "******" } },
+    batch: { maxRequests: 3 }
   };
 }
 
@@ -353,15 +537,18 @@ async function jsonRequest(url, opts = {}) {
   };
 }
 
-function compareCase(fixture, name, pocketbase, rustyBase) {
+function compareCase(fixture, name, pocketbase, rustyBase, options = {}) {
   const fixtureCase = fixture.cases.find((item) => item.name === name);
+  const pocketbaseOutcome = normalizeSettingsOutcome(pocketbase, options);
+  const rustyBaseOutcome = normalizeSettingsOutcome(rustyBase, options);
   return {
     name,
     route: fixtureCase && fixtureCase.route,
     expectedStatus: fixtureCase && fixtureCase.expectedStatus,
-    pocketbase: normalizeSettingsOutcome(pocketbase),
-    rustyBase: normalizeSettingsOutcome(rustyBase),
-    status: statusMatch(pocketbase, rustyBase) ? "matched" : "different"
+    expectedCode: fixtureCase && fixtureCase.expectedCode,
+    pocketbase: pocketbaseOutcome,
+    rustyBase: rustyBaseOutcome,
+    status: normalizedMatch(pocketbaseOutcome, rustyBaseOutcome) ? "matched" : "different"
   };
 }
 
@@ -372,14 +559,20 @@ function normalizeHealth(response) {
   };
 }
 
-function normalizeSettingsOutcome(response) {
-  return {
+function normalizeSettingsOutcome(response, options = {}) {
+  const body = response.body && typeof response.body === "object" ? response.body : null;
+  const outcome = {
     ...normalizeHttpOutcome(response),
     bodyKeys:
-      response.body && typeof response.body === "object"
-        ? Object.keys(response.body).sort()
-        : []
+      body ? Object.keys(body).sort() : []
   };
+  if (options.paths && options.paths.length) {
+    outcome.values = normalizePathValues(body, options.paths);
+  }
+  if (options.validationPaths && options.validationPaths.length) {
+    outcome.validationCodes = normalizePathValues(body, options.validationPaths);
+  }
+  return outcome;
 }
 
 function normalizeHttpOutcome(response) {
@@ -391,8 +584,35 @@ function normalizeHttpOutcome(response) {
   };
 }
 
-function statusMatch(left, right) {
-  return left.status === right.status;
+function normalizedMatch(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function normalizePathValues(body, paths) {
+  const values = {};
+  for (const path of paths) {
+    values[pathLabel(path)] = normalizePathValue(valueAtPath(body, path));
+  }
+  return values;
+}
+
+function pathLabel(path) {
+  return path.join(".");
+}
+
+function valueAtPath(value, path) {
+  let current = value;
+  for (const segment of path) {
+    if (current == null || typeof current !== "object" || !(segment in current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+function normalizePathValue(value) {
+  return value === undefined ? { missing: true } : value;
 }
 
 function loadServerFixture(name) {
@@ -482,12 +702,12 @@ function printHelp() {
 
 Usage:
   node scripts/pocketbase_compare.mjs --pocketbase ./pocketbase
-  node scripts/pocketbase_compare.mjs --pocketbase ./pocketbase --fixture settings-access
+  node scripts/pocketbase_compare.mjs --pocketbase ./pocketbase --fixture settings
 
 Options:
   --pocketbase <path>      PocketBase v${targetPocketBaseVersion} binary
   --rusty-base-bin <path>  Optional prebuilt rb-server binary
-  --fixture <name>         health, settings-access, or all; default health
+  --fixture <name>         health, settings, settings-access, or all; default health
   --check-only             Only verify the PocketBase binary version
   --keep-temp              Keep temporary data directories for inspection
   --timeout-ms <ms>        Startup and command timeout, default 30000
