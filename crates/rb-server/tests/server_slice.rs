@@ -658,7 +658,7 @@ fn hashes_auth_passwords_and_uses_login_tokens_for_rules() {
         .unwrap(),
     );
     assert_eq!(user.status, 200);
-    assert_eq!(user.body["email"], "burak@example.com");
+    assert!(user.body.get("email").is_none());
     assert_eq!(user.body["verified"], false);
     assert_eq!(user.body["emailVisibility"], false);
     assert!(user.body.get("password").is_none());
@@ -695,6 +695,7 @@ fn hashes_auth_passwords_and_uses_login_tokens_for_rules() {
         .parse::<u128>()
         .is_ok());
     assert_eq!(login.body["record"]["id"], user_id);
+    assert_eq!(login.body["record"]["email"], "burak@example.com");
     assert_eq!(login.body["record"]["verified"], false);
     assert_eq!(login.body["record"]["emailVisibility"], false);
     assert!(login.body["record"].get("passwordHash").is_none());
@@ -3577,6 +3578,178 @@ fn omits_hidden_fields_from_record_responses_expand_and_realtime() {
     assert_eq!(list.status, 200);
     assert_eq!(list.body["items"][0]["title"], "Rusty Base");
     assert!(list.body["items"][0].get("secret").is_none());
+}
+
+#[test]
+fn respects_auth_email_visibility_in_record_responses_expand_and_realtime() {
+    let app = RustyBaseApp::new(Store::open_in_memory().unwrap());
+
+    let users = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "users",
+                "type": "auth",
+                "fields": [
+                    {"name": "email", "kind": "email"},
+                    {"name": "name", "kind": "text"},
+                    {"name": "emailVisibility", "kind": "bool"}
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(users.status, 200);
+
+    let posts = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections",
+            json!({
+                "name": "posts",
+                "fields": [
+                    {"name": "title", "kind": "text"},
+                    {
+                        "name": "author",
+                        "kind": "relation",
+                        "collection": "users",
+                        "maxSelect": 1
+                    }
+                ]
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(posts.status, 200);
+
+    let private_user = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({
+                "id": "user_private",
+                "email": "private@example.com",
+                "name": "Private",
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(private_user.status, 200);
+    assert_eq!(private_user.body["name"], "Private");
+    assert_eq!(private_user.body["emailVisibility"], false);
+    assert!(private_user.body.get("email").is_none());
+
+    let public_user = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/records",
+            json!({
+                "id": "user_public",
+                "email": "public@example.com",
+                "name": "Public",
+                "emailVisibility": true,
+                "password": "correct horse",
+                "passwordConfirm": "correct horse"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(public_user.status, 200);
+    assert_eq!(public_user.body["email"], "public@example.com");
+
+    let private_login = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/users/auth-with-password",
+            json!({"identity": "private@example.com", "password": "correct horse"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(private_login.status, 200);
+    assert_eq!(private_login.body["record"]["email"], "private@example.com");
+    let private_token = private_login.body["token"].as_str().unwrap().to_string();
+
+    let self_view = app.handle(
+        HttpRequest::new("GET", "/api/collections/users/records/user_private")
+            .with_header("Authorization", format!("Bearer {private_token}")),
+    );
+    assert_eq!(self_view.status, 200);
+    assert_eq!(self_view.body["email"], "private@example.com");
+
+    let anonymous_private = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/users/records/user_private",
+    ));
+    assert_eq!(anonymous_private.status, 200);
+    assert!(anonymous_private.body.get("email").is_none());
+
+    let anonymous_public = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/users/records/user_public",
+    ));
+    assert_eq!(anonymous_public.status, 200);
+    assert_eq!(anonymous_public.body["email"], "public@example.com");
+
+    let connection = app.realtime_connect().unwrap();
+    let connect = expect_realtime_event(&connection);
+    assert_eq!(connect.event, "PB_CONNECT");
+    let subscribe = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/realtime",
+            json!({"clientId": connection.client_id, "subscriptions": ["posts/*", "users/*"]}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(subscribe.status, 204);
+
+    let post = app.handle(
+        HttpRequest::json(
+            "POST",
+            "/api/collections/posts/records?expand=author",
+            json!({
+                "id": "post_1",
+                "title": "Private author",
+                "author": "user_private"
+            }),
+        )
+        .unwrap(),
+    );
+    assert_eq!(post.status, 200);
+    assert_eq!(post.body["expand"]["author"]["name"], "Private");
+    assert!(post.body["expand"]["author"].get("email").is_none());
+
+    let event = expect_realtime_event(&connection);
+    assert_eq!(event.event, "posts/*");
+    assert_eq!(event.data["record"]["title"], "Private author");
+    assert!(event.data["record"].get("email").is_none());
+
+    let update_private = app.handle(
+        HttpRequest::json(
+            "PATCH",
+            "/api/collections/users/records/user_private",
+            json!({"name": "Private Updated"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(update_private.status, 200);
+    assert!(update_private.body.get("email").is_none());
+    let user_event = expect_realtime_event(&connection);
+    assert_eq!(user_event.event, "users/*");
+    assert_eq!(user_event.data["record"]["name"], "Private Updated");
+    assert!(user_event.data["record"].get("email").is_none());
+
+    let projected = app.handle(HttpRequest::new(
+        "GET",
+        "/api/collections/users/records/user_private?fields=id,email,name",
+    ));
+    assert_eq!(projected.status, 200);
+    assert_eq!(projected.body["id"], "user_private");
+    assert_eq!(projected.body["name"], "Private Updated");
+    assert!(projected.body.get("email").is_none());
 }
 
 #[test]

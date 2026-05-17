@@ -409,6 +409,8 @@ The first server slice supports:
   the final record state on updates;
 - hidden collection fields are omitted from public record create/view/list,
   relation expand, and realtime event responses;
+- auth record `email` values respect `emailVisibility`, while the owning auth
+  record still sees its own email in auth/self responses;
 - PocketBase-style record value modifiers for number add/subtract and
   multi-select/relation append, prepend, and remove operations;
 - relation `cascadeDelete` support for deleting dependent records atomically
